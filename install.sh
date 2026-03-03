@@ -2,11 +2,13 @@
 set -e
 
 # yokai installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/spencerbull/yokai/main/install.sh | sh
+# Usage: curl -fsSL https://raw.githubusercontent.com/spencerbull/Yokai/main/install.sh | sh
 
-REPO="spencerbull/yokai"
+REPO="spencerbull/Yokai"
 INSTALL_DIR="/usr/local/bin"
+FALLBACK_INSTALL_DIR="$HOME/.local/bin"
 BINARY="yokai"
+PROJECT_NAME="Yokai"
 
 # Detect OS and architecture
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -34,7 +36,7 @@ fi
 echo "Installing yokai v${VERSION} for ${OS}/${ARCH}..."
 
 # Download and extract
-FILENAME="${BINARY}_${VERSION}_${OS}_${ARCH}.tar.gz"
+FILENAME="${PROJECT_NAME}_${VERSION}_${OS}_${ARCH}.tar.gz"
 URL="https://github.com/$REPO/releases/download/v${VERSION}/${FILENAME}"
 
 TMP_DIR=$(mktemp -d)
@@ -45,22 +47,50 @@ curl -fsSL "$URL" -o "${TMP_DIR}/${FILENAME}"
 tar -xzf "${TMP_DIR}/${FILENAME}" -C "$TMP_DIR"
 
 # Install binary
+USE_SUDO=0
 if [ -w "$INSTALL_DIR" ]; then
-  mv "${TMP_DIR}/${BINARY}" "${INSTALL_DIR}/${BINARY}"
+  TARGET_DIR="$INSTALL_DIR"
+elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
+  TARGET_DIR="$INSTALL_DIR"
+  USE_SUDO=1
 else
-  echo "Requires sudo to install to ${INSTALL_DIR}"
-  sudo mv "${TMP_DIR}/${BINARY}" "${INSTALL_DIR}/${BINARY}"
+  TARGET_DIR="$FALLBACK_INSTALL_DIR"
 fi
 
-chmod +x "${INSTALL_DIR}/${BINARY}"
+if [ "$TARGET_DIR" = "$FALLBACK_INSTALL_DIR" ]; then
+  mkdir -p "$TARGET_DIR"
+  mv "${TMP_DIR}/${BINARY}" "${TARGET_DIR}/${BINARY}"
+else
+  if [ "$USE_SUDO" -eq 1 ]; then
+    sudo mv "${TMP_DIR}/${BINARY}" "${TARGET_DIR}/${BINARY}"
+    sudo chmod +x "${TARGET_DIR}/${BINARY}"
+  else
+    mv "${TMP_DIR}/${BINARY}" "${TARGET_DIR}/${BINARY}"
+    chmod +x "${TARGET_DIR}/${BINARY}"
+  fi
+fi
 
-echo "yokai v${VERSION} installed to ${INSTALL_DIR}/${BINARY}"
+if [ "$TARGET_DIR" = "$FALLBACK_INSTALL_DIR" ]; then
+  chmod +x "${TARGET_DIR}/${BINARY}"
+
+  for rc_file in "$HOME/.bashrc" "$HOME/.zshrc"; do
+    if [ ! -f "$rc_file" ]; then
+      continue
+    fi
+    if ! grep -Fq 'export PATH="$HOME/.local/bin:$PATH"' "$rc_file"; then
+      printf '\n# Added by yokai installer\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$rc_file"
+      echo "Updated PATH in $rc_file"
+    fi
+  done
+fi
+
+echo "yokai v${VERSION} installed to ${TARGET_DIR}/${BINARY}"
 echo "Run 'yokai --help' to get started!"
 
 # Verify installation
 if command -v yokai >/dev/null 2>&1; then
   echo "Installation verified: $(yokai --version 2>/dev/null || echo 'yokai is ready')"
 else
-  echo "Warning: ${INSTALL_DIR} may not be in your PATH"
-  echo "Add ${INSTALL_DIR} to your PATH or run: export PATH=\$PATH:${INSTALL_DIR}"
+  echo "Warning: ${TARGET_DIR} may not be in your PATH"
+  echo "Add ${TARGET_DIR} to your PATH or run: export PATH=\$PATH:${TARGET_DIR}"
 fi

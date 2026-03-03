@@ -12,12 +12,12 @@ import (
 
 // SystemMetrics holds a snapshot of system metrics.
 type SystemMetrics struct {
-	Timestamp  time.Time      `json:"timestamp"`
-	CPU        CPUMetrics     `json:"cpu"`
-	RAM        RAMMetrics     `json:"ram"`
-	Swap       SwapMetrics    `json:"swap"`
-	Disk       DiskMetrics    `json:"disk"`
-	GPUs       []GPUMetrics   `json:"gpus"`
+	Timestamp  time.Time          `json:"timestamp"`
+	CPU        CPUMetrics         `json:"cpu"`
+	RAM        RAMMetrics         `json:"ram"`
+	Swap       SwapMetrics        `json:"swap"`
+	Disk       DiskMetrics        `json:"disk"`
+	GPUs       []GPUMetrics       `json:"gpus"`
 	Containers []ContainerMetrics `json:"containers"`
 }
 
@@ -64,6 +64,7 @@ type GPUMetrics struct {
 type ContainerMetrics struct {
 	ID          string  `json:"id"`
 	Name        string  `json:"name"`
+	Image       string  `json:"image,omitempty"`
 	Status      string  `json:"status"`
 	CPUPercent  float64 `json:"cpu_percent"`
 	MemUsedMB   int64   `json:"memory_used_mb"`
