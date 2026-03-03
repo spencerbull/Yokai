@@ -22,19 +22,31 @@ const (
 	atsError
 )
 
-// toolResult holds the per-tool success/failure from auto-configure.
+// toolEntry represents a configurable AI tool with its selection state.
+type toolEntry struct {
+	name     string
+	selected bool
+}
+
+// toolResult holds the per-tool success/failure from configuration.
 type toolResult struct {
 	name string
 	ok   bool
 	err  string
 }
 
-// AITools shows OpenAI-compatible endpoints and auto-configures AI coding tools.
+// AITools shows OpenAI-compatible endpoints and lets the user select
+// which AI coding tools to configure.
 type AITools struct {
 	cfg     *config.Config
 	version string
 	state   aiToolsState
 	err     string
+
+	// Tool selection
+	tools  []toolEntry
+	cursor int
+
 	results []toolResult
 	width   int
 	height  int
@@ -45,12 +57,17 @@ type aiToolsConfigMsg struct {
 	err     error // overall error (e.g., no services)
 }
 
-// NewAITools creates the unified AI tools configuration view.
+// NewAITools creates the AI tools configuration view.
 func NewAITools(cfg *config.Config, version string) *AITools {
 	return &AITools{
 		cfg:     cfg,
 		version: version,
 		state:   atsListing,
+		tools: []toolEntry{
+			{name: "VS Code Copilot", selected: true},
+			{name: "OpenCode", selected: true},
+			{name: "OpenClaw", selected: true},
+		},
 	}
 }
 
@@ -74,27 +91,77 @@ func (a *AITools) Update(msg tea.Msg) (View, tea.Cmd) {
 		}
 
 	case tea.KeyMsg:
-		switch msg.String() {
-		case "a":
-			if a.state == atsListing {
-				a.state = atsConfiguring
-				return a, a.autoConfigure()
-			}
-		case "esc":
-			return a, PopView()
-		case "enter":
-			if a.state == atsDone || a.state == atsError {
+		switch a.state {
+		case atsListing:
+			return a.updateListing(msg)
+		case atsDone, atsError:
+			switch msg.String() {
+			case "esc":
+				return a, PopView()
+			case "enter":
 				a.state = atsListing
 				a.results = nil
+			}
+		case atsConfiguring:
+			if msg.String() == "esc" {
+				return a, PopView()
 			}
 		}
 	}
 	return a, nil
 }
 
-func (a *AITools) autoConfigure() tea.Cmd {
+func (a *AITools) updateListing(msg tea.KeyMsg) (View, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		return a, PopView()
+	case "up", "k":
+		if a.cursor > 0 {
+			a.cursor--
+		}
+	case "down", "j":
+		if a.cursor < len(a.tools)-1 {
+			a.cursor++
+		}
+	case " ":
+		a.tools[a.cursor].selected = !a.tools[a.cursor].selected
+	case "a":
+		// Select all
+		for i := range a.tools {
+			a.tools[i].selected = true
+		}
+	case "enter":
+		selected := a.selectedTools()
+		if len(selected) == 0 {
+			return a, nil
+		}
+		a.state = atsConfiguring
+		return a, a.configureSelected(selected)
+	}
+	return a, nil
+}
+
+// selectedTools returns the names of currently selected tools.
+func (a *AITools) selectedTools() []string {
+	var names []string
+	for _, t := range a.tools {
+		if t.selected {
+			names = append(names, t.name)
+		}
+	}
+	return names
+}
+
+func (a *AITools) configureSelected(selected []string) tea.Cmd {
 	services := a.cfg.Services
 	devices := a.cfg.Devices
+
+	// Build a set for quick lookup
+	selectedSet := make(map[string]bool)
+	for _, name := range selected {
+		selectedSet[name] = true
+	}
+
 	return func() tea.Msg {
 		// Build endpoint list from running services
 		type endpoint struct {
@@ -138,50 +205,61 @@ func (a *AITools) autoConfigure() tea.Cmd {
 		var results []toolResult
 
 		// --- VS Code Copilot ---
-		var vscodeEndpoints []vscode.Endpoint
-		for _, ep := range endpoints {
-			vscodeEndpoints = append(vscodeEndpoints, vscode.Endpoint{
-				Family: "openai",
-				ID:     ep.serviceID,
-				Name:   fmt.Sprintf("%s (yokai)", ep.modelName),
-				URL:    fmt.Sprintf("http://%s:%d/v1", ep.host, ep.port),
-				APIKey: "none",
-			})
-		}
-		if err := vscode.AddEndpoints(vscodeEndpoints); err != nil {
-			results = append(results, toolResult{name: "VS Code Copilot", ok: false, err: err.Error()})
-		} else {
-			results = append(results, toolResult{name: "VS Code Copilot", ok: true})
+		if selectedSet["VS Code Copilot"] {
+			var vscodeEndpoints []vscode.Endpoint
+			for _, ep := range endpoints {
+				vscodeEndpoints = append(vscodeEndpoints, vscode.Endpoint{
+					Family: "openai",
+					ID:     ep.serviceID,
+					Name:   fmt.Sprintf("%s (yokai)", ep.modelName),
+					URL:    fmt.Sprintf("http://%s:%d/v1", ep.host, ep.port),
+					APIKey: "none",
+				})
+			}
+			if err := vscode.AddEndpoints(vscodeEndpoints); err != nil {
+				results = append(results, toolResult{name: "VS Code Copilot", ok: false, err: err.Error()})
+			} else {
+				results = append(results, toolResult{name: "VS Code Copilot", ok: true})
+			}
 		}
 
 		// --- OpenCode ---
-		var opencodeEndpoints []opencode.Endpoint
-		for _, ep := range endpoints {
-			opencodeEndpoints = append(opencodeEndpoints, opencode.Endpoint{
-				BaseURL:   fmt.Sprintf("http://%s:%d/v1", ep.host, ep.port),
-				ModelID:   ep.modelName,
-				ModelName: fmt.Sprintf("%s (yokai)", ep.modelName),
-			})
-		}
-		if err := opencode.AddEndpoints(opencodeEndpoints); err != nil {
-			results = append(results, toolResult{name: "OpenCode", ok: false, err: err.Error()})
-		} else {
-			results = append(results, toolResult{name: "OpenCode", ok: true})
+		if selectedSet["OpenCode"] {
+			// Migrate any legacy .opencode.json config first
+			if legacyPath, err := opencode.DetectConfigPath(); err == nil {
+				_ = opencode.MigrateLegacyConfig(legacyPath)
+			}
+
+			var opencodeEndpoints []opencode.Endpoint
+			for _, ep := range endpoints {
+				opencodeEndpoints = append(opencodeEndpoints, opencode.Endpoint{
+					BaseURL:   fmt.Sprintf("http://%s:%d/v1", ep.host, ep.port),
+					ModelID:   ep.modelName,
+					ModelName: fmt.Sprintf("%s (yokai)", ep.modelName),
+				})
+			}
+			if err := opencode.AddEndpoints(opencodeEndpoints); err != nil {
+				results = append(results, toolResult{name: "OpenCode", ok: false, err: err.Error()})
+			} else {
+				results = append(results, toolResult{name: "OpenCode", ok: true})
+			}
 		}
 
 		// --- OpenClaw ---
-		var openclawEndpoints []openclaw.Endpoint
-		for _, ep := range endpoints {
-			openclawEndpoints = append(openclawEndpoints, openclaw.Endpoint{
-				BaseURL:   fmt.Sprintf("http://%s:%d/v1", ep.host, ep.port),
-				ModelID:   ep.modelName,
-				ModelName: fmt.Sprintf("%s (yokai)", ep.modelName),
-			})
-		}
-		if err := openclaw.AddEndpoints(openclawEndpoints); err != nil {
-			results = append(results, toolResult{name: "OpenClaw", ok: false, err: err.Error()})
-		} else {
-			results = append(results, toolResult{name: "OpenClaw", ok: true})
+		if selectedSet["OpenClaw"] {
+			var openclawEndpoints []openclaw.Endpoint
+			for _, ep := range endpoints {
+				openclawEndpoints = append(openclawEndpoints, openclaw.Endpoint{
+					BaseURL:   fmt.Sprintf("http://%s:%d/v1", ep.host, ep.port),
+					ModelID:   ep.modelName,
+					ModelName: fmt.Sprintf("%s (yokai)", ep.modelName),
+				})
+			}
+			if err := openclaw.AddEndpoints(openclawEndpoints); err != nil {
+				results = append(results, toolResult{name: "OpenClaw", ok: false, err: err.Error()})
+			} else {
+				results = append(results, toolResult{name: "OpenClaw", ok: true})
+			}
 		}
 
 		return aiToolsConfigMsg{results: results}
@@ -226,20 +304,46 @@ func (a *AITools) View() string {
 		body += strings.Join(serviceLines, "\n\n")
 	}
 
-	// Show target tools
-	body += "\n\n" + lipgloss.NewStyle().Foreground(theme.Warn).Bold(true).Render("Target tools:") + "\n"
-	tools := []string{"VS Code Copilot", "OpenCode", "OpenClaw"}
-	for _, tool := range tools {
-		body += fmt.Sprintf("  %s %s\n",
-			theme.MutedStyle.Render("-"),
-			theme.PrimaryStyle.Render(tool),
+	// Show tool selection list
+	body += "\n\n" + lipgloss.NewStyle().Foreground(theme.Warn).Bold(true).Render("Configure tools:") + "\n"
+	for i, tool := range a.tools {
+		cursor := "  "
+		if i == a.cursor && a.state == atsListing {
+			cursor = "> "
+		}
+
+		checkbox := "[ ]"
+		if tool.selected {
+			checkbox = "[x]"
+		}
+
+		nameStyle := theme.PrimaryStyle
+		if i == a.cursor && a.state == atsListing {
+			nameStyle = lipgloss.NewStyle().Foreground(theme.Accent).Bold(true)
+		}
+
+		body += fmt.Sprintf("%s%s %s\n", cursor,
+			theme.MutedStyle.Render(checkbox),
+			nameStyle.Render(tool.name),
 		)
 	}
 
 	// State-specific additions
 	switch a.state {
+	case atsListing:
+		selectedCount := 0
+		for _, t := range a.tools {
+			if t.selected {
+				selectedCount++
+			}
+		}
+		if selectedCount > 0 && compatibleServices > 0 {
+			body += "\n" + theme.SuccessStyle.Render("Press Enter to configure selected tools")
+		} else if selectedCount == 0 {
+			body += "\n" + theme.MutedStyle.Render("Select at least one tool to configure")
+		}
 	case atsConfiguring:
-		body += "\n" + theme.StatusLoading() + " " + theme.PrimaryStyle.Render("Configuring AI tools...")
+		body += "\n" + theme.StatusLoading() + " " + theme.PrimaryStyle.Render("Configuring selected tools...")
 	case atsDone:
 		body += "\n"
 		for _, r := range a.results {
@@ -250,8 +354,10 @@ func (a *AITools) View() string {
 			}
 		}
 		body += "\n" + theme.MutedStyle.Render("  Backups saved as *.yokai.bak")
+		body += "\n" + theme.MutedStyle.Render("  Press Enter to return, Esc to go back")
 	case atsError:
 		body += "\n" + theme.CritStyle.Render("x "+a.err)
+		body += "\n" + theme.MutedStyle.Render("  Press Enter to return, Esc to go back")
 	}
 
 	// Responsive width
@@ -275,7 +381,10 @@ func (a *AITools) View() string {
 
 func (a *AITools) KeyBinds() []KeyBind {
 	return []KeyBind{
-		{Key: "a", Help: "auto-configure all"},
+		{Key: "j/k", Help: "navigate"},
+		{Key: "Space", Help: "toggle"},
+		{Key: "a", Help: "select all"},
+		{Key: "Enter", Help: "configure"},
 		{Key: "Esc", Help: "back"},
 	}
 }
