@@ -133,11 +133,12 @@ func (d DeviceCard) Render() string {
 
 	// Services line: "Services: 3 running"
 	var servicesLine string
-	if d.ServiceCount == 0 {
+	switch d.ServiceCount {
+	case 0:
 		servicesLine = "Services: None"
-	} else if d.ServiceCount == 1 {
+	case 1:
 		servicesLine = "Services: 1 running"
-	} else {
+	default:
 		servicesLine = fmt.Sprintf("Services: %d running", d.ServiceCount)
 	}
 

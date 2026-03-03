@@ -259,7 +259,7 @@ func (d *Dashboard) renderDeviceCards() string {
 	}
 
 	cards := make([]string, len(d.devices))
-	cardWidth := 40
+	var cardWidth int
 
 	// If width > 120, show side-by-side; otherwise stacked
 	if d.width > 120 {
@@ -433,7 +433,9 @@ func (d *Dashboard) pollMetrics() tea.Cmd {
 		if err != nil {
 			return MetricsMsg{Error: err}
 		}
-		defer resp.Body.Close()
+		defer func() {
+			_ = resp.Body.Close() // Best-effort close of metrics response body.
+		}()
 
 		var metrics map[string]*DashboardMetrics
 		if err := json.NewDecoder(resp.Body).Decode(&metrics); err != nil {
@@ -451,7 +453,9 @@ func (d *Dashboard) pollDevices() tea.Cmd {
 		if err != nil {
 			return DevicesMsg{Error: err}
 		}
-		defer resp.Body.Close()
+		defer func() {
+			_ = resp.Body.Close() // Best-effort close of devices response body.
+		}()
 
 		var devices []DashboardDevice
 		if err := json.NewDecoder(resp.Body).Decode(&devices); err != nil {
@@ -499,14 +503,6 @@ func (d *Dashboard) moveServiceCursor(delta int) {
 	}
 }
 
-func (d *Dashboard) getSelectedService() *components.ServiceRow {
-	rows := d.buildServiceRows()
-	if d.selectedService >= 0 && d.selectedService < len(rows) {
-		return &rows[d.selectedService]
-	}
-	return nil
-}
-
 func (d *Dashboard) getSelectedContainer() *ContainerData {
 	if d.selectedService >= 0 && d.selectedService < len(d.serviceContainers) {
 		return &d.serviceContainers[d.selectedService]
@@ -517,9 +513,7 @@ func (d *Dashboard) getSelectedContainer() *ContainerData {
 func (d *Dashboard) updateServiceContainers() {
 	d.serviceContainers = nil
 	for _, metrics := range d.metrics {
-		for _, container := range metrics.Containers {
-			d.serviceContainers = append(d.serviceContainers, container)
-		}
+		d.serviceContainers = append(d.serviceContainers, metrics.Containers...)
 	}
 }
 
@@ -534,7 +528,7 @@ func (d *Dashboard) stopService(containerID string) tea.Cmd {
 		if err != nil {
 			return nil // Could return error message
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close() // Best-effort close of stop response body.
 		return nil
 	}
 }
@@ -550,7 +544,7 @@ func (d *Dashboard) restartService(containerID string) tea.Cmd {
 		if err != nil {
 			return nil // Could return error message
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close() // Best-effort close of restart response body.
 		return nil
 	}
 }

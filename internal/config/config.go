@@ -183,7 +183,9 @@ func Save(cfg *Config) error {
 		return fmt.Errorf("writing config: %w", err)
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
-		os.Remove(tmpPath)
+		if removeErr := os.Remove(tmpPath); removeErr != nil && !os.IsNotExist(removeErr) {
+			return fmt.Errorf("renaming config: %w (cleanup tmp failed: %v)", err, removeErr)
+		}
 		return fmt.Errorf("renaming config: %w", err)
 	}
 

@@ -557,7 +557,7 @@ func addEndpointsToFile(settingsPath string, endpoints []Endpoint) error {
 		return err
 	}
 	if err := os.Rename(tmpPath, settingsPath); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath) // Best-effort cleanup of temporary settings file.
 		return err
 	}
 

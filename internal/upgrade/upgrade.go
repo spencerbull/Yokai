@@ -36,7 +36,9 @@ func Check(currentVersion string) (*Release, bool, error) {
 	if err != nil {
 		return nil, false, fmt.Errorf("failed to fetch release info: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close() // Best-effort close of release API response body.
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, false, fmt.Errorf("GitHub API returned status %d", resp.StatusCode)
@@ -104,7 +106,9 @@ func Run(currentVersion string) error {
 	if err != nil {
 		return fmt.Errorf("failed to download update: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close() // Best-effort close of download response body.
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("download failed with status %d", resp.StatusCode)
@@ -115,11 +119,15 @@ func Run(currentVersion string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create temp file: %w", err)
 	}
-	defer os.Remove(tempFile.Name())
+	defer func() {
+		_ = os.Remove(tempFile.Name()) // Best-effort cleanup of temporary archive.
+	}()
 
 	// Copy download to temp file
 	_, err = io.Copy(tempFile, resp.Body)
-	tempFile.Close()
+	if closeErr := tempFile.Close(); closeErr != nil {
+		return fmt.Errorf("failed to close temp file: %w", closeErr)
+	}
 	if err != nil {
 		return fmt.Errorf("failed to save download: %w", err)
 	}
@@ -129,7 +137,9 @@ func Run(currentVersion string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create temp directory: %w", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() {
+		_ = os.RemoveAll(tempDir) // Best-effort cleanup of extraction directory.
+	}()
 
 	if err := extractTarGz(tempFile.Name(), tempDir); err != nil {
 		return fmt.Errorf("failed to extract archive: %w", err)
@@ -164,7 +174,7 @@ func Run(currentVersion string) error {
 	// Move new binary to current path
 	if err := os.Rename(newBinaryPath, currentBinaryPath); err != nil {
 		// Try to restore old binary
-		os.Rename(oldBinaryPath, currentBinaryPath)
+		_ = os.Rename(oldBinaryPath, currentBinaryPath) // Best-effort rollback to previous binary.
 		return fmt.Errorf("failed to install new binary: %w", err)
 	}
 
@@ -174,7 +184,7 @@ func Run(currentVersion string) error {
 	}
 
 	// Remove .old
-	os.Remove(oldBinaryPath)
+	_ = os.Remove(oldBinaryPath) // Best-effort cleanup of backup binary.
 
 	// 6. Print success message
 	fmt.Printf("✅ Successfully updated to %s!\n", release.TagName)
@@ -189,13 +199,17 @@ func extractTarGz(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() {
+		_ = file.Close() // Best-effort close of source archive file.
+	}()
 
 	gzr, err := gzip.NewReader(file)
 	if err != nil {
 		return err
 	}
-	defer gzr.Close()
+	defer func() {
+		_ = gzr.Close() // Best-effort close of gzip reader.
+	}()
 
 	tr := tar.NewReader(gzr)
 
@@ -231,7 +245,9 @@ func extractTarGz(src, dst string) error {
 			}
 
 			_, err = io.Copy(outFile, tr)
-			outFile.Close()
+			if closeErr := outFile.Close(); closeErr != nil {
+				return closeErr
+			}
 			if err != nil {
 				return err
 			}

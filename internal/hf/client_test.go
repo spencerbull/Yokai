@@ -75,7 +75,7 @@ func TestSearchModels(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(models)
+		_ = json.NewEncoder(w).Encode(models)
 	}))
 	defer server.Close()
 
@@ -118,7 +118,7 @@ func TestSearchModelsError(t *testing.T) {
 	// Mock server that returns an error
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
-		w.Write([]byte("Invalid token"))
+		_, _ = w.Write([]byte("Invalid token"))
 	}))
 	defer server.Close()
 
@@ -175,7 +175,7 @@ func TestListGGUFFiles(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(files)
+		_ = json.NewEncoder(w).Encode(files)
 	}))
 	defer server.Close()
 
@@ -268,7 +268,7 @@ func TestValidateToken(t *testing.T) {
 				}
 
 				w.WriteHeader(tt.statusCode)
-				w.Write([]byte(tt.responseBody))
+				_, _ = w.Write([]byte(tt.responseBody))
 			}))
 			defer server.Close()
 
@@ -312,7 +312,7 @@ func TestSearchModelsWithDefaults(t *testing.T) {
 
 		// Return minimal response
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte("[]"))
+		_, _ = w.Write([]byte("[]"))
 	}))
 	defer server.Close()
 

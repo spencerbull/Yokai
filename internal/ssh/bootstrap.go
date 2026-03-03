@@ -49,7 +49,9 @@ func Preflight(client *Client) (*PreflightResult, error) {
 				result.GPUName = strings.TrimSpace(parts[0])
 			}
 			if len(parts) >= 2 {
-				fmt.Sscanf(strings.TrimSpace(parts[1]), "%d", &result.GPUVRAMMb)
+				if _, err := fmt.Sscanf(strings.TrimSpace(parts[1]), "%d", &result.GPUVRAMMb); err != nil {
+					result.GPUVRAMMb = 0
+				}
 			}
 		}
 	}
@@ -68,7 +70,9 @@ func Preflight(client *Client) (*PreflightResult, error) {
 
 	// Disk free
 	if out, err := client.Exec("df -BG --output=avail / 2>/dev/null | tail -1"); err == nil {
-		fmt.Sscanf(strings.TrimSpace(out), "%dG", &result.DiskFreeGB)
+		if _, err := fmt.Sscanf(strings.TrimSpace(out), "%dG", &result.DiskFreeGB); err != nil {
+			result.DiskFreeGB = 0
+		}
 	}
 
 	return result, nil

@@ -12,7 +12,6 @@ type Manual struct {
 	cfg     *config.Config
 	version string
 	input   string
-	cursor  int
 	err     string
 	width   int
 	height  int

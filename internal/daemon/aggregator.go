@@ -103,7 +103,9 @@ func (a *Aggregator) pollDevice(deviceID string) {
 		a.setDeviceOffline(deviceID)
 		return
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close() // Best-effort close of response body.
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		log.Printf("metrics poll %s returned %d", deviceID, resp.StatusCode)
@@ -222,7 +224,9 @@ func (a *Aggregator) Deploy(req DeployRequest) (*DeployResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("deploy request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close() // Best-effort close of response body.
+	}()
 
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("deploy failed with status %d", resp.StatusCode)
@@ -253,7 +257,9 @@ func (a *Aggregator) StopContainer(deviceID, containerID string) error {
 	if err != nil {
 		return fmt.Errorf("stop request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close() // Best-effort close of response body.
+	}()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
 		return fmt.Errorf("stop failed with status %d", resp.StatusCode)
@@ -274,7 +280,9 @@ func (a *Aggregator) RestartContainer(deviceID, containerID string) error {
 	if err != nil {
 		return fmt.Errorf("restart request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close() // Best-effort close of restart response body.
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("restart failed with status %d", resp.StatusCode)
@@ -305,14 +313,16 @@ func (a *Aggregator) StreamLogs(deviceID, containerID string) (<-chan string, er
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
+		_ = resp.Body.Close() // Best-effort close on non-OK log stream response.
 		return nil, fmt.Errorf("log stream failed with status %d", resp.StatusCode)
 	}
 
 	ch := make(chan string, 100)
 
 	go func() {
-		defer resp.Body.Close()
+		defer func() {
+			_ = resp.Body.Close() // Best-effort close of log stream response body.
+		}()
 		defer close(ch)
 
 		scanner := bufio.NewScanner(resp.Body)

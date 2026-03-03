@@ -134,10 +134,14 @@ func collectRAM() RAMMetrics {
 	var totalKB, availableKB int64
 	for _, line := range strings.Split(string(data), "\n") {
 		if strings.HasPrefix(line, "MemTotal:") {
-			fmt.Sscanf(line, "MemTotal: %d kB", &totalKB)
+			if _, err := fmt.Sscanf(line, "MemTotal: %d kB", &totalKB); err != nil {
+				continue
+			}
 		}
 		if strings.HasPrefix(line, "MemAvailable:") {
-			fmt.Sscanf(line, "MemAvailable: %d kB", &availableKB)
+			if _, err := fmt.Sscanf(line, "MemAvailable: %d kB", &availableKB); err != nil {
+				continue
+			}
 		}
 	}
 
@@ -169,10 +173,14 @@ func collectSwap() SwapMetrics {
 	var totalKB, freeKB int64
 	for _, line := range strings.Split(string(data), "\n") {
 		if strings.HasPrefix(line, "SwapTotal:") {
-			fmt.Sscanf(line, "SwapTotal: %d kB", &totalKB)
+			if _, err := fmt.Sscanf(line, "SwapTotal: %d kB", &totalKB); err != nil {
+				continue
+			}
 		}
 		if strings.HasPrefix(line, "SwapFree:") {
-			fmt.Sscanf(line, "SwapFree: %d kB", &freeKB)
+			if _, err := fmt.Sscanf(line, "SwapFree: %d kB", &freeKB); err != nil {
+				continue
+			}
 		}
 	}
 
@@ -200,9 +208,15 @@ func collectDisk() DiskMetrics {
 	}
 
 	var total, used, avail int64
-	fmt.Sscanf(strings.TrimSuffix(fields[0], "G"), "%d", &total)
-	fmt.Sscanf(strings.TrimSuffix(fields[1], "G"), "%d", &used)
-	fmt.Sscanf(strings.TrimSuffix(fields[2], "G"), "%d", &avail)
+	if _, err := fmt.Sscanf(strings.TrimSuffix(fields[0], "G"), "%d", &total); err != nil {
+		return DiskMetrics{}
+	}
+	if _, err := fmt.Sscanf(strings.TrimSuffix(fields[1], "G"), "%d", &used); err != nil {
+		return DiskMetrics{}
+	}
+	if _, err := fmt.Sscanf(strings.TrimSuffix(fields[2], "G"), "%d", &avail); err != nil {
+		return DiskMetrics{}
+	}
 
 	return DiskMetrics{
 		TotalGB: total,
