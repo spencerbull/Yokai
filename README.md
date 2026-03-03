@@ -18,7 +18,7 @@ yokai is a terminal-based fleet manager for running **vLLM**, **llama.cpp**, and
 │ │▸ vLLM  Llama-3.1-8B-Instruct  gaming-rig  ● live  :8000  142 t/s  │ │
 │ │  llama.cpp  Mistral-7B-Q4_K_M  gaming-rig  ● live  :8080   38 t/s  │ │
 │ ╰──────────────────────────────────────────────────────────────────────╯ │
-│ n new  s stop  l logs  d devices  g grafana  c copilot  ? help  q quit  │
+│ n new  s stop  l logs  d devices  g grafana  c ai tools  ? help  q quit │
 ╰──────────────────────────────────────────────────────────────────────────╯
 ```
 
@@ -31,7 +31,7 @@ If you're running local LLMs across multiple machines, you already know the pain
 - **SSH into each box** just to check if your GPU is melting or idle
 - **Copy-paste 20-flag `docker run` commands** every time you want to swap a model
 - **Juggle separate monitoring dashboards** for each machine
-- **Manually edit VS Code settings** every time an endpoint changes
+- **Manually edit tool configs** every time an endpoint changes
 
 yokai solves all of this with a single binary. Install it, point it at your machines, and you're running models in minutes -- not hours.
 
@@ -62,9 +62,12 @@ yokai solves all of this with a single binary. Install it, point it at your mach
 - **Pre-built dashboards** -- Grafana dashboard with GPU utilization, temperature, power, and system metrics panels
 - **One-key access** -- press `g` to open Grafana in your browser
 
-### VS Code Integration
-- **Auto-configure Copilot** -- press `c` to write OpenAI-compatible endpoints into your VS Code `settings.json`
-- **Backup-safe** -- creates a backup of your settings before modifying them
+### AI Coding Tool Integration
+- **One-key config** -- press `c` to auto-configure all supported AI coding tools at once
+- **VS Code Copilot** -- writes OpenAI-compatible endpoints into your VS Code `settings.json`
+- **OpenCode** -- configures `.opencode.json` with yokai as a local model provider
+- **OpenClaw** -- adds a yokai provider under `models.providers` in `~/.openclaw/openclaw.json`
+- **Backup-safe** -- creates a `.yokai.bak` backup of each config before modifying
 - **Multi-endpoint** -- registers all running inference services as available endpoints
 
 ### Self-Updating
@@ -146,7 +149,7 @@ yokai
 | `l` | View logs for selected service |
 | `d` | Open device manager |
 | `g` | Open Grafana in browser |
-| `c` | Configure VS Code Copilot endpoints |
+| `c` | Configure AI coding tools (VS Code, OpenCode, OpenClaw) |
 | `?` | Show help overlay |
 | `j`/`k` | Navigate service list |
 | `q` | Quit |
@@ -286,8 +289,10 @@ yokai/
 │   │   ├── components/    # Reusable widgets (metrics bar, sparkline, GPU panel)
 │   │   ├── theme/         # Tokyo Night color palette and styles
 │   │   └── views/         # All TUI screens (dashboard, deploy, devices, etc.)
-│   ├── upgrade/           # Self-update from GitHub Releases
-│   └── vscode/            # VS Code settings.json manipulation
+│   ├── openclaw/           # OpenClaw openclaw.json provider config
+│   ├── opencode/           # OpenCode .opencode.json provider config
+│   ├── upgrade/            # Self-update from GitHub Releases
+│   └── vscode/             # VS Code settings.json manipulation
 ├── assets/
 │   ├── grafana/           # Pre-built dashboard JSON and provisioning
 │   ├── prometheus/        # Prometheus scrape configuration
