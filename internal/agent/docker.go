@@ -146,6 +146,14 @@ func runContainer(req ContainerRequest) (*ContainerResponse, error) {
 		req.ExtraArgs = withLlamaModelArg(req.ExtraArgs, req.Model)
 	}
 
+	if isVLLMImage(req.Image) && req.Model != "" {
+		if req.Volumes == nil {
+			req.Volumes = make(map[string]string)
+		}
+		ensureHFCacheVolume(req.Volumes)
+		req.ExtraArgs = withVLLMModelArg(req.ExtraArgs, req.Model)
+	}
+
 	// Build docker run command
 	args := []string{"run", "-d", "--name", containerName}
 
@@ -253,6 +261,10 @@ func sanitizeName(name string) string {
 	return sanitized
 }
 
+func isVLLMImage(image string) bool {
+	return strings.Contains(strings.ToLower(image), "vllm")
+}
+
 func isLlamaCppImage(image string) bool {
 	return strings.Contains(strings.ToLower(image), "llama.cpp")
 }
@@ -264,6 +276,34 @@ func ensureModelsVolume(volumes map[string]string) {
 		}
 	}
 	volumes["/var/lib/yokai/models"] = "/models"
+}
+
+func ensureHFCacheVolume(volumes map[string]string) {
+	for _, containerPath := range volumes {
+		if containerPath == "/root/.cache/huggingface" {
+			return
+		}
+	}
+	volumes["/var/lib/yokai/huggingface"] = "/root/.cache/huggingface"
+}
+
+func withVLLMModelArg(extraArgs, model string) string {
+	if model == "" {
+		return extraArgs
+	}
+
+	tokens := strings.Fields(extraArgs)
+	for i := range tokens {
+		if tokens[i] == "--model" {
+			return extraArgs
+		}
+	}
+
+	if strings.TrimSpace(extraArgs) == "" {
+		return fmt.Sprintf("--model %s", model)
+	}
+
+	return fmt.Sprintf("--model %s %s", model, extraArgs)
 }
 
 func withLlamaModelArg(extraArgs, model string) string {
