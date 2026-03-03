@@ -2,23 +2,102 @@ name: Release
 
 on:
   push:
+    branches: [main]
+    # Also allow manual tag pushes as a fallback
     tags:
       - 'v*'
 
 permissions:
-  contents: write # Required for creating releases and uploading assets
+  contents: write
 
 jobs:
+  # Skip release job if the commit was made by the release bot (avoid loops)
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.check.outputs.should_release }}
+    steps:
+      - id: check
+        run: |
+          if [[ "${{ github.event.head_commit.author.username }}" == "github-actions[bot]" ]]; then
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          fi
+
   release:
+    needs: check
+    if: needs.check.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # Fetch full history for changelog generation
+          fetch-depth: 0 # Full history for changelog and version detection
+          token: ${{ secrets.GITHUB_TOKEN }}
+
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          go-version: '1.25'
           cache: true
+
+      # Determine next version from commits since last tag
+      - name: Determine version bump
+        id: version
+        run: |
+          # Get the latest tag, default to v0.0.0 if none exists
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          echo "latest_tag=${LATEST_TAG}" >> "$GITHUB_OUTPUT"
+
+          # If this was triggered by a tag push, use that tag directly
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            echo "new_tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+            echo "skip_tag=true" >> "$GITHUB_OUTPUT"
+            echo "Using pushed tag: ${{ github.ref_name }}"
+            exit 0
+          fi
+
+          echo "skip_tag=false" >> "$GITHUB_OUTPUT"
+
+          # Parse current version
+          VERSION="${LATEST_TAG#v}"
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+
+          # Analyze commits since last tag for conventional commit prefixes
+          COMMITS=$(git log "${LATEST_TAG}..HEAD" --pretty=format:"%s" 2>/dev/null || git log --pretty=format:"%s")
+
+          BUMP="patch"
+          while IFS= read -r msg; do
+            # Major: breaking change
+            if echo "$msg" | grep -qiE '^(feat|fix|refactor)!:|BREAKING CHANGE'; then
+              BUMP="major"
+              break
+            fi
+            # Minor: new feature
+            if echo "$msg" | grep -qiE '^feat(\(.+\))?:'; then
+              BUMP="minor"
+            fi
+          done <<< "$COMMITS"
+
+          case "$BUMP" in
+            major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+            minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+            patch) PATCH=$((PATCH + 1)) ;;
+          esac
+
+          NEW_TAG="v${MAJOR}.${MINOR}.${PATCH}"
+          echo "new_tag=${NEW_TAG}" >> "$GITHUB_OUTPUT"
+          echo "Bump: ${BUMP} (${LATEST_TAG} -> ${NEW_TAG})"
+
+      # Create and push the new tag (skip if triggered by tag push)
+      - name: Create tag
+        if: steps.version.outputs.skip_tag == 'false'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ steps.version.outputs.new_tag }}" -m "Release ${{ steps.version.outputs.new_tag }}"
+          git push origin "${{ steps.version.outputs.new_tag }}"
+
+      # Build and publish the release
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
