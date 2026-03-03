@@ -48,6 +48,7 @@ type deployRequest struct {
 	DeviceID  string            `json:"device_id"`
 	Image     string            `json:"image"`
 	Name      string            `json:"name"`
+	Model     string            `json:"model"`
 	Ports     map[string]string `json:"ports"`
 	Env       map[string]string `json:"env"`
 	GPUIDs    string            `json:"gpu_ids"`
@@ -307,6 +308,7 @@ func (d *Deploy) deployToAPI(svc config.Service) tea.Cmd {
 			DeviceID:  svc.DeviceID,
 			Image:     svc.Image,
 			Name:      svc.ID,
+			Model:     svc.Model,
 			Ports:     map[string]string{d.port: d.port},
 			Env:       map[string]string{},
 			GPUIDs:    "all",
@@ -342,7 +344,7 @@ func (d *Deploy) deployToAPI(svc config.Service) tea.Cmd {
 			_ = resp.Body.Close() // Best-effort close of deploy response body.
 		}()
 
-		if resp.StatusCode != 200 {
+		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 			return deployResultMsg{Error: fmt.Errorf("daemon returned status %d", resp.StatusCode)}
 		}
 
