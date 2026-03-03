@@ -84,7 +84,7 @@ yokai solves all of this with a single binary. Install it, point it at your mach
 **One-line installer** (Linux/macOS):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/spencerbull/yokai/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/spencerbull/Yokai/main/install.sh | sh
 ```
 
 **From GitHub Releases:**

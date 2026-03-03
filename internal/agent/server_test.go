@@ -527,3 +527,61 @@ func TestValidContainerRequest(t *testing.T) {
 		t.Logf("Container deploy returned status %d (may be expected if Docker unavailable)", w.Code)
 	}
 }
+
+func TestMergeContainerMetrics(t *testing.T) {
+	t.Parallel()
+
+	metrics := []ContainerMetrics{
+		{
+			ID:         "abc123456789",
+			Name:       "yokai-vllm-1",
+			Status:     "running",
+			CPUPercent: 25.0,
+			MemUsedMB:  1024,
+		},
+	}
+
+	dockerContainers := []Container{
+		{
+			ID:     "abc1234567890123456789",
+			Name:   "yokai-vllm-1",
+			Image:  "vllm/vllm-openai:latest",
+			Status: "running",
+		},
+		{
+			ID:     "def9876543210123456789",
+			Name:   "yokai-llama-1",
+			Image:  "ghcr.io/ggml-org/llama.cpp:server-cuda",
+			Status: "stopped",
+		},
+	}
+
+	merged := mergeContainerMetrics(metrics, dockerContainers)
+	if len(merged) != 2 {
+		t.Fatalf("expected 2 containers after merge, got %d", len(merged))
+	}
+
+	if merged[0].Image != "vllm/vllm-openai:latest" {
+		t.Errorf("expected merged image for running container, got %q", merged[0].Image)
+	}
+
+	if merged[1].Name != "yokai-llama-1" {
+		t.Errorf("expected appended container name, got %q", merged[1].Name)
+	}
+
+	if merged[1].Status != "stopped" {
+		t.Errorf("expected appended container status 'stopped', got %q", merged[1].Status)
+	}
+}
+
+func TestShortContainerID(t *testing.T) {
+	t.Parallel()
+
+	if got := shortContainerID("1234567890123456"); got != "123456789012" {
+		t.Errorf("expected 12-char ID, got %q", got)
+	}
+
+	if got := shortContainerID("abc"); got != "abc" {
+		t.Errorf("expected short ID to remain unchanged, got %q", got)
+	}
+}
