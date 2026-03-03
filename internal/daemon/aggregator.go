@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"sync"
@@ -230,6 +231,15 @@ func (a *Aggregator) Deploy(req DeployRequest) (*DeployResult, error) {
 	}()
 
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		// Read agent error body for better diagnostics
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		var agentErr struct {
+			Error   string `json:"error"`
+			Message string `json:"message"`
+		}
+		if json.Unmarshal(body, &agentErr) == nil && agentErr.Message != "" {
+			return nil, fmt.Errorf("agent %s: %s", agentErr.Error, agentErr.Message)
+		}
 		return nil, fmt.Errorf("deploy failed with status %d", resp.StatusCode)
 	}
 
