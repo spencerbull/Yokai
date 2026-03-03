@@ -214,7 +214,9 @@ func (l *LogViewer) startSSE() tea.Cmd {
 		// Note: In a real implementation, we'd need a way to send messages
 		// back to the UI from this goroutine. For now, we'll add some initial log lines.
 		go func() {
-			defer resp.Body.Close()
+			defer func() {
+				_ = resp.Body.Close() // Best-effort close of SSE response body.
+			}()
 			defer cancel()
 
 			scanner := bufio.NewScanner(resp.Body)
@@ -231,7 +233,7 @@ func (l *LogViewer) startSSE() tea.Cmd {
 			}
 
 			if err := scanner.Err(); err != nil && ctx.Err() == nil {
-				// Only report error if not cancelled
+				_ = err // TODO: plumb async scanner errors back into the UI message loop.
 			}
 		}()
 

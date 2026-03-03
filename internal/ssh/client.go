@@ -84,7 +84,9 @@ func (c *Client) Exec(cmd string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("creating session: %w", err)
 	}
-	defer session.Close()
+	defer func() {
+		_ = session.Close() // Best-effort session close after command.
+	}()
 
 	out, err := session.CombinedOutput(cmd)
 	return string(out), err
@@ -96,7 +98,9 @@ func (c *Client) Upload(localPath, remotePath string) error {
 	if err != nil {
 		return fmt.Errorf("opening local file: %w", err)
 	}
-	defer f.Close()
+	defer func() {
+		_ = f.Close() // Best-effort file close after upload.
+	}()
 
 	stat, err := f.Stat()
 	if err != nil {
@@ -107,14 +111,18 @@ func (c *Client) Upload(localPath, remotePath string) error {
 	if err != nil {
 		return fmt.Errorf("creating session: %w", err)
 	}
-	defer session.Close()
+	defer func() {
+		_ = session.Close() // Best-effort session close after upload.
+	}()
 
 	go func() {
 		w, _ := session.StdinPipe()
-		defer w.Close()
-		fmt.Fprintf(w, "C0755 %d %s\n", stat.Size(), filepath.Base(remotePath))
-		io.Copy(w, f)
-		fmt.Fprint(w, "\x00")
+		defer func() {
+			_ = w.Close() // Best-effort close of SCP stdin pipe.
+		}()
+		_, _ = fmt.Fprintf(w, "C0755 %d %s\n", stat.Size(), filepath.Base(remotePath))
+		_, _ = io.Copy(w, f)
+		_, _ = fmt.Fprint(w, "\x00")
 	}()
 
 	dir := filepath.Dir(remotePath)

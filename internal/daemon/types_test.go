@@ -266,13 +266,13 @@ func TestEmptyMapsInJSON(t *testing.T) {
 	}
 
 	// Verify empty/nil maps are handled correctly
-	if unmarshaled.Ports != nil && len(unmarshaled.Ports) > 0 {
+	if len(unmarshaled.Ports) > 0 {
 		t.Error("Ports should be empty after unmarshaling nil map")
 	}
 	if len(unmarshaled.Env) > 0 {
 		t.Error("Env should be empty after unmarshaling empty map")
 	}
-	if unmarshaled.Volumes != nil && len(unmarshaled.Volumes) > 0 {
+	if len(unmarshaled.Volumes) > 0 {
 		t.Error("Volumes should be empty after unmarshaling nil map")
 	}
 }
