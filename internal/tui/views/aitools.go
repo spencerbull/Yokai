@@ -92,13 +92,6 @@ func (a *AITools) Update(msg tea.Msg) (View, tea.Cmd) {
 	return a, nil
 }
 
-// buildEndpoints extracts OpenAI-compatible service endpoints from config.
-func (a *AITools) buildEndpoints() (host string, services []config.Service, devices []config.Device) {
-	services = a.cfg.Services
-	devices = a.cfg.Devices
-	return
-}
-
 func (a *AITools) autoConfigure() tea.Cmd {
 	services := a.cfg.Services
 	devices := a.cfg.Devices
