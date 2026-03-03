@@ -10,43 +10,85 @@ FALLBACK_INSTALL_DIR="$HOME/.local/bin"
 BINARY="yokai"
 PROJECT_NAME="Yokai"
 
-# Detect OS and architecture
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+MAGENTA='\033[0;35m'
+BOLD='\033[1m'
+DIM='\033[2m'
+NC='\033[0m'
+
+banner() {
+  printf "${MAGENTA}"
+  cat << 'EOF'
+
+  ██    ██  ██████  ██   ██  █████  ██
+  ██    ██ ██    ██ ██  ██  ██   ██ ██
+   ██████  ██    ██ █████   ███████ ██
+        ██ ██    ██ ██  ██  ██   ██ ██
+        ██  ██████  ██   ██ ██   ██ ██
+
+EOF
+  printf "${DIM}  GPU Fleet Management for Hackers${NC}\n\n"
+}
+
+info()    { printf "  ${CYAN}▸${NC} %s\n" "$1"; }
+success() { printf "  ${GREEN}✔${NC} %s\n" "$1"; }
+warn()    { printf "  ${YELLOW}!${NC} %s\n" "$1"; }
+fail()    { printf "  ${RED}✘${NC} %s\n" "$1"; exit 1; }
+step()    { printf "\n${BOLD}  %s${NC}\n" "$1"; }
+
+banner
+
+# ── Detect platform ──────────────────────────────────────────────
+step "Detecting platform"
+
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m)
 
 case "$ARCH" in
   x86_64|amd64) ARCH="amd64" ;;
   aarch64|arm64) ARCH="arm64" ;;
-  *) echo "Unsupported architecture: $ARCH"; exit 1 ;;
+  *) fail "Unsupported architecture: $ARCH" ;;
 esac
 
 case "$OS" in
   linux|darwin) ;;
-  *) echo "Unsupported OS: $OS"; exit 1 ;;
+  *) fail "Unsupported OS: $OS" ;;
 esac
 
-# Get latest version from GitHub API
+success "Platform: ${OS}/${ARCH}"
+
+# ── Fetch latest version ────────────────────────────────────────
+step "Fetching latest release"
+
 VERSION=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name"' | sed -E 's/.*"v([^"]+)".*/\1/')
 
 if [ -z "$VERSION" ]; then
-  echo "Error: Could not determine latest version"
-  exit 1
+  fail "Could not determine latest version. Check your internet connection."
 fi
 
-echo "Installing yokai v${VERSION} for ${OS}/${ARCH}..."
+success "Latest version: v${VERSION}"
 
-# Download and extract
+# ── Download ─────────────────────────────────────────────────────
+step "Downloading"
+
 FILENAME="${PROJECT_NAME}_${VERSION}_${OS}_${ARCH}.tar.gz"
 URL="https://github.com/$REPO/releases/download/v${VERSION}/${FILENAME}"
 
 TMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TMP_DIR"' EXIT
 
-echo "Downloading from: $URL"
-curl -fsSL "$URL" -o "${TMP_DIR}/${FILENAME}"
+info "From: ${URL}"
+curl -fsSL "$URL" -o "${TMP_DIR}/${FILENAME}" || fail "Download failed. Does v${VERSION} have a ${OS}/${ARCH} release?"
 tar -xzf "${TMP_DIR}/${FILENAME}" -C "$TMP_DIR"
+success "Downloaded and extracted"
 
-# Install binary
+# ── Install ──────────────────────────────────────────────────────
+step "Installing"
+
 USE_SUDO=0
 if [ -w "$INSTALL_DIR" ]; then
   TARGET_DIR="$INSTALL_DIR"
@@ -60,37 +102,53 @@ fi
 if [ "$TARGET_DIR" = "$FALLBACK_INSTALL_DIR" ]; then
   mkdir -p "$TARGET_DIR"
   mv "${TMP_DIR}/${BINARY}" "${TARGET_DIR}/${BINARY}"
+  chmod +x "${TARGET_DIR}/${BINARY}"
+
+  # Add to PATH in shell rc files
+  PATH_ADDED=0
+  for rc_file in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile"; do
+    if [ ! -f "$rc_file" ]; then
+      continue
+    fi
+    if ! grep -Fq '.local/bin' "$rc_file"; then
+      printf '\n# Added by yokai installer\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$rc_file"
+      PATH_ADDED=1
+    fi
+  done
+
+  success "Installed to ${TARGET_DIR}/${BINARY}"
+  if [ "$PATH_ADDED" -eq 1 ]; then
+    info "Added ~/.local/bin to PATH in shell config"
+    warn "Run 'source ~/.bashrc' or restart your shell to use yokai"
+  fi
 else
   if [ "$USE_SUDO" -eq 1 ]; then
+    info "Using sudo for ${TARGET_DIR}"
     sudo mv "${TMP_DIR}/${BINARY}" "${TARGET_DIR}/${BINARY}"
     sudo chmod +x "${TARGET_DIR}/${BINARY}"
   else
     mv "${TMP_DIR}/${BINARY}" "${TARGET_DIR}/${BINARY}"
     chmod +x "${TARGET_DIR}/${BINARY}"
   fi
+  success "Installed to ${TARGET_DIR}/${BINARY}"
 fi
 
-if [ "$TARGET_DIR" = "$FALLBACK_INSTALL_DIR" ]; then
-  chmod +x "${TARGET_DIR}/${BINARY}"
+# ── Verify ───────────────────────────────────────────────────────
+step "Verifying"
 
-  for rc_file in "$HOME/.bashrc" "$HOME/.zshrc"; do
-    if [ ! -f "$rc_file" ]; then
-      continue
-    fi
-    if ! grep -Fq 'export PATH="$HOME/.local/bin:$PATH"' "$rc_file"; then
-      printf '\n# Added by yokai installer\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$rc_file"
-      echo "Updated PATH in $rc_file"
-    fi
-  done
-fi
-
-echo "yokai v${VERSION} installed to ${TARGET_DIR}/${BINARY}"
-echo "Run 'yokai --help' to get started!"
-
-# Verify installation
+export PATH="$TARGET_DIR:$PATH"
 if command -v yokai >/dev/null 2>&1; then
-  echo "Installation verified: $(yokai --version 2>/dev/null || echo 'yokai is ready')"
+  INSTALLED_VERSION=$(yokai version 2>/dev/null || echo "unknown")
+  success "Verified: ${INSTALLED_VERSION}"
 else
-  echo "Warning: ${TARGET_DIR} may not be in your PATH"
-  echo "Add ${TARGET_DIR} to your PATH or run: export PATH=\$PATH:${TARGET_DIR}"
+  warn "${TARGET_DIR} is not in your PATH"
+  info "Run: export PATH=\"${TARGET_DIR}:\$PATH\""
 fi
+
+# ── Done ─────────────────────────────────────────────────────────
+printf "\n${GREEN}${BOLD}  ⚡ yokai v${VERSION} is ready!${NC}\n\n"
+printf "${DIM}  Quick start:${NC}\n"
+printf "    ${CYAN}yokai agent 7474${NC}      ${DIM}# Start an agent on a GPU node${NC}\n"
+printf "    ${CYAN}yokai daemon${NC}           ${DIM}# Start the daemon on your workstation${NC}\n"
+printf "    ${CYAN}yokai${NC}                  ${DIM}# Launch the TUI${NC}\n"
+printf "\n${DIM}  Docs: https://github.com/${REPO}${NC}\n\n"
