@@ -160,7 +160,7 @@ func (d *Dashboard) Update(msg tea.Msg) (View, tea.Cmd) {
 		case "d":
 			return d, Navigate(NewDeviceManager(d.cfg, d.version))
 		case "c":
-			return d, Navigate(NewCopilot(d.cfg, d.version))
+			return d, Navigate(NewAITools(d.cfg, d.version))
 		case "?":
 			return d, Navigate(NewHelp(d.version))
 		case "j", "down":
@@ -602,7 +602,7 @@ func (d *Dashboard) KeyBinds() []KeyBind {
 		{Key: "l", Help: "logs"},
 		{Key: "d", Help: "devices"},
 		{Key: "g", Help: "grafana"},
-		{Key: "c", Help: "copilot"},
+		{Key: "c", Help: "ai tools"},
 		{Key: "j/k", Help: "navigate"},
 		{Key: "?", Help: "help"},
 		{Key: "q", Help: "quit"},
