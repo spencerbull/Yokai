@@ -218,7 +218,7 @@ func (d *Daemon) handleLogs(w http.ResponseWriter, r *http.Request) {
 
 	logCh, err := d.aggregator.StreamLogs(deviceID, containerID)
 	if err != nil {
-		fmt.Fprintf(w, "data: {\"error\": %q}\n\n", err.Error())
+		_, _ = fmt.Fprintf(w, "data: {\"error\": %q}\n\n", err.Error()) // Best-effort SSE write; client may disconnect.
 		flusher.Flush()
 		return
 	}
@@ -232,7 +232,7 @@ func (d *Daemon) handleLogs(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return
 			}
-			fmt.Fprintf(w, "data: %s\n\n", line)
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", line) // Best-effort SSE write; client may disconnect.
 			flusher.Flush()
 		}
 	}

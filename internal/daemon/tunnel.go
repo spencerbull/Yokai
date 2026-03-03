@@ -145,7 +145,9 @@ func (tp *TunnelPool) handleConnections(t *tunnel, device config.Device) {
 
 // forwardConnection pipes data between local connection and remote agent
 func (tp *TunnelPool) forwardConnection(t *tunnel, localConn net.Conn, device config.Device) {
-	defer localConn.Close()
+	defer func() {
+		_ = localConn.Close() // Best-effort close; connection may already be closed.
+	}()
 
 	agentPort := device.AgentPort
 	if agentPort == 0 {
@@ -158,7 +160,9 @@ func (tp *TunnelPool) forwardConnection(t *tunnel, localConn net.Conn, device co
 		log.Printf("tunnel %s: dial remote %s: %v", device.ID, remoteAddr, err)
 		return
 	}
-	defer remoteConn.Close()
+	defer func() {
+		_ = remoteConn.Close() // Best-effort close; connection may already be closed.
+	}()
 
 	// Bidirectional copy
 	done := make(chan struct{})

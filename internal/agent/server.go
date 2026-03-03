@@ -3,6 +3,7 @@ package agent
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -318,7 +319,11 @@ func handleContainerLogs(w http.ResponseWriter, r *http.Request) {
 
 	select {
 	case <-r.Context().Done():
-		cmd.Process.Kill()
+		if cmd.Process != nil {
+			if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+				log.Printf("failed to kill docker logs process: %v", err)
+			}
+		}
 	case <-done:
 		// Command finished
 	}
