@@ -243,7 +243,10 @@ All state lives in `~/.config/yokai/config.json`. Copy this file to another mach
 |---|---|---|
 | Linux | amd64 | Supported |
 | Linux | arm64 | Supported |
+| macOS | amd64 | Supported |
 | macOS | arm64 (Apple Silicon) | Supported |
+| Windows | amd64 | Supported |
+| Windows | arm64 | Supported |
 
 ### Target Devices (where models run)
 
