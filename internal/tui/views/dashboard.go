@@ -72,8 +72,8 @@ type RAMData struct {
 type GPUData struct {
 	Index       int    `json:"index"`
 	Name        string `json:"name"`
-	TempC       int    `json:"temp_c"`
-	UtilPercent int    `json:"util_percent"`
+	TempC       int    `json:"temperature_c"`
+	UtilPercent int    `json:"utilization_percent"`
 	VRAMUsedMB  int64  `json:"vram_used_mb"`
 	VRAMTotalMB int64  `json:"vram_total_mb"`
 	PowerDrawW  int    `json:"power_draw_w"`
@@ -82,14 +82,15 @@ type GPUData struct {
 }
 
 type ContainerData struct {
-	ID         string  `json:"id"`
-	Name       string  `json:"name"`
-	Status     string  `json:"status"`
-	CPUPercent float64 `json:"cpu_percent"`
-	MemUsedMB  int64   `json:"mem_used_mb"`
-	GPUMemMB   int64   `json:"gpu_mem_mb"`
-	Uptime     string  `json:"uptime"`
-	Port       int     `json:"port"`
+	ID            string  `json:"id"`
+	Name          string  `json:"name"`
+	Image         string  `json:"image"`
+	Status        string  `json:"status"`
+	CPUPercent    float64 `json:"cpu_percent"`
+	MemUsedMB     int64   `json:"memory_used_mb"`
+	GPUMemMB      int64   `json:"gpu_memory_mb"`
+	UptimeSeconds int64   `json:"uptime_seconds"`
+	Port          int     `json:"port"`
 }
 
 type DashboardDevice struct {
@@ -134,6 +135,7 @@ func (d *Dashboard) Update(msg tea.Msg) (View, tea.Cmd) {
 			d.metrics = msg.Metrics
 			d.updateSparklineData()
 			d.updateServiceContainers()
+			d.enrichDevices()
 			d.lastError = nil
 		}
 		return d, tea.Tick(2*time.Second, func(time.Time) tea.Msg {
@@ -145,6 +147,7 @@ func (d *Dashboard) Update(msg tea.Msg) (View, tea.Cmd) {
 			d.lastError = msg.Error
 		} else {
 			d.devices = msg.Devices
+			d.enrichDevices()
 			d.lastError = nil
 		}
 
@@ -417,7 +420,7 @@ func (d *Dashboard) buildServiceRows() []components.ServiceRow {
 				CPUPercent: container.CPUPercent,
 				MemUsedMB:  container.MemUsedMB,
 				GPUMemMB:   container.GPUMemMB,
-				Uptime:     container.Uptime,
+				Uptime:     formatUptime(container.UptimeSeconds),
 			}
 			rows = append(rows, row)
 		}
@@ -457,12 +460,14 @@ func (d *Dashboard) pollDevices() tea.Cmd {
 			_ = resp.Body.Close() // Best-effort close of devices response body.
 		}()
 
-		var devices []DashboardDevice
-		if err := json.NewDecoder(resp.Body).Decode(&devices); err != nil {
+		var envelope struct {
+			Devices []DashboardDevice `json:"devices"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
 			return DevicesMsg{Error: err}
 		}
 
-		return DevicesMsg{Devices: devices}
+		return DevicesMsg{Devices: envelope.Devices}
 	}
 }
 
@@ -508,6 +513,20 @@ func (d *Dashboard) getSelectedContainer() *ContainerData {
 		return &d.serviceContainers[d.selectedService]
 	}
 	return nil
+}
+
+func (d *Dashboard) enrichDevices() {
+	for i := range d.devices {
+		dev := &d.devices[i]
+		m, ok := d.metrics[dev.ID]
+		if !ok {
+			continue
+		}
+		dev.GPUCount = len(m.GPUs)
+		dev.CPUPercent = m.CPU.Percent
+		dev.RAMPercent = m.RAM.Percent
+		dev.ServiceCount = len(m.Containers)
+	}
 }
 
 func (d *Dashboard) updateServiceContainers() {
@@ -592,6 +611,24 @@ func (d *Dashboard) findDeviceIDForContainer(containerID string) string {
 		}
 	}
 	return ""
+}
+
+func formatUptime(seconds int64) string {
+	if seconds <= 0 {
+		return "-"
+	}
+	d := time.Duration(seconds) * time.Second
+	hours := int(d.Hours())
+	mins := int(d.Minutes()) % 60
+
+	if hours >= 24 {
+		days := hours / 24
+		return fmt.Sprintf("%dd%dh", days, hours%24)
+	}
+	if hours > 0 {
+		return fmt.Sprintf("%dh%dm", hours, mins)
+	}
+	return fmt.Sprintf("%dm", mins)
 }
 
 func (d *Dashboard) KeyBinds() []KeyBind {
