@@ -250,7 +250,7 @@ func (d *Deploy) updateConfig(msg tea.KeyMsg) (View, tea.Cmd) {
 	case "enter":
 		// Save to config first
 		svc := config.Service{
-			ID:       fmt.Sprintf("yokai-%s-%s", workloadLabels[d.workload], sanitize(d.modelID)),
+			ID:       fmt.Sprintf("%s-%s", strings.ToLower(workloadLabels[d.workload]), sanitize(d.modelID)),
 			DeviceID: d.cfg.Devices[d.deviceIdx].ID,
 			Type:     strings.ToLower(workloadLabels[d.workload]),
 			Image:    d.imageTag,
@@ -338,7 +338,7 @@ func (d *Deploy) deployToAPI(svc config.Service) tea.Cmd {
 		}
 		httpReq.Header.Set("Content-Type", "application/json")
 
-		client := &http.Client{Timeout: 30 * time.Second}
+		client := &http.Client{Timeout: 10 * time.Minute}
 		resp, err := client.Do(httpReq)
 		if err != nil {
 			return deployResultMsg{Error: fmt.Errorf("daemon request failed: %w", err)}
@@ -348,6 +348,14 @@ func (d *Deploy) deployToAPI(svc config.Service) tea.Cmd {
 		}()
 
 		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+			// Read daemon error body for better diagnostics
+			var errResp struct {
+				Error   string `json:"error"`
+				Message string `json:"message"`
+			}
+			if json.NewDecoder(resp.Body).Decode(&errResp) == nil && errResp.Message != "" {
+				return deployResultMsg{Error: fmt.Errorf("%s", errResp.Message)}
+			}
 			return deployResultMsg{Error: fmt.Errorf("daemon returned status %d", resp.StatusCode)}
 		}
 
