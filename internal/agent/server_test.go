@@ -9,9 +9,43 @@ import (
 	"testing"
 )
 
+// requireTestAuth creates a test-specific auth middleware that doesn't use global state
+func requireTestAuth(expectedToken string) func(http.HandlerFunc) http.HandlerFunc {
+	return func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			// Skip auth if no token is configured
+			if expectedToken == "" {
+				next(w, r)
+				return
+			}
+
+			authHeader := r.Header.Get("Authorization")
+			if authHeader == "" {
+				writeError(w, http.StatusUnauthorized, "missing_auth", "Authorization header required")
+				return
+			}
+
+			const bearerPrefix = "Bearer "
+			if !strings.HasPrefix(authHeader, bearerPrefix) {
+				writeError(w, http.StatusUnauthorized, "invalid_auth", "Bearer token required")
+				return
+			}
+
+			token := strings.TrimPrefix(authHeader, bearerPrefix)
+			if token != expectedToken {
+				writeError(w, http.StatusUnauthorized, "invalid_token", "Invalid bearer token")
+				return
+			}
+
+			next(w, r)
+		}
+	}
+}
+
 // setupTestServer creates a test server with routes but without starting it.
 func setupTestServer(version string, token string) *http.ServeMux {
-	authToken = token
+	// Create test-specific auth middleware instead of writing to global authToken
+	requireAuth := requireTestAuth(token)
 
 	mux := http.NewServeMux()
 
