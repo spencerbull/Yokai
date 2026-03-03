@@ -5,6 +5,7 @@ type DeployRequest struct {
 	DeviceID  string            `json:"device_id"`
 	Image     string            `json:"image"`
 	Name      string            `json:"name"`
+	Model     string            `json:"model"`
 	Ports     map[string]string `json:"ports"`
 	Env       map[string]string `json:"env"`
 	GPUIDs    string            `json:"gpu_ids"`
