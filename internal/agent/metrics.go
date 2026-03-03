@@ -134,10 +134,14 @@ func collectRAM() RAMMetrics {
 	var totalKB, availableKB int64
 	for _, line := range strings.Split(string(data), "\n") {
 		if strings.HasPrefix(line, "MemTotal:") {
-			fmt.Sscanf(line, "MemTotal: %d kB", &totalKB)
+			if _, err := fmt.Sscanf(line, "MemTotal: %d kB", &totalKB); err != nil {
+				continue
+			}
 		}
 		if strings.HasPrefix(line, "MemAvailable:") {
-			fmt.Sscanf(line, "MemAvailable: %d kB", &availableKB)
+			if _, err := fmt.Sscanf(line, "MemAvailable: %d kB", &availableKB); err != nil {
+				continue
+			}
 		}
 	}
 
