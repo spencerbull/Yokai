@@ -124,11 +124,6 @@ func (d *Deploy) Update(msg tea.Msg) (View, tea.Cmd) {
 			}
 			d.currentStep--
 			return d, nil
-		case "backspace":
-			if d.currentStep > stepType {
-				d.currentStep--
-			}
-			return d, nil
 		}
 
 		switch d.currentStep {
@@ -151,6 +146,8 @@ func (d *Deploy) Update(msg tea.Msg) (View, tea.Cmd) {
 
 func (d *Deploy) updateType(msg tea.KeyMsg) (View, tea.Cmd) {
 	switch msg.String() {
+	case "backspace":
+		return d, PopView()
 	case "up", "k":
 		if d.cursor > 0 {
 			d.cursor--
@@ -178,6 +175,9 @@ func (d *Deploy) updateType(msg tea.KeyMsg) (View, tea.Cmd) {
 
 func (d *Deploy) updateDevice(msg tea.KeyMsg) (View, tea.Cmd) {
 	switch msg.String() {
+	case "backspace":
+		d.currentStep--
+		return d, nil
 	case "up", "k":
 		if d.cursor > 0 {
 			d.cursor--
@@ -215,8 +215,9 @@ func (d *Deploy) updateImage(msg tea.KeyMsg) (View, tea.Cmd) {
 			d.imageTag = d.imageTag[:len(d.imageTag)-1]
 		}
 	default:
-		if len(msg.String()) == 1 {
-			d.imageTag += msg.String()
+		s := msg.String()
+		if len(s) == 1 || (len(s) > 1 && !strings.HasPrefix(s, "ctrl+") && !strings.HasPrefix(s, "alt+")) {
+			d.imageTag += s
 		}
 	}
 	return d, nil
@@ -234,8 +235,9 @@ func (d *Deploy) updateModel(msg tea.KeyMsg) (View, tea.Cmd) {
 			d.modelID = d.modelID[:len(d.modelID)-1]
 		}
 	default:
-		if len(msg.String()) == 1 {
-			d.modelID += msg.String()
+		s := msg.String()
+		if len(s) == 1 || (len(s) > 1 && !strings.HasPrefix(s, "ctrl+") && !strings.HasPrefix(s, "alt+")) {
+			d.modelID += s
 		}
 	}
 	return d, nil
@@ -274,12 +276,13 @@ func (d *Deploy) updateConfig(msg tea.KeyMsg) (View, tea.Cmd) {
 			}
 		}
 	default:
-		if len(msg.String()) == 1 {
+		s := msg.String()
+		if len(s) == 1 || (len(s) > 1 && !strings.HasPrefix(s, "ctrl+") && !strings.HasPrefix(s, "alt+")) {
 			switch d.activeConfigField {
 			case 0:
-				d.port += msg.String()
+				d.port += s
 			case 1:
-				d.extraArgs += msg.String()
+				d.extraArgs += s
 			}
 		}
 	}
@@ -549,7 +552,7 @@ func (d *Deploy) KeyBinds() []KeyBind {
 	return []KeyBind{
 		{Key: "↑/↓", Help: "navigate"},
 		{Key: "Enter", Help: "next"},
-		{Key: "Backspace", Help: "prev step"},
+		{Key: "Esc", Help: "prev step"},
 		{Key: "Esc", Help: "cancel"},
 	}
 }
