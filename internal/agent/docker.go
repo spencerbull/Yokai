@@ -3,8 +3,11 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os/exec"
+	"path"
 	"regexp"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -24,6 +27,7 @@ type Container struct {
 type ContainerRequest struct {
 	Image     string            `json:"image"`
 	Name      string            `json:"name"`
+	Model     string            `json:"model"`
 	Ports     map[string]string `json:"ports"`
 	Env       map[string]string `json:"env"`
 	GPUIDs    string            `json:"gpu_ids"`
@@ -127,8 +131,20 @@ func parseStatus(dockerStatus string) string {
 
 // runContainer deploys a new container.
 func runContainer(req ContainerRequest) (*ContainerResponse, error) {
+	if err := validateImagePlatform(req.Image); err != nil {
+		return nil, err
+	}
+
 	// Sanitize container name
 	containerName := fmt.Sprintf("yokai-%s", sanitizeName(req.Name))
+
+	if isLlamaCppImage(req.Image) && req.Model != "" {
+		if req.Volumes == nil {
+			req.Volumes = make(map[string]string)
+		}
+		ensureModelsVolume(req.Volumes)
+		req.ExtraArgs = withLlamaModelArg(req.ExtraArgs, req.Model)
+	}
 
 	// Build docker run command
 	args := []string{"run", "-d", "--name", containerName}
@@ -235,4 +251,131 @@ func sanitizeName(name string) string {
 	}
 
 	return sanitized
+}
+
+func isLlamaCppImage(image string) bool {
+	return strings.Contains(strings.ToLower(image), "llama.cpp")
+}
+
+func ensureModelsVolume(volumes map[string]string) {
+	for _, containerPath := range volumes {
+		if containerPath == "/models" {
+			return
+		}
+	}
+	volumes["/var/lib/yokai/models"] = "/models"
+}
+
+func withLlamaModelArg(extraArgs, model string) string {
+	if model == "" {
+		return extraArgs
+	}
+
+	tokens := strings.Fields(extraArgs)
+	for i := range tokens {
+		if tokens[i] == "-m" || tokens[i] == "--model" {
+			return extraArgs
+		}
+	}
+
+	modelPath := model
+	if !strings.HasPrefix(modelPath, "/") {
+		modelPath = path.Join("/models", path.Base(modelPath))
+	}
+
+	if strings.TrimSpace(extraArgs) == "" {
+		return fmt.Sprintf("-m %s", modelPath)
+	}
+
+	return fmt.Sprintf("-m %s %s", modelPath, extraArgs)
+}
+
+func validateImagePlatform(image string) error {
+	cmd := exec.Command("docker", "manifest", "inspect", image)
+	out, err := cmd.Output()
+	if err != nil {
+		log.Printf("warning: unable to inspect image platform for %s: %v", image, err)
+		return nil
+	}
+
+	supported, platforms, err := imageSupportsPlatform(out, runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		log.Printf("warning: unable to parse image platform for %s: %v", image, err)
+		return nil
+	}
+
+	if !supported {
+		return fmt.Errorf("image %s does not support host platform %s/%s (supported: %s)", image, runtime.GOOS, runtime.GOARCH, strings.Join(platforms, ", "))
+	}
+
+	return nil
+}
+
+func imageSupportsPlatform(manifestJSON []byte, hostOS, hostArch string) (bool, []string, error) {
+	var manifest struct {
+		Manifests []struct {
+			Platform struct {
+				Architecture string `json:"architecture"`
+				OS           string `json:"os"`
+				Variant      string `json:"variant"`
+			} `json:"platform"`
+		} `json:"manifests"`
+		Architecture string `json:"architecture"`
+		OS           string `json:"os"`
+	}
+
+	if err := json.Unmarshal(manifestJSON, &manifest); err != nil {
+		return false, nil, err
+	}
+
+	var platforms []string
+	normalizedHostArch := normalizeArch(hostArch)
+
+	if len(manifest.Manifests) > 0 {
+		for _, entry := range manifest.Manifests {
+			platformOS := entry.Platform.OS
+			platformArch := normalizeArch(entry.Platform.Architecture)
+			if platformOS == "" || platformArch == "" {
+				continue
+			}
+
+			platform := platformOS + "/" + platformArch
+			if entry.Platform.Variant != "" {
+				platform += "/" + entry.Platform.Variant
+			}
+			platforms = append(platforms, platform)
+
+			if platformOS == hostOS && platformArch == normalizedHostArch {
+				return true, platforms, nil
+			}
+		}
+
+		if len(platforms) == 0 {
+			return false, nil, fmt.Errorf("manifest list has no platform entries")
+		}
+		return false, platforms, nil
+	}
+
+	if manifest.OS == "" || manifest.Architecture == "" {
+		return false, nil, fmt.Errorf("manifest missing os/architecture")
+	}
+
+	platform := manifest.OS + "/" + normalizeArch(manifest.Architecture)
+	platforms = append(platforms, platform)
+	if manifest.OS == hostOS && normalizeArch(manifest.Architecture) == normalizedHostArch {
+		return true, platforms, nil
+	}
+
+	return false, platforms, nil
+}
+
+func normalizeArch(arch string) string {
+	switch strings.ToLower(arch) {
+	case "x86_64":
+		return "amd64"
+	case "aarch64":
+		return "arm64"
+	default:
+		return strings.ToLower(arch)
+	}
 }

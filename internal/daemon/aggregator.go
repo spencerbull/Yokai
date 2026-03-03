@@ -220,7 +220,8 @@ func (a *Aggregator) Deploy(req DeployRequest) (*DeployResult, error) {
 	}
 
 	url := fmt.Sprintf("http://localhost:%d/containers", localPort)
-	resp, err := a.client.Post(url, "application/json", bytes.NewBuffer(jsonData))
+	deployClient := &http.Client{Timeout: 5 * time.Minute}
+	resp, err := deployClient.Post(url, "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("deploy request: %w", err)
 	}
@@ -232,9 +233,23 @@ func (a *Aggregator) Deploy(req DeployRequest) (*DeployResult, error) {
 		return nil, fmt.Errorf("deploy failed with status %d", resp.StatusCode)
 	}
 
-	var result DeployResult
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	var agentResult struct {
+		ID          string            `json:"id"`
+		ContainerID string            `json:"container_id"`
+		Status      string            `json:"status"`
+		Ports       map[string]string `json:"ports"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&agentResult); err != nil {
 		return nil, fmt.Errorf("parsing deploy result: %w", err)
+	}
+
+	result := DeployResult{
+		ContainerID: agentResult.ContainerID,
+		Status:      agentResult.Status,
+		Ports:       agentResult.Ports,
+	}
+	if result.ContainerID == "" {
+		result.ContainerID = agentResult.ID
 	}
 
 	return &result, nil

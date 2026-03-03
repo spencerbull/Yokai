@@ -14,6 +14,7 @@ func TestDeployRequestJSON(t *testing.T) {
 		DeviceID: "test-device-123",
 		Image:    "vllm/vllm-openai:latest",
 		Name:     "test-vllm-container",
+		Model:    "microsoft/DialoGPT-medium",
 		Ports: map[string]string{
 			"8000": "8080",
 			"8001": "8081",
@@ -43,6 +44,7 @@ func TestDeployRequestJSON(t *testing.T) {
 		`"device_id":"test-device-123"`,
 		`"image":"vllm/vllm-openai:latest"`,
 		`"name":"test-vllm-container"`,
+		`"model":"microsoft/DialoGPT-medium"`,
 		`"gpu_ids":"all"`,
 		`"extra_args":"--max-model-len 2048 --tensor-parallel-size 1"`,
 	}
@@ -68,6 +70,9 @@ func TestDeployRequestJSON(t *testing.T) {
 	}
 	if unmarshaled.Name != original.Name {
 		t.Errorf("Name mismatch: expected %s, got %s", original.Name, unmarshaled.Name)
+	}
+	if unmarshaled.Model != original.Model {
+		t.Errorf("Model mismatch: expected %s, got %s", original.Model, unmarshaled.Model)
 	}
 	if unmarshaled.GPUIDs != original.GPUIDs {
 		t.Errorf("GPUIDs mismatch: expected %s, got %s", original.GPUIDs, unmarshaled.GPUIDs)
@@ -113,6 +118,7 @@ func TestDeployRequestStructure(t *testing.T) {
 		DeviceID:  "device-1",
 		Image:     "nginx:latest",
 		Name:      "test-nginx",
+		Model:     "TheBloke/test.gguf",
 		Ports:     map[string]string{"80": "8080"},
 		Env:       map[string]string{"NGINX_HOST": "localhost"},
 		GPUIDs:    "0,1",
@@ -129,6 +135,9 @@ func TestDeployRequestStructure(t *testing.T) {
 	}
 	if req.Name != "test-nginx" {
 		t.Errorf("expected Name 'test-nginx', got %s", req.Name)
+	}
+	if req.Model != "TheBloke/test.gguf" {
+		t.Errorf("expected Model 'TheBloke/test.gguf', got %s", req.Model)
 	}
 	if req.GPUIDs != "0,1" {
 		t.Errorf("expected GPUIDs '0,1', got %s", req.GPUIDs)
@@ -241,6 +250,7 @@ func TestEmptyMapsInJSON(t *testing.T) {
 		DeviceID:  "device-1",
 		Image:     "ubuntu:latest",
 		Name:      "test-ubuntu",
+		Model:     "",
 		Ports:     nil,
 		Env:       map[string]string{},
 		GPUIDs:    "",
@@ -300,6 +310,7 @@ func TestJSONOmitEmpty(t *testing.T) {
 		`"device_id"`,
 		`"image"`,
 		`"name"`,
+		`"model"`,
 		`"ports"`,
 		`"env"`,
 		`"gpu_ids"`,
