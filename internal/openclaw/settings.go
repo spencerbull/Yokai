@@ -245,7 +245,7 @@ func writeConfig(path string, cfg map[string]interface{}) error {
 		return fmt.Errorf("writing config: %w", err)
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return fmt.Errorf("renaming config: %w", err)
 	}
 
