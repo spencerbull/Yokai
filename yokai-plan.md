@@ -40,8 +40,8 @@ Recommendations marked with ✅.
 
 | # | Decision | Recommendation |
 |---|----------|----------------|
-| 1 | **Project name** | `gpufleet` ✅ — clear, implies multi-device GPU management |
-| 2 | **Binary model** | Same binary, subcommand (`gpufleet`, `gpufleet agent`, `gpufleet daemon`) ✅ |
+| 1 | **Project name** | `yokai` ✅ — clear, implies multi-device GPU management |
+| 2 | **Binary model** | Same binary, subcommand (`yokai`, `yokai agent`, `yokai daemon`) ✅ |
 | 3 | **Orchestration** | Hybrid ✅ — manual targeting with VRAM visibility; auto-placement later |
 | 4 | **Agent auth** | Shared bearer token ✅ — generated at bootstrap, LAN/Tailscale-only |
 | 5 | **Apple Silicon** | Defer — Linux + NVIDIA/AMD Docker first; macOS native mode later |
@@ -61,7 +61,7 @@ The entry point. Full-screen centered card. Appears only when `config.json` has 
 ╭─────────────────────────────────────────────────────────────────────────╮
 │                                                                         │
 │                                                                         │
-│                         ╭─ gpufleet ─────────────────╮                  │
+│                         ╭─ yokai ─────────────────╮                  │
 │                         │                             │                  │
 │                         │  GPU Fleet Manager          │                  │
 │                         │  v0.1.0                     │                  │
@@ -236,7 +236,7 @@ Full-screen progress view. Steps execute sequentially with live status updates.
 │    [✓] Disk: 142 GB free                                               │
 │                                                                         │
 │  Agent Deployment                                                       │
-│    [✓] Uploaded gpufleet binary (48.2 MB)                              │
+│    [✓] Uploaded yokai binary (48.2 MB)                              │
 │    [✓] Installed systemd service                                        │
 │    [⟳] Starting agent...                                               │
 │    [ ] Health check on :7474                                            │
@@ -319,7 +319,7 @@ The primary screen. This is where the user spends most of their time. Layout ada
 
 **Full layout (≥120 cols):**
 ```
-╭─ gpufleet ──────────────────────────────────────────────────── 2 devices ─╮
+╭─ yokai ──────────────────────────────────────────────────── 2 devices ─╮
 │                                                                            │
 │ ╭─ gaming-rig · 100.64.0.2 ● ──────────────────────────────────────────╮ │
 │ │ ╭─ CPU ──────────────────────────╮ ╭─ Memory ───────────────────────╮ │ │
@@ -365,7 +365,7 @@ The primary screen. This is where the user spends most of their time. Layout ada
 **Multi-device view** — when multiple devices are registered, device panels are stacked or side-by-side depending on terminal width:
 
 ```
-╭─ gpufleet ──────────────────────────────────────────────────── 2 devices ─╮
+╭─ yokai ──────────────────────────────────────────────────── 2 devices ─╮
 │                                                                            │
 │ ╭─ [1] gaming-rig ● ──────────────╮ ╭─ [2] workstation ● ──────────────╮ │
 │ │ CPU  47% [████████░░░░░░░░░░░░] │ │ CPU  12% [██░░░░░░░░░░░░░░░░░░] │ │
@@ -402,7 +402,7 @@ Pressing Enter on a service in the dashboard expands it inline:
 │ │  │ Model:     meta-llama/Llama-3.1-8B-Instruct                  │   │  │
 │ │  │ Port:      8000                                                │   │  │
 │ │  │ Endpoint:  http://100.64.0.2:8000/v1                          │   │  │
-│ │  │ Container: gpufleet-vllm-llama31-8b (a3f7c2d)                 │   │  │
+│ │  │ Container: yokai-vllm-llama31-8b (a3f7c2d)                 │   │  │
 │ │  │ Started:   2025-03-02 18:34:12 (3h 24m ago)                   │   │  │
 │ │  │ Args:      --gpu-memory-utilization 0.9 --max-model-len 4096  │   │  │
 │ │  │                                                                │   │  │
@@ -564,7 +564,7 @@ Press `n` from dashboard. Multi-step wizard with a step indicator.
 │                                                                            │
 │  ╭─ Preview Command ────────────────────────────────────────────────────╮ │
 │  │                                                                       │ │
-│  │  docker run -d --gpus all --name gpufleet-vllm-llama31-8b \          │ │
+│  │  docker run -d --gpus all --name yokai-vllm-llama31-8b \          │ │
 │  │    -p 8000:8000 \                                                     │ │
 │  │    -e HF_TOKEN=hf_**** \                                             │ │
 │  │    --ipc=host \                                                       │ │
@@ -700,7 +700,7 @@ Press `c` from dashboard.
 │  │  {                                                                │  │
 │  │    "family": "openai",                                            │  │
 │  │    "id": "Llama-3.1-8B-Instruct",                                │  │
-│  │    "name": "Llama-3.1-8B (gpufleet)",                            │  │
+│  │    "name": "Llama-3.1-8B (yokai)",                            │  │
 │  │    "url": "http://100.64.0.2:8000/v1",                           │  │
 │  │    "apiKey": "none"                                               │  │
 │  │  }                                                                │  │
@@ -715,7 +715,7 @@ Press `c` from dashboard.
 ```
 │  ╭─ Result ─────────────────────────────────────────────────────────╮  │
 │  │                                                                   │  │
-│  │  [✓] Backed up settings.json → settings.json.gpufleet.bak       │  │
+│  │  [✓] Backed up settings.json → settings.json.yokai.bak       │  │
 │  │  [✓] Added Llama-3.1-8B endpoint to chat.models                 │  │
 │  │  [✓] Added Mistral-7B endpoint to chat.models                    │  │
 │  │                                                                   │  │
@@ -859,9 +859,9 @@ Success:        #73daca   teal
 ┌──────────────────────────────────────┐
 │          USER'S MACHINE              │
 │                                      │
-│  gpufleet (TUI binary)               │
+│  yokai (TUI binary)               │
 │  ├─ Bubbletea event loop             │
-│  ├─ Reads ~/.config/gpufleet/        │
+│  ├─ Reads ~/.config/yokai/        │
 │  │   └─ config.json                  │
 │  ├─ Local background daemon          │
 │  │   └─ Maintains persistent SSH     │
@@ -876,7 +876,7 @@ Success:        #73daca   teal
     ┌──────────▼───────────────────────────────┐
     │         TARGET DEVICE(s)                 │
     │                                          │
-    │  gpufleet agent (systemd service)        │
+    │  yokai agent (systemd service)        │
     │  ├─ REST API :7474                       │
     │  ├─ Docker SDK → manage containers       │
     │  ├─ System metrics (CPU/RAM/disk)        │
@@ -898,7 +898,7 @@ Success:        #73daca   teal
 
 ### Local Daemon
 
-`gpufleet daemon` runs on the user's machine as a background service:
+`yokai daemon` runs on the user's machine as a background service:
 - Maintains SSH tunnels and agent connections persistently
 - Aggregates metrics from all devices into a local cache (60-point ring buffers)
 - Exposes `localhost:7473` REST API that the TUI reads from
@@ -908,7 +908,7 @@ Success:        #73daca   teal
 
 ---
 
-## Config Schema (`~/.config/gpufleet/config.json`)
+## Config Schema (`~/.config/yokai/config.json`)
 
 ```json
 {
@@ -954,7 +954,7 @@ Success:        #73daca   teal
 }
 ```
 
-Portable — copy to a new machine and `gpufleet` reconnects to the fleet.
+Portable — copy to a new machine and `yokai` reconnects to the fleet.
 
 ---
 
@@ -998,7 +998,7 @@ All require `Authorization: Bearer <agent_token>`.
 ## Project Structure
 
 ```
-gpufleet/
+yokai/
 ├── architecture/                # ← NEW: markdown architecture docs
 │   ├── README.md                # Index of all diagrams
 │   ├── 01-system-overview.md
@@ -1008,7 +1008,7 @@ gpufleet/
 │   ├── 05-tui-screen-map.md
 │   └── 06-agent-api.md
 ├── cmd/
-│   └── gpufleet/
+│   └── yokai/
 │       └── main.go              # tui / agent / daemon subcommands
 ├── internal/
 │   ├── tui/
@@ -1064,7 +1064,7 @@ gpufleet/
 ├── assets/
 │   ├── grafana/                 # Pre-built dashboard JSON
 │   ├── prometheus/              # prometheus.yml templates
-│   └── systemd/                 # gpufleet-agent.service template
+│   └── systemd/                 # yokai-agent.service template
 ├── go.mod
 ├── go.sum
 ├── Makefile
@@ -1083,7 +1083,7 @@ gpufleet/
 
 ### Phase 1: Scaffold + Core (Week 1)
 - [ ] `go mod init`, project structure, Makefile
-- [ ] Config package: load/save/defaults for `~/.config/gpufleet/config.json`
+- [ ] Config package: load/save/defaults for `~/.config/yokai/config.json`
 - [ ] Basic Bubbletea app shell with view router
 - [ ] Theme package: Tokyo Night palette, rounded borders, component styles
 - [ ] SSH client: connect, exec, SCP upload
@@ -1136,7 +1136,7 @@ gpufleet/
 ### Phase 8: Polish + Release (Week 6)
 - [ ] Single binary build with subcommands
 - [ ] Cross-compile: linux/amd64, linux/arm64, darwin/arm64
-- [ ] `gpufleet upgrade` self-update
+- [ ] `yokai upgrade` self-update
 - [ ] GitHub Actions CI: build, release, checksums
 - [ ] Install script + brew tap
 - [ ] README with demo GIF/screenshot
@@ -1150,8 +1150,8 @@ gpufleet/
 - **Disk space**: Check before pulling (vLLM images are 10GB+); warn if <20GB free
 - **VRAM estimation**: Estimate from model size, warn if won't fit (shown in Step 2 of wizard)
 - **Multiple GPUs**: Support `--tensor-parallel` for vLLM
-- **Container naming**: Deterministic `gpufleet-{type}-{model}` names
-- **Agent crash recovery**: Re-adopt existing `gpufleet-*` containers on startup
+- **Container naming**: Deterministic `yokai-{type}-{model}` names
+- **Agent crash recovery**: Re-adopt existing `yokai-*` containers on startup
 - **Config migration**: Version field; auto-migrate on schema changes
 - **Concurrent deploys**: Daemon serializes per device
 - **Terminal resize**: All views must handle dynamic resize gracefully
@@ -1161,7 +1161,7 @@ gpufleet/
 
 ## Open Questions
 
-1. **Name**: Going with `gpufleet`?
+1. **Name**: Going with `yokai`?
 2. **Daemon**: Worth the complexity of a persistent local background service? Alternative: TUI manages everything directly (simpler, but connections drop on exit).
 3. **AMD ROCm**: Needed in v1, or NVIDIA-only?
 4. **Model presets**: Ship a curated quick-pick list, or always search/type?

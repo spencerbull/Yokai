@@ -1,0 +1,184 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "Yokai Monitoring Dashboard",
+    "tags": ["yokai"],
+    "timezone": "browser",
+    "panels": [
+      {
+        "id": 1,
+        "title": "GPU Utilization",
+        "type": "gauge",
+        "targets": [
+          {
+            "expr": "DCGM_FI_DEV_GPU_UTIL",
+            "legendFormat": "GPU {{instance}}",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "min": 0,
+            "max": 100,
+            "unit": "percent"
+          }
+        },
+        "gridPos": {
+          "h": 8,
+          "w": 6,
+          "x": 0,
+          "y": 0
+        }
+      },
+      {
+        "id": 2,
+        "title": "GPU Memory Usage",
+        "type": "gauge",
+        "targets": [
+          {
+            "expr": "DCGM_FI_DEV_MEM_COPY_UTIL",
+            "legendFormat": "GPU {{instance}}",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "min": 0,
+            "max": 100,
+            "unit": "percent"
+          }
+        },
+        "gridPos": {
+          "h": 8,
+          "w": 6,
+          "x": 6,
+          "y": 0
+        }
+      },
+      {
+        "id": 3,
+        "title": "CPU Usage",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "100 - (avg by (instance) (irate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)",
+            "legendFormat": "CPU Usage",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "min": 0,
+            "max": 100,
+            "unit": "percent"
+          }
+        },
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 12,
+          "y": 0
+        }
+      },
+      {
+        "id": 4,
+        "title": "GPU Temperature",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "DCGM_FI_DEV_GPU_TEMP",
+            "legendFormat": "GPU {{instance}}",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "min": 0,
+            "max": 100,
+            "unit": "celsius"
+          }
+        },
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 0,
+          "y": 8
+        }
+      },
+      {
+        "id": 5,
+        "title": "RAM Usage",
+        "type": "gauge",
+        "targets": [
+          {
+            "expr": "100 * (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes))",
+            "legendFormat": "RAM Usage",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "min": 0,
+            "max": 100,
+            "unit": "percent"
+          }
+        },
+        "gridPos": {
+          "h": 8,
+          "w": 6,
+          "x": 12,
+          "y": 8
+        }
+      },
+      {
+        "id": 6,
+        "title": "Container Count",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "count(container_last_seen)",
+            "legendFormat": "Containers",
+            "refId": "A"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 6,
+          "x": 18,
+          "y": 8
+        }
+      },
+      {
+        "id": 7,
+        "title": "GPU Power Consumption",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "DCGM_FI_DEV_POWER_USAGE",
+            "legendFormat": "GPU {{instance}}",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "min": 0,
+            "unit": "watt"
+          }
+        },
+        "gridPos": {
+          "h": 8,
+          "w": 24,
+          "x": 0,
+          "y": 16
+        }
+      }
+    ],
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "refresh": "5s",
+    "version": 1,
+    "uid": "yokai-monitoring"
+  }
+}
