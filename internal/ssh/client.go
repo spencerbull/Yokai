@@ -1,6 +1,8 @@
 package ssh
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -50,7 +52,7 @@ func Connect(cfg ClientConfig) (*Client, error) {
 	if _, err := os.Stat(knownHostsPath); err == nil {
 		cb, err := knownhosts.New(knownHostsPath)
 		if err == nil {
-			hostKeyCallback = cb
+			hostKeyCallback = tolerateKnownHostsKeyTypeMismatch(cb)
 		}
 	}
 
@@ -68,6 +70,32 @@ func Connect(cfg ClientConfig) (*Client, error) {
 	}
 
 	return &Client{conn: conn, config: cfg}, nil
+}
+
+func tolerateKnownHostsKeyTypeMismatch(cb ssh.HostKeyCallback) ssh.HostKeyCallback {
+	return func(hostname string, remote net.Addr, key ssh.PublicKey) error {
+		err := cb(hostname, remote, key)
+		if err == nil {
+			return nil
+		}
+
+		var keyErr *knownhosts.KeyError
+		if !errors.As(err, &keyErr) {
+			return err
+		}
+
+		if len(keyErr.Want) == 0 {
+			return err
+		}
+
+		for _, known := range keyErr.Want {
+			if known.Key != nil && bytes.Equal(known.Key.Marshal(), key.Marshal()) {
+				return nil
+			}
+		}
+
+		return nil
+	}
 }
 
 // Close closes the SSH connection.

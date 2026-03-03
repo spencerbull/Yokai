@@ -146,6 +146,7 @@ func TestContainerRequestValidation(t *testing.T) {
 	req := ContainerRequest{
 		Image:     "nginx:latest",
 		Name:      "test-nginx",
+		Model:     "TheBloke/test.gguf",
 		Ports:     map[string]string{"80": "8080"},
 		Env:       map[string]string{"TEST": "value"},
 		GPUIDs:    "all",
@@ -159,6 +160,9 @@ func TestContainerRequestValidation(t *testing.T) {
 	}
 	if req.Name != "test-nginx" {
 		t.Errorf("expected name 'test-nginx', got %s", req.Name)
+	}
+	if req.Model != "TheBloke/test.gguf" {
+		t.Errorf("expected model 'TheBloke/test.gguf', got %s", req.Model)
 	}
 	if req.Ports["80"] != "8080" {
 		t.Errorf("expected port mapping 80->8080, got %s", req.Ports["80"])
