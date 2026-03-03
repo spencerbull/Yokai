@@ -220,26 +220,6 @@ func pullImage(image string) error {
 	return nil
 }
 
-// inspectContainer gets detailed container info.
-func inspectContainer(idOrName string) (map[string]interface{}, error) {
-	cmd := exec.Command("docker", "inspect", idOrName)
-	out, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("docker inspect failed: %w", err)
-	}
-
-	var result []map[string]interface{}
-	if err := json.Unmarshal(out, &result); err != nil {
-		return nil, fmt.Errorf("parsing inspect output: %w", err)
-	}
-
-	if len(result) == 0 {
-		return nil, fmt.Errorf("container not found")
-	}
-
-	return result[0], nil
-}
-
 // sanitizeName sanitizes a container name.
 func sanitizeName(name string) string {
 	// Replace invalid characters with hyphens

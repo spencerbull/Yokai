@@ -94,7 +94,7 @@ func TestCacheExpiry(t *testing.T) {
 				},
 			},
 		}
-		json.NewEncoder(w).Encode(response)
+		_ = json.NewEncoder(w).Encode(response)
 	}))
 	defer server.Close()
 
@@ -165,7 +165,7 @@ func TestFetchTagsDockerHub(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(response)
+		_ = json.NewEncoder(w).Encode(response)
 	}))
 	defer server.Close()
 
@@ -230,7 +230,7 @@ func TestFetchTagsGHCR(t *testing.T) {
 			"token": "mock-token-12345",
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(response)
+		_ = json.NewEncoder(w).Encode(response)
 	}))
 	defer tokenServer.Close()
 
@@ -252,7 +252,7 @@ func TestFetchTagsGHCR(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(response)
+		_ = json.NewEncoder(w).Encode(response)
 	}))
 	defer tagsServer.Close()
 
@@ -307,7 +307,7 @@ func TestFetchTagsCaching(t *testing.T) {
 				},
 			},
 		}
-		json.NewEncoder(w).Encode(response)
+		_ = json.NewEncoder(w).Encode(response)
 	}))
 	defer server.Close()
 

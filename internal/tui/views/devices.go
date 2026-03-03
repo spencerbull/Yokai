@@ -110,7 +110,9 @@ func (dm *DeviceManager) testConnection(device config.Device) tea.Cmd {
 				err:      fmt.Errorf("SSH connection failed: %w", err),
 			}
 		}
-		defer client.Close()
+		defer func() {
+			_ = client.Close() // Best-effort SSH client close after test.
+		}()
 
 		// Test agent health endpoint
 		healthURL := fmt.Sprintf("http://%s:%d/health", device.Host, device.AgentPort)
@@ -124,7 +126,9 @@ func (dm *DeviceManager) testConnection(device config.Device) tea.Cmd {
 				err:      fmt.Errorf("agent not responding: %w", err),
 			}
 		}
-		defer resp.Body.Close()
+		defer func() {
+			_ = resp.Body.Close() // Best-effort close of health response body.
+		}()
 
 		if resp.StatusCode == http.StatusOK {
 			return connectionTestResult{

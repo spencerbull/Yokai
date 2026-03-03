@@ -338,7 +338,9 @@ func (d *Deploy) deployToAPI(svc config.Service) tea.Cmd {
 		if err != nil {
 			return deployResultMsg{Error: fmt.Errorf("daemon request failed: %w", err)}
 		}
-		defer resp.Body.Close()
+		defer func() {
+			_ = resp.Body.Close() // Best-effort close of deploy response body.
+		}()
 
 		if resp.StatusCode != 200 {
 			return deployResultMsg{Error: fmt.Errorf("daemon returned status %d", resp.StatusCode)}
