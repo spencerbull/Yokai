@@ -50,7 +50,7 @@ func (h *Help) View() string {
 				{"r", "Restart selected service"},
 				{"l", "View logs"},
 				{"d", "Device manager"},
-				{"c", "Copilot endpoints"},
+				{"c", "AI tools config"},
 				{"g", "Open Grafana (browser)"},
 				{"Tab", "Cycle panel focus"},
 				{"1-9", "Quick-switch device"},
