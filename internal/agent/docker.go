@@ -311,6 +311,26 @@ func validateImagePlatform(image string) error {
 	return nil
 }
 
+func validatePulledImageArchitecture(image string) error {
+	cmd := exec.Command("docker", "inspect", image, "--format", "{{.Architecture}}")
+	out, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("docker inspect failed: %w", err)
+	}
+
+	imageArch := normalizeArch(strings.TrimSpace(string(out)))
+	hostArch := normalizeArch(runtime.GOARCH)
+	if imageArch == "" {
+		return fmt.Errorf("docker inspect returned empty architecture for %s", image)
+	}
+
+	if imageArch != hostArch {
+		return fmt.Errorf("image %s architecture %s does not match host architecture %s", image, imageArch, hostArch)
+	}
+
+	return nil
+}
+
 func imageSupportsPlatform(manifestJSON []byte, hostOS, hostArch string) (bool, []string, error) {
 	var manifest struct {
 		Manifests []struct {

@@ -162,7 +162,74 @@ func handleSystemInfo(version string) http.HandlerFunc {
 
 func handleMetrics(w http.ResponseWriter, r *http.Request) {
 	metrics := CollectMetrics()
+
+	containers, err := listContainers()
+	if err != nil {
+		log.Printf("warning: failed to list containers for metrics: %v", err)
+	} else {
+		metrics.Containers = mergeContainerMetrics(metrics.Containers, containers)
+	}
+
 	writeJSON(w, http.StatusOK, metrics)
+}
+
+func mergeContainerMetrics(metricContainers []ContainerMetrics, dockerContainers []Container) []ContainerMetrics {
+	idIndex := make(map[string]int)
+	nameIndex := make(map[string]int)
+
+	for i := range metricContainers {
+		id := shortContainerID(metricContainers[i].ID)
+		if id != "" {
+			idIndex[id] = i
+		}
+		if metricContainers[i].Name != "" {
+			nameIndex[metricContainers[i].Name] = i
+		}
+	}
+
+	for _, container := range dockerContainers {
+		id := shortContainerID(container.ID)
+		idx, found := idIndex[id]
+		if !found {
+			idx, found = nameIndex[container.Name]
+		}
+
+		if found {
+			if metricContainers[idx].ID == "" {
+				metricContainers[idx].ID = id
+			}
+			if metricContainers[idx].Name == "" {
+				metricContainers[idx].Name = container.Name
+			}
+			metricContainers[idx].Status = container.Status
+			metricContainers[idx].Image = container.Image
+			continue
+		}
+
+		metricContainers = append(metricContainers, ContainerMetrics{
+			ID:     id,
+			Name:   container.Name,
+			Image:  container.Image,
+			Status: container.Status,
+		})
+
+		if id != "" {
+			idIndex[id] = len(metricContainers) - 1
+		}
+		if container.Name != "" {
+			nameIndex[container.Name] = len(metricContainers) - 1
+		}
+	}
+
+	return metricContainers
+}
+
+func shortContainerID(id string) string {
+	id = strings.TrimSpace(id)
+	if len(id) > 12 {
+		return id[:12]
+	}
+	return id
 }
 
 func handleContainers(w http.ResponseWriter, r *http.Request) {
@@ -204,6 +271,11 @@ func handleContainerDeploy(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Pulling image: %s", req.Image)
 	if err := pullImage(req.Image); err != nil {
 		writeError(w, http.StatusInternalServerError, "pull_failed", err.Error())
+		return
+	}
+
+	if err := validatePulledImageArchitecture(req.Image); err != nil {
+		writeError(w, http.StatusBadRequest, "unsupported_platform", err.Error())
 		return
 	}
 
