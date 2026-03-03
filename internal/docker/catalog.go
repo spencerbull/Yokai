@@ -82,13 +82,15 @@ func (c *Catalog) fetchDockerHub(image string) ([]Tag, error) {
 	url := fmt.Sprintf("https://hub.docker.com/v2/repositories/%s/tags?page_size=50&ordering=last_updated", apiPath)
 	resp, err := c.client.Get(url)
 	if err != nil {
-		return nil, fmt.Errorf("Docker Hub request: %w", err)
+		return nil, fmt.Errorf("docker hub request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close() // Best-effort close of Docker Hub response body.
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("Docker Hub %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("docker hub %d: %s", resp.StatusCode, string(body))
 	}
 
 	var result struct {
@@ -133,7 +135,9 @@ func (c *Catalog) fetchGHCR(image string) ([]Tag, error) {
 	if err != nil {
 		return nil, fmt.Errorf("GHCR token: %w", err)
 	}
-	defer tokenResp.Body.Close()
+	defer func() {
+		_ = tokenResp.Body.Close() // Best-effort close of token response body.
+	}()
 
 	var tokenResult struct {
 		Token string `json:"token"`
@@ -148,7 +152,9 @@ func (c *Catalog) fetchGHCR(image string) ([]Tag, error) {
 	if err != nil {
 		return nil, fmt.Errorf("GHCR request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close() // Best-effort close of GHCR response body.
+	}()
 
 	var result struct {
 		Tags []string `json:"tags"`

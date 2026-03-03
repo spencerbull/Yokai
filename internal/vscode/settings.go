@@ -120,7 +120,7 @@ func AddEndpoints(endpoints []Endpoint) error {
 		return fmt.Errorf("writing settings: %w", err)
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath) // Best-effort cleanup of temporary settings file.
 		return fmt.Errorf("renaming settings: %w", err)
 	}
 

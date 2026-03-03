@@ -68,7 +68,9 @@ func (c *Client) SearchModels(query string, limit int) ([]Model, error) {
 	if err != nil {
 		return nil, fmt.Errorf("HF API request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close() // Best-effort close of response body.
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -96,7 +98,9 @@ func (c *Client) ListGGUFFiles(modelID string) ([]GGUFFile, error) {
 	if err != nil {
 		return nil, fmt.Errorf("HF API request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close() // Best-effort close of response body.
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("HF API %d", resp.StatusCode)
@@ -135,7 +139,9 @@ func (c *Client) ValidateToken() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("HF API request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close() // Best-effort close of response body.
+	}()
 
 	if resp.StatusCode == http.StatusUnauthorized {
 		return "", fmt.Errorf("invalid token")

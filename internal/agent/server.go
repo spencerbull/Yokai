@@ -3,6 +3,7 @@ package agent
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -296,7 +297,7 @@ func handleContainerLogs(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		scanner := bufio.NewScanner(stdout)
 		for scanner.Scan() {
-			fmt.Fprintf(w, "data: %s\n\n", scanner.Text())
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", scanner.Text()) // Best-effort SSE write to client.
 			flusher.Flush()
 		}
 	}()
@@ -305,7 +306,7 @@ func handleContainerLogs(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		scanner := bufio.NewScanner(stderr)
 		for scanner.Scan() {
-			fmt.Fprintf(w, "data: [stderr] %s\n\n", scanner.Text())
+			_, _ = fmt.Fprintf(w, "data: [stderr] %s\n\n", scanner.Text()) // Best-effort SSE write to client.
 			flusher.Flush()
 		}
 	}()
@@ -318,7 +319,11 @@ func handleContainerLogs(w http.ResponseWriter, r *http.Request) {
 
 	select {
 	case <-r.Context().Done():
-		cmd.Process.Kill()
+		if cmd.Process != nil {
+			if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+				log.Printf("failed to kill docker logs process: %v", err)
+			}
+		}
 	case <-done:
 		// Command finished
 	}
@@ -503,7 +508,9 @@ func getTotalRAM() map[string]interface{} {
 	for _, line := range strings.Split(string(data), "\n") {
 		if strings.HasPrefix(line, "MemTotal:") {
 			var totalKB int64
-			fmt.Sscanf(line, "MemTotal: %d kB", &totalKB)
+			if _, err := fmt.Sscanf(line, "MemTotal: %d kB", &totalKB); err != nil {
+				continue
+			}
 			return map[string]interface{}{
 				"total_mb": totalKB / 1024,
 			}

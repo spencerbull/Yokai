@@ -109,7 +109,7 @@ func (tp *TunnelPool) establishTunnel(t *tunnel, device config.Device) error {
 	// Create local listener on random port
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		client.Close()
+		_ = client.Close() // Best-effort close after listener setup failure.
 		return fmt.Errorf("creating local listener: %w", err)
 	}
 
@@ -145,7 +145,9 @@ func (tp *TunnelPool) handleConnections(t *tunnel, device config.Device) {
 
 // forwardConnection pipes data between local connection and remote agent
 func (tp *TunnelPool) forwardConnection(t *tunnel, localConn net.Conn, device config.Device) {
-	defer localConn.Close()
+	defer func() {
+		_ = localConn.Close() // Best-effort close; connection may already be closed.
+	}()
 
 	agentPort := device.AgentPort
 	if agentPort == 0 {
@@ -158,18 +160,20 @@ func (tp *TunnelPool) forwardConnection(t *tunnel, localConn net.Conn, device co
 		log.Printf("tunnel %s: dial remote %s: %v", device.ID, remoteAddr, err)
 		return
 	}
-	defer remoteConn.Close()
+	defer func() {
+		_ = remoteConn.Close() // Best-effort close; connection may already be closed.
+	}()
 
 	// Bidirectional copy
 	done := make(chan struct{})
 
 	go func() {
-		io.Copy(remoteConn, localConn)
+		_, _ = io.Copy(remoteConn, localConn) // Best-effort tunnel stream copy.
 		done <- struct{}{}
 	}()
 
 	go func() {
-		io.Copy(localConn, remoteConn)
+		_, _ = io.Copy(localConn, remoteConn) // Best-effort tunnel stream copy.
 		done <- struct{}{}
 	}()
 
@@ -217,10 +221,10 @@ func (tp *TunnelPool) CloseAll() {
 			t.cancel()
 		}
 		if t.listener != nil {
-			t.listener.Close()
+			_ = t.listener.Close() // Best-effort listener close during shutdown.
 		}
 		if t.sshClient != nil {
-			t.sshClient.Close()
+			_ = t.sshClient.Close() // Best-effort SSH close during shutdown.
 		}
 	}
 
@@ -263,10 +267,10 @@ func (tp *TunnelPool) Reconnect(deviceID string) error {
 		t.cancel()
 	}
 	if t.listener != nil {
-		t.listener.Close()
+		_ = t.listener.Close() // Best-effort listener close during reconnect.
 	}
 	if t.sshClient != nil {
-		t.sshClient.Close()
+		_ = t.sshClient.Close() // Best-effort SSH close during reconnect.
 	}
 
 	// Find device config

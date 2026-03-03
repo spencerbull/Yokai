@@ -9,11 +9,9 @@ import (
 	"testing"
 )
 
-// setupTestServer creates a test server with routes but without starting it
-func setupTestServer(version string, authToken string) *http.ServeMux {
-	// Set the global auth token for testing
-	authToken_original := authToken
-	authToken = authToken_original
+// setupTestServer creates a test server with routes but without starting it.
+func setupTestServer(version string, token string) *http.ServeMux {
+	authToken = token
 
 	mux := http.NewServeMux()
 

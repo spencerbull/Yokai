@@ -103,9 +103,10 @@ func (s *SSHCreds) nextField() {
 	case fieldUser:
 		s.activeField = fieldAuthMethod
 	case fieldAuthMethod:
-		if s.auth == authKeyFile {
+		switch s.auth {
+		case authKeyFile:
 			s.activeField = fieldKeyPath
-		} else if s.auth == authPassword {
+		case authPassword:
 			s.activeField = fieldPassword
 		}
 	case fieldKeyPath, fieldPassword:

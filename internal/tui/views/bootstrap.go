@@ -26,16 +26,6 @@ const (
 	bsFailed
 )
 
-var bootstrapStepLabels = []string{
-	"Connecting via SSH...",
-	"Running pre-flight checks...",
-	"Deploying yokai agent...",
-	"Deploy monitoring? (y/n)",
-	"Deploying monitoring...",
-	"Complete!",
-	"Failed",
-}
-
 // Bootstrap handles device bootstrapping (SSH connect, pre-flight, agent deploy).
 type Bootstrap struct {
 	cfg            *config.Config
@@ -47,7 +37,6 @@ type Bootstrap struct {
 	sshPassword    string
 
 	step       bootstrapStep
-	progress   []string
 	err        string
 	preflight  *sshpkg.PreflightResult
 	agentToken string
@@ -57,7 +46,6 @@ type Bootstrap struct {
 
 type bootstrapProgressMsg struct {
 	step       bootstrapStep
-	message    string
 	err        error
 	preflight  *sshpkg.PreflightResult
 	agentToken string
@@ -93,7 +81,9 @@ func (b *Bootstrap) runBootstrap() tea.Cmd {
 		if err != nil {
 			return bootstrapProgressMsg{step: bsFailed, err: fmt.Errorf("SSH connect: %w", err)}
 		}
-		defer client.Close()
+		defer func() {
+			_ = client.Close() // Best-effort SSH client close after bootstrap.
+		}()
 
 		// Step 2: Pre-flight checks
 		pf, err := sshpkg.Preflight(client)
@@ -104,7 +94,7 @@ func (b *Bootstrap) runBootstrap() tea.Cmd {
 		if !pf.DockerInstalled {
 			return bootstrapProgressMsg{
 				step:      bsFailed,
-				err:       fmt.Errorf("Docker not installed on %s", b.host),
+				err:       fmt.Errorf("docker not installed on %s", b.host),
 				preflight: pf,
 			}
 		}
@@ -147,7 +137,9 @@ func (b *Bootstrap) runMonitoringDeploy() tea.Cmd {
 		if err != nil {
 			return bootstrapProgressMsg{step: bsFailed, err: fmt.Errorf("SSH connect for monitoring: %w", err)}
 		}
-		defer client.Close()
+		defer func() {
+			_ = client.Close() // Best-effort SSH client close after monitoring deploy.
+		}()
 
 		// Generate monitoring configuration
 		monitoringCfg := docker.MonitoringConfig{
