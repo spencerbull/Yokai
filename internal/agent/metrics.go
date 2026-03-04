@@ -62,14 +62,16 @@ type GPUMetrics struct {
 
 // ContainerMetrics holds per-container resource usage.
 type ContainerMetrics struct {
-	ID          string  `json:"id"`
-	Name        string  `json:"name"`
-	Image       string  `json:"image,omitempty"`
-	Status      string  `json:"status"`
-	CPUPercent  float64 `json:"cpu_percent"`
-	MemUsedMB   int64   `json:"memory_used_mb"`
-	GPUMemoryMB int64   `json:"gpu_memory_mb,omitempty"`
-	Uptime      int64   `json:"uptime_seconds"`
+	ID          string            `json:"id"`
+	Name        string            `json:"name"`
+	Image       string            `json:"image,omitempty"`
+	Status      string            `json:"status"`
+	CPUPercent  float64           `json:"cpu_percent"`
+	MemUsedMB   int64             `json:"memory_used_mb"`
+	GPUMemoryMB int64             `json:"gpu_memory_mb,omitempty"`
+	Uptime      int64             `json:"uptime_seconds"`
+	Ports       map[string]string `json:"ports,omitempty"`
+	Health      string            `json:"health,omitempty"` // "healthy", "unhealthy", "starting", ""
 }
 
 // CollectMetrics gathers all system metrics.

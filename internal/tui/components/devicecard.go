@@ -37,6 +37,9 @@ func NewDeviceCard(label, host string, online bool, gpuType string, gpuCount int
 
 // Render returns the rendered string representation of the device card.
 func (d DeviceCard) Render() string {
+	if d.Width <= 0 {
+		return ""
+	}
 	if d.Width < 20 {
 		return strings.Repeat(" ", d.Width)
 	}

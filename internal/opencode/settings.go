@@ -52,6 +52,8 @@ func AddEndpoints(endpoints []Endpoint) error {
 }
 
 // AddEndpointsToFile adds yokai endpoints to a specific config file path.
+// Creates separate provider entries per unique baseURL so each host:port
+// gets its own provider with the correct URL.
 func AddEndpointsToFile(path string, endpoints []Endpoint) error {
 	// Read existing config
 	var cfg map[string]interface{}
@@ -82,36 +84,77 @@ func AddEndpointsToFile(path string, endpoints []Endpoint) error {
 		return fmt.Errorf("no endpoints to add")
 	}
 
+	// Group endpoints by base URL to create per-host providers
+	byHost := groupByHost(endpoints)
+
 	// Get or create provider section
 	provider, _ := cfg["provider"].(map[string]interface{})
 	if provider == nil {
 		provider = make(map[string]interface{})
 	}
 
-	// Build models map from endpoints
-	models := make(map[string]interface{})
-	for _, ep := range endpoints {
-		models[ep.ModelID] = map[string]interface{}{
-			"name": ep.ModelName,
+	// Remove any existing yokai providers first
+	for key := range provider {
+		if key == ProviderKey || strings.HasPrefix(key, ProviderKey+"-") {
+			delete(provider, key)
 		}
 	}
 
-	// Use the first endpoint's base URL for the provider
-	// (all yokai endpoints from a single fleet typically share the same base URL pattern)
-	provider[ProviderKey] = map[string]interface{}{
-		"npm":  NPMPackage,
-		"name": ProviderDisplayName,
-		"options": map[string]interface{}{
-			"baseURL": endpoints[0].BaseURL,
-			"apiKey":  "none",
-		},
-		"models": models,
+	// Add new yokai providers — one per unique baseURL
+	for providerID, eps := range byHost {
+		models := make(map[string]interface{})
+		for _, ep := range eps {
+			models[ep.ModelID] = map[string]interface{}{
+				"name": ep.ModelName,
+			}
+		}
+
+		provider[providerID] = map[string]interface{}{
+			"npm":  NPMPackage,
+			"name": ProviderDisplayName,
+			"options": map[string]interface{}{
+				"baseURL": eps[0].BaseURL,
+				"apiKey":  "none",
+			},
+			"models": models,
+		}
 	}
 
 	cfg["provider"] = provider
 
 	// Write back
 	return writeConfig(path, cfg)
+}
+
+// groupByHost groups endpoints by base URL and returns a map of provider ID to endpoints.
+// If all endpoints share the same base URL, they go under "yokai".
+// Otherwise, each unique base URL gets "yokai-<n>".
+func groupByHost(endpoints []Endpoint) map[string][]Endpoint {
+	hostMap := make(map[string][]Endpoint)
+	for _, ep := range endpoints {
+		hostMap[ep.BaseURL] = append(hostMap[ep.BaseURL], ep)
+	}
+
+	if len(hostMap) == 1 {
+		result := make(map[string][]Endpoint)
+		for _, eps := range hostMap {
+			result[ProviderKey] = eps
+		}
+		return result
+	}
+
+	// Multiple base URLs — create separate providers
+	result := make(map[string][]Endpoint)
+	i := 0
+	for _, eps := range hostMap {
+		id := ProviderKey
+		if i > 0 {
+			id = fmt.Sprintf("%s-%d", ProviderKey, i)
+		}
+		result[id] = eps
+		i++
+	}
+	return result
 }
 
 // RemoveEndpoints removes all yokai-added configuration from the OpenCode config.
@@ -126,9 +169,13 @@ func RemoveEndpoints(configPath string) error {
 		return err
 	}
 
-	// Remove yokai provider from "provider" section
+	// Remove all yokai providers (yokai, yokai-1, yokai-2, ...) from "provider" section
 	if provider, ok := cfg["provider"].(map[string]interface{}); ok {
-		delete(provider, ProviderKey)
+		for key := range provider {
+			if key == ProviderKey || strings.HasPrefix(key, ProviderKey+"-") {
+				delete(provider, key)
+			}
+		}
 		cfg["provider"] = provider
 	}
 
@@ -148,8 +195,10 @@ func HasYokaiEndpoints(configPath string) bool {
 	}
 
 	if provider, ok := cfg["provider"].(map[string]interface{}); ok {
-		if _, ok := provider[ProviderKey]; ok {
-			return true
+		for key := range provider {
+			if key == ProviderKey || strings.HasPrefix(key, ProviderKey+"-") {
+				return true
+			}
 		}
 	}
 

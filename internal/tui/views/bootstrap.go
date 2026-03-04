@@ -4,6 +4,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"log"
+	"net/http"
 	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -146,7 +148,7 @@ func (b *Bootstrap) runMonitoringDeploy() tea.Cmd {
 			AgentHost:      b.host,
 			AgentPort:      7474,
 			PrometheusPort: 9090,
-			GrafanaPort:    3000,
+			GrafanaPort:    3001,
 			HasNvidiaGPU:   b.preflight != nil && b.preflight.GPUDetected,
 		}
 
@@ -176,8 +178,14 @@ EOF`, tmpDir, prometheusYAML)
 			return bootstrapProgressMsg{step: bsFailed, err: fmt.Errorf("writing prometheus config: %w", err)}
 		}
 
+		// Create directories referenced by compose volume mounts
+		mkdirCmd := fmt.Sprintf("mkdir -p %s/grafana/provisioning %s/grafana/dashboards", tmpDir, tmpDir)
+		if _, err := client.Exec(mkdirCmd); err != nil {
+			return bootstrapProgressMsg{step: bsFailed, err: fmt.Errorf("creating grafana dirs: %w", err)}
+		}
+
 		// Start monitoring stack
-		deployCmd := fmt.Sprintf("cd %s && docker compose up -d", tmpDir)
+		deployCmd := fmt.Sprintf("cd %s && docker compose up -d 2>&1", tmpDir)
 		if _, err := client.Exec(deployCmd); err != nil {
 			return bootstrapProgressMsg{step: bsFailed, err: fmt.Errorf("starting monitoring stack: %w", err)}
 		}
@@ -227,6 +235,18 @@ func (b *Bootstrap) Update(msg tea.Msg) (View, tea.Cmd) {
 			}
 			b.cfg.AddDevice(device)
 			_ = config.Save(b.cfg)
+
+			// Tell the daemon to hot-reload config so it picks up the new device
+			daemonAddr := b.cfg.Daemon.Listen
+			if daemonAddr == "" {
+				daemonAddr = "127.0.0.1:7473"
+			}
+			resp, err := http.Post("http://"+daemonAddr+"/reload", "application/json", nil)
+			if err != nil {
+				log.Printf("daemon reload failed: %v", err)
+			} else {
+				_ = resp.Body.Close()
+			}
 		}
 
 	case tea.KeyMsg:

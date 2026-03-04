@@ -58,6 +58,7 @@ func Run(version string) error {
 	mux.HandleFunc("POST /containers/{deviceID}/{containerID}/restart", d.handleRestartContainer)
 	mux.HandleFunc("GET /logs/{deviceID}/{containerID}", d.handleLogs)
 	mux.HandleFunc("GET /images/tags", d.handleImageTags)
+	mux.HandleFunc("POST /reload", d.handleReload)
 
 	addr := cfg.Daemon.Listen
 	if addr == "" {
@@ -109,8 +110,8 @@ func (d *Daemon) handleDevices(w http.ResponseWriter, r *http.Request) {
 
 	type deviceStatus struct {
 		config.Device
-		Online    bool   `json:"online"`
-		TunnelPort int   `json:"tunnel_port"`
+		Online     bool `json:"online"`
+		TunnelPort int  `json:"tunnel_port"`
 	}
 
 	var devices []deviceStatus
@@ -259,6 +260,54 @@ func (d *Daemon) handleImageTags(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"image": image,
 		"tags":  tags,
+	})
+}
+
+func (d *Daemon) handleReload(w http.ResponseWriter, r *http.Request) {
+	newCfg, err := config.Load()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"error":   "reload_failed",
+			"message": fmt.Sprintf("loading config: %v", err),
+		})
+		return
+	}
+
+	d.mu.Lock()
+	oldDevices := d.cfg.Devices
+	d.cfg = newCfg
+	d.tunnels.UpdateConfig(newCfg)
+	d.aggregator.UpdateConfig(newCfg)
+	d.mu.Unlock()
+
+	// Determine which devices were added or removed
+	oldSet := make(map[string]struct{}, len(oldDevices))
+	for _, dev := range oldDevices {
+		oldSet[dev.ID] = struct{}{}
+	}
+	newSet := make(map[string]struct{}, len(newCfg.Devices))
+	for _, dev := range newCfg.Devices {
+		newSet[dev.ID] = struct{}{}
+	}
+
+	// Close tunnels for removed devices
+	for id := range oldSet {
+		if _, ok := newSet[id]; !ok {
+			d.tunnels.CloseDevice(id)
+		}
+	}
+
+	// Connect tunnels for new devices
+	for _, dev := range newCfg.Devices {
+		if _, ok := oldSet[dev.ID]; !ok {
+			d.tunnels.ConnectDevice(dev)
+		}
+	}
+
+	log.Printf("config reloaded: %d devices", len(newCfg.Devices))
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"status": "reloaded",
 	})
 }
 

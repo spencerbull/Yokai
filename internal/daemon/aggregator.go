@@ -27,6 +27,30 @@ type Aggregator struct {
 	client  *http.Client
 }
 
+// agentRequest creates an HTTP request with the agent's auth token (if configured).
+func (a *Aggregator) agentRequest(method, url, deviceID string, body io.Reader) (*http.Request, error) {
+	req, err := http.NewRequest(method, url, body)
+	if err != nil {
+		return nil, err
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if device := a.cfg.FindDevice(deviceID); device != nil && device.AgentToken != "" {
+		req.Header.Set("Authorization", "Bearer "+device.AgentToken)
+	}
+	return req, nil
+}
+
+// agentDo is a shortcut: build an agent request and execute it.
+func (a *Aggregator) agentDo(method, url, deviceID string, body io.Reader) (*http.Response, error) {
+	req, err := a.agentRequest(method, url, deviceID, body)
+	if err != nil {
+		return nil, err
+	}
+	return a.client.Do(req)
+}
+
 // AgentMetrics represents metrics from a single device agent
 type AgentMetrics struct {
 	DeviceID   string          `json:"device_id"`
@@ -49,6 +73,13 @@ func NewAggregator(cfg *config.Config, tunnels *TunnelPool) *Aggregator {
 		metrics: make(map[string]*AgentMetrics),
 		client:  &http.Client{Timeout: 10 * time.Second},
 	}
+}
+
+// UpdateConfig replaces the config pointer (caller holds Daemon.mu).
+func (a *Aggregator) UpdateConfig(cfg *config.Config) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.cfg = cfg
 }
 
 // Start begins polling device agents for metrics
@@ -98,7 +129,7 @@ func (a *Aggregator) pollDevice(deviceID string) {
 	}
 
 	url := fmt.Sprintf("http://localhost:%d/metrics", localPort)
-	resp, err := a.client.Get(url)
+	resp, err := a.agentDo("GET", url, deviceID, nil)
 	if err != nil {
 		log.Printf("metrics poll %s failed: %v", deviceID, err)
 		a.setDeviceOffline(deviceID)
@@ -222,7 +253,11 @@ func (a *Aggregator) Deploy(req DeployRequest) (*DeployResult, error) {
 
 	url := fmt.Sprintf("http://localhost:%d/containers", localPort)
 	deployClient := &http.Client{Timeout: 5 * time.Minute}
-	resp, err := deployClient.Post(url, "application/json", bytes.NewBuffer(jsonData))
+	deployReq, err := a.agentRequest("POST", url, req.DeviceID, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("creating deploy request: %w", err)
+	}
+	resp, err := deployClient.Do(deployReq)
 	if err != nil {
 		return nil, fmt.Errorf("deploy request: %w", err)
 	}
@@ -273,12 +308,7 @@ func (a *Aggregator) StopContainer(deviceID, containerID string) error {
 	}
 
 	url := fmt.Sprintf("http://localhost:%d/containers/%s", localPort, containerID)
-	req, err := http.NewRequest("DELETE", url, nil)
-	if err != nil {
-		return fmt.Errorf("creating request: %w", err)
-	}
-
-	resp, err := a.client.Do(req)
+	resp, err := a.agentDo("DELETE", url, deviceID, nil)
 	if err != nil {
 		return fmt.Errorf("stop request: %w", err)
 	}
@@ -301,7 +331,7 @@ func (a *Aggregator) RestartContainer(deviceID, containerID string) error {
 	}
 
 	url := fmt.Sprintf("http://localhost:%d/containers/%s/restart", localPort, containerID)
-	resp, err := a.client.Post(url, "", nil)
+	resp, err := a.agentDo("POST", url, deviceID, nil)
 	if err != nil {
 		return fmt.Errorf("restart request: %w", err)
 	}
@@ -323,8 +353,8 @@ func (a *Aggregator) StreamLogs(deviceID, containerID string) (<-chan string, er
 		return nil, fmt.Errorf("device %s is not connected", deviceID)
 	}
 
-	url := fmt.Sprintf("http://localhost:%d/logs/%s", localPort, containerID)
-	req, err := http.NewRequest("GET", url, nil)
+	url := fmt.Sprintf("http://localhost:%d/containers/%s/logs", localPort, containerID)
+	req, err := a.agentRequest("GET", url, deviceID, nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
 	}

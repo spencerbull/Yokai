@@ -98,14 +98,15 @@ func (a *App) navigate(msg views.NavigateMsg) (tea.Model, tea.Cmd) {
 	return a, cmd
 }
 
-// popView restores the previous view from the stack.
+// popView restores the previous view from the stack and re-initializes it
+// so polling loops (e.g., the dashboard's metrics ticker) resume immediately.
 func (a *App) popView() (tea.Model, tea.Cmd) {
 	if len(a.viewStack) == 0 {
 		return a, nil
 	}
 	a.currentView = a.viewStack[len(a.viewStack)-1]
 	a.viewStack = a.viewStack[:len(a.viewStack)-1]
-	return a, nil
+	return a, a.currentView.Init()
 }
 
 func renderKeybindBar(binds []views.KeyBind, width int) string {
