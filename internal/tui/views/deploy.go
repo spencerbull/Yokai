@@ -129,6 +129,9 @@ func (d *Deploy) Update(msg tea.Msg) (View, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		d.width = msg.Width
+		if d.width > theme.MaxContentWidth-2*theme.ContentPadding {
+			d.width = theme.MaxContentWidth - 2*theme.ContentPadding
+		}
 		d.height = msg.Height
 
 	case deployResultMsg:

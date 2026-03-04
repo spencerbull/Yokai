@@ -65,6 +65,9 @@ func (s *SSHCreds) Update(msg tea.Msg) (View, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		s.width = msg.Width
+		if s.width > theme.MaxContentWidth-2*theme.ContentPadding {
+			s.width = theme.MaxContentWidth - 2*theme.ContentPadding
+		}
 		s.height = msg.Height
 
 	case tea.KeyMsg:

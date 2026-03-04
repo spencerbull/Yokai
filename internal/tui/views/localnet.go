@@ -86,6 +86,9 @@ func (l *LocalNet) Update(msg tea.Msg) (View, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		l.width = msg.Width
+		if l.width > theme.MaxContentWidth-2*theme.ContentPadding {
+			l.width = theme.MaxContentWidth - 2*theme.ContentPadding
+		}
 		l.height = msg.Height
 
 	case localIPsMsg:

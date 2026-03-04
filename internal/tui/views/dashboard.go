@@ -127,6 +127,9 @@ func (d *Dashboard) Update(msg tea.Msg) (View, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		d.width = msg.Width
+		if d.width > theme.MaxContentWidth-2*theme.ContentPadding {
+			d.width = theme.MaxContentWidth - 2*theme.ContentPadding
+		}
 		d.height = msg.Height
 
 	case MetricsMsg:
@@ -216,7 +219,7 @@ func (d *Dashboard) View() string {
 	serviceList := d.renderServiceList()
 	sections = append(sections, serviceList)
 
-	return lipgloss.JoinVertical(lipgloss.Left, sections...)
+	return lipgloss.JoinVertical(lipgloss.Center, sections...)
 }
 
 // renderGridLayout renders btop-inspired side-by-side panels.
