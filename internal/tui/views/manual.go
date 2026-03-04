@@ -33,6 +33,9 @@ func (m *Manual) Update(msg tea.Msg) (View, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
+		if m.width > theme.MaxContentWidth-2*theme.ContentPadding {
+			m.width = theme.MaxContentWidth - 2*theme.ContentPadding
+		}
 		m.height = msg.Height
 
 	case tea.KeyMsg:

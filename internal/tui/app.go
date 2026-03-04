@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spencerbull/yokai/internal/config"
 	"github.com/spencerbull/yokai/internal/tui/components"
+	"github.com/spencerbull/yokai/internal/tui/theme"
 	"github.com/spencerbull/yokai/internal/tui/views"
 )
 
@@ -151,11 +152,17 @@ func (a *App) View() string {
 		return "Loading..."
 	}
 
+	// Calculate the content width capped at MaxContentWidth
+	contentWidth := a.width
+	if contentWidth > theme.MaxContentWidth {
+		contentWidth = theme.MaxContentWidth
+	}
+
 	var sections []string
 
 	// Tab bar (shown when tabs are active)
 	if a.showTabs {
-		tabBar := components.NewTabBar(components.DefaultTabs(), a.activeTab, a.width)
+		tabBar := components.NewTabBar(components.DefaultTabs(), a.activeTab, contentWidth)
 		sections = append(sections, tabBar.Render())
 	}
 
@@ -165,10 +172,11 @@ func (a *App) View() string {
 
 	// Keybind bar at the bottom
 	keybinds := a.currentView.KeyBinds()
-	bar := renderKeybindBar(keybinds, a.width)
+	bar := renderKeybindBar(keybinds, contentWidth)
 	sections = append(sections, bar)
 
-	return lipgloss.JoinVertical(lipgloss.Left, sections...)
+	assembled := lipgloss.JoinVertical(lipgloss.Center, sections...)
+	return lipgloss.Place(a.width, a.height, lipgloss.Center, lipgloss.Top, assembled)
 }
 
 // navigate pushes current view onto stack and switches to the target.

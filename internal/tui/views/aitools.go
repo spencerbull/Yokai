@@ -79,6 +79,9 @@ func (a *AITools) Update(msg tea.Msg) (View, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		a.width = msg.Width
+		if a.width > theme.MaxContentWidth-2*theme.ContentPadding {
+			a.width = theme.MaxContentWidth - 2*theme.ContentPadding
+		}
 		a.height = msg.Height
 
 	case aiToolsConfigMsg:

@@ -2,6 +2,12 @@ package theme
 
 import "github.com/charmbracelet/lipgloss"
 
+// Layout constants for centered max-width container.
+const (
+	MaxContentWidth = 140
+	ContentPadding  = 2
+)
+
 // Tokyo Night color palette — matches btop's dark default
 var (
 	Background  = lipgloss.Color("#1a1b26")

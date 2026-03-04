@@ -198,6 +198,9 @@ func (b *Bootstrap) Update(msg tea.Msg) (View, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		b.width = msg.Width
+		if b.width > theme.MaxContentWidth-2*theme.ContentPadding {
+			b.width = theme.MaxContentWidth - 2*theme.ContentPadding
+		}
 		b.height = msg.Height
 
 	case bootstrapProgressMsg:

@@ -70,6 +70,9 @@ func (t *TailscaleView) Update(msg tea.Msg) (View, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		t.width = msg.Width
+		if t.width > theme.MaxContentWidth-2*theme.ContentPadding {
+			t.width = theme.MaxContentWidth - 2*theme.ContentPadding
+		}
 		t.height = msg.Height
 
 	case tsStatusMsg:
