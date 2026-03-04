@@ -469,10 +469,7 @@ func (d *Dashboard) buildServiceRows() []components.ServiceRow {
 			serviceType := d.inferServiceType(container.Name)
 
 			// Strip the "yokai-" prefix for cleaner display
-			displayName := container.Name
-			if strings.HasPrefix(displayName, "yokai-") {
-				displayName = displayName[6:]
-			}
+			displayName := strings.TrimPrefix(container.Name, "yokai-")
 
 			row := components.ServiceRow{
 				Name:       displayName,
