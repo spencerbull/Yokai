@@ -88,21 +88,17 @@ func StatusLoading() string {
 	return lipgloss.NewStyle().Foreground(Warn).Render("⟳")
 }
 
-// ProgressBar renders a gradient progress bar.
-// width is the total bar width in characters.
+// fractionalBlocks provides sub-character precision for progress bars.
+// From 1/8 fill to full fill: ▏▎▍▌▋▊▉█
+var fractionalBlocks = []string{"▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"}
+
+// ProgressBar renders a gradient progress bar with sub-character precision.
+// width is the total bar width in characters including brackets.
 func ProgressBar(percent float64, width int) string {
 	if width < 2 {
 		width = 2
 	}
 	innerWidth := width - 2 // account for [ ]
-	filled := int(percent / 100.0 * float64(innerWidth))
-	if filled > innerWidth {
-		filled = innerWidth
-	}
-	if filled < 0 {
-		filled = 0
-	}
-	empty := innerWidth - filled
 
 	// Pick color based on severity
 	var color lipgloss.Color
@@ -118,10 +114,41 @@ func ProgressBar(percent float64, width int) string {
 	fillStyle := lipgloss.NewStyle().Foreground(color)
 	emptyStyle := lipgloss.NewStyle().Foreground(TextMuted)
 
-	bar := "[" +
-		fillStyle.Render(repeat("█", filled)) +
-		emptyStyle.Render(repeat("░", empty)) +
-		"]"
+	// Calculate fill with fractional precision
+	fillFloat := percent / 100.0 * float64(innerWidth)
+	if fillFloat < 0 {
+		fillFloat = 0
+	}
+	if fillFloat > float64(innerWidth) {
+		fillFloat = float64(innerWidth)
+	}
+
+	fullChars := int(fillFloat)
+	remainder := fillFloat - float64(fullChars)
+
+	var bar string
+	bar += "["
+
+	// Full filled characters
+	bar += fillStyle.Render(repeat("█", fullChars))
+
+	// Fractional character for sub-cell precision
+	fracIdx := int(remainder * 8)
+	if fracIdx > 0 && fracIdx <= 8 && fullChars < innerWidth {
+		if fracIdx > 7 {
+			fracIdx = 7
+		}
+		bar += fillStyle.Render(fractionalBlocks[fracIdx-1])
+		fullChars++
+	}
+
+	// Empty space
+	empty := innerWidth - fullChars
+	if empty > 0 {
+		bar += emptyStyle.Render(repeat("░", empty))
+	}
+
+	bar += "]"
 	return bar
 }
 
