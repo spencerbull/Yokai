@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spencerbull/yokai/internal/config"
+	"github.com/spencerbull/yokai/internal/tui/components"
 	"github.com/spencerbull/yokai/internal/tui/theme"
 )
 
@@ -88,6 +89,7 @@ type Deploy struct {
 
 	// Deployment state
 	deployError string
+	spinner     components.LoadingSpinner
 	width       int
 	height      int
 }
@@ -112,6 +114,18 @@ func (d *Deploy) Init() tea.Cmd {
 }
 
 func (d *Deploy) Update(msg tea.Msg) (View, tea.Cmd) {
+	// Forward spinner ticks when deploying
+	if d.currentStep == stepDeploying {
+		var spinnerCmd tea.Cmd
+		d.spinner, spinnerCmd = d.spinner.Update(msg)
+		if spinnerCmd != nil {
+			// Check for non-key messages (spinner ticks etc)
+			if _, ok := msg.(tea.KeyMsg); !ok {
+				return d, spinnerCmd
+			}
+		}
+	}
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		d.width = msg.Width
@@ -408,7 +422,8 @@ func (d *Deploy) updateConfig(msg tea.KeyMsg) (View, tea.Cmd) {
 		// Switch to deploying step and make API call
 		d.currentStep = stepDeploying
 		d.deployError = ""
-		return d, d.deployToAPI(svc)
+		d.spinner = components.NewLoadingSpinner("Deploying container...")
+		return d, tea.Batch(d.deployToAPI(svc), d.spinner.Init())
 	case "backspace":
 		switch d.activeConfigField {
 		case 0:
@@ -702,9 +717,8 @@ func (d *Deploy) View() string {
 
 	case stepDeploying:
 		body = theme.PrimaryStyle.Render("Deploying service...") + "\n\n"
-		body += theme.MutedStyle.Render("●○○") + " Connecting to daemon\n"
-		body += theme.MutedStyle.Render("○●○") + " Starting container\n"
-		body += theme.MutedStyle.Render("○○●") + " Verifying deployment\n\n"
+		body += d.spinner.View() + "\n\n"
+		body += theme.MutedStyle.Render("This may take several minutes for large images.") + "\n"
 		body += theme.MutedStyle.Render("Press Esc to cancel")
 	}
 
