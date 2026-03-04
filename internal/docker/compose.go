@@ -18,8 +18,7 @@ type MonitoringConfig struct {
 func GenerateMonitoringCompose(cfg MonitoringConfig) string {
 	var services strings.Builder
 
-	services.WriteString(`version: '3.8'
-services:
+	services.WriteString(`services:
   prometheus:
     container_name: yokai-mon-prometheus
     image: prom/prometheus:latest

@@ -7,16 +7,16 @@ import (
 
 // PreflightResult holds the results of remote pre-flight checks.
 type PreflightResult struct {
-	OS                    string
-	Arch                  string
-	DockerInstalled       bool
-	DockerVersion         string
-	GPUDetected           bool
-	GPUName               string
-	GPUVRAMMb             int
+	OS                     string
+	Arch                   string
+	DockerInstalled        bool
+	DockerVersion          string
+	GPUDetected            bool
+	GPUName                string
+	GPUVRAMMb              int
 	NvidiaToolkitInstalled bool
 	NvidiaRuntimeAvailable bool
-	DiskFreeGB            int
+	DiskFreeGB             int
 }
 
 // Preflight runs pre-flight checks on a remote device via SSH.
@@ -78,19 +78,95 @@ func Preflight(client *Client) (*PreflightResult, error) {
 	return result, nil
 }
 
+// UpgradeAgent replaces the agent binary on a remote device and restarts it.
+// Detects the running agent's binary path, uploads the new binary to /tmp,
+// sudo-moves it into place, and restarts via systemd if available.
+func UpgradeAgent(client *Client, localBinaryPath string, agentPort int) error {
+	// Find the running agent process to determine the remote binary path
+	out, err := client.Exec("pgrep -a -f 'yokai agent'")
+	if err != nil {
+		return fmt.Errorf("agent not running on remote (pgrep failed): %w", err)
+	}
+
+	remoteBinPath := ""
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if line == "" {
+			continue
+		}
+		// Format: "PID /path/to/yokai agent 7474"
+		fields := strings.Fields(line)
+		if len(fields) >= 2 {
+			remoteBinPath = fields[1]
+			break
+		}
+	}
+
+	if remoteBinPath == "" {
+		return fmt.Errorf("could not determine remote agent binary path")
+	}
+
+	// Upload to user-writable /tmp first, then sudo mv into place
+	tmpPath := "/tmp/yokai.new"
+	if err := client.Upload(localBinaryPath, tmpPath); err != nil {
+		return fmt.Errorf("uploading binary: %w", err)
+	}
+
+	cmds := []string{
+		fmt.Sprintf("chmod +x %s", tmpPath),
+		fmt.Sprintf("sudo mv -f %s %s", tmpPath, remoteBinPath),
+	}
+	for _, cmd := range cmds {
+		if _, err := client.Exec(cmd); err != nil {
+			return fmt.Errorf("running %q: %w", cmd, err)
+		}
+	}
+
+	// Restart: prefer systemd if the service exists, otherwise manual restart
+	if _, err := client.Exec("systemctl list-unit-files yokai-agent.service 2>/dev/null | grep -q yokai-agent"); err == nil {
+		if _, err := client.Exec("sudo systemctl restart yokai-agent"); err != nil {
+			return fmt.Errorf("restarting agent via systemd: %w", err)
+		}
+	} else {
+		// Fallback: manual kill + setsid restart
+		_, _ = client.Exec("pkill -f 'yokai agent'")
+		_, _ = client.Exec("sleep 0.5")
+		startCmd := fmt.Sprintf("setsid %s agent %d > /tmp/yokai-agent.log 2>&1 < /dev/null &", remoteBinPath, agentPort)
+		if _, err := client.Exec(startCmd); err != nil {
+			return fmt.Errorf("restarting agent: %w", err)
+		}
+	}
+
+	// Verify it came back up
+	_, _ = client.Exec("sleep 1.5")
+	verifyCmd := fmt.Sprintf("curl -sf http://127.0.0.1:%d/health", agentPort)
+	if _, err := client.Exec(verifyCmd); err != nil {
+		return fmt.Errorf("agent failed to start after upgrade (health check failed)")
+	}
+
+	return nil
+}
+
 // DeployAgent uploads the yokai binary and installs it as a systemd service.
 func DeployAgent(client *Client, localBinaryPath string, agentToken string) error {
 	remoteBinPath := "/usr/local/bin/yokai"
 	remoteConfigDir := "/etc/yokai"
+	tmpUploadPath := "/tmp/yokai.new"
 
-	// Upload binary
-	if err := client.Upload(localBinaryPath, remoteBinPath); err != nil {
+	// Upload binary to a user-writable temp path first, then sudo mv into place.
+	// SCP runs as the SSH user who may not have write access to /usr/local/bin.
+	if err := client.Upload(localBinaryPath, tmpUploadPath); err != nil {
 		return fmt.Errorf("uploading binary: %w", err)
 	}
 
-	// Make executable
-	if _, err := client.Exec(fmt.Sprintf("chmod +x %s", remoteBinPath)); err != nil {
-		return fmt.Errorf("chmod: %w", err)
+	// Move into place and make executable
+	moveCmds := []string{
+		fmt.Sprintf("chmod +x %s", tmpUploadPath),
+		fmt.Sprintf("sudo mv -f %s %s", tmpUploadPath, remoteBinPath),
+	}
+	for _, cmd := range moveCmds {
+		if _, err := client.Exec(cmd); err != nil {
+			return fmt.Errorf("running %q: %w", cmd, err)
+		}
 	}
 
 	// Create config dir and agent config

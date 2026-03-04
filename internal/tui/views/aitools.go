@@ -172,17 +172,20 @@ func (a *AITools) configureSelected(selected []string) tea.Cmd {
 			serviceID string
 		}
 
+		// Build device lookup set
+		deviceByID := make(map[string]config.Device)
+		for _, dev := range devices {
+			deviceByID[dev.ID] = dev
+		}
+
 		var endpoints []endpoint
 		for _, svc := range services {
 			if svc.Type == "comfyui" {
 				continue // ComfyUI isn't OpenAI-compatible
 			}
-			host := "localhost"
-			for _, dev := range devices {
-				if dev.ID == svc.DeviceID {
-					host = dev.Host
-					break
-				}
+			dev, ok := deviceByID[svc.DeviceID]
+			if !ok {
+				continue // skip orphaned services whose device was removed
 			}
 			modelName := svc.Model
 			if modelName == "" {
@@ -190,7 +193,7 @@ func (a *AITools) configureSelected(selected []string) tea.Cmd {
 			}
 
 			endpoints = append(endpoints, endpoint{
-				host:      host,
+				host:      dev.Host,
 				port:      svc.Port,
 				modelID:   svc.ID,
 				modelName: modelName,
@@ -271,6 +274,12 @@ func (a *AITools) View() string {
 
 	var body string
 
+	// Build device lookup set for display
+	devByID := make(map[string]config.Device)
+	for _, dev := range a.cfg.Devices {
+		devByID[dev.ID] = dev
+	}
+
 	// List current endpoints
 	compatibleServices := 0
 	var serviceLines []string
@@ -278,15 +287,12 @@ func (a *AITools) View() string {
 		if svc.Type == "comfyui" {
 			continue
 		}
-		compatibleServices++
-		host := "localhost"
-		for _, dev := range a.cfg.Devices {
-			if dev.ID == svc.DeviceID {
-				host = dev.Host
-				break
-			}
+		dev, ok := devByID[svc.DeviceID]
+		if !ok {
+			continue // skip orphaned services whose device was removed
 		}
-		url := fmt.Sprintf("http://%s:%d/v1", host, svc.Port)
+		compatibleServices++
+		url := fmt.Sprintf("http://%s:%d/v1", dev.Host, svc.Port)
 		serviceLines = append(serviceLines,
 			fmt.Sprintf("  %s %s\n    %s",
 				theme.StatusOnline(),

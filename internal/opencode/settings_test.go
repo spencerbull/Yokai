@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -182,6 +183,170 @@ func TestAddEndpointsToExistingFile(t *testing.T) {
 	}
 }
 
+func TestAddEndpointsMultipleBaseURLs(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, "opencode.json")
+
+	endpoints := []Endpoint{
+		{
+			BaseURL:   "http://100.96.45.116:8282/v1",
+			ModelID:   "Qwen/Qwen3.5-35B-A3B-FP8",
+			ModelName: "Qwen 3.5 35B (yokai)",
+		},
+		{
+			BaseURL:   "http://100.96.45.116:8383/v1",
+			ModelID:   "meta-llama/Llama-3.1-8B-Instruct",
+			ModelName: "Llama 3.1 8B (yokai)",
+		},
+	}
+
+	if err := AddEndpointsToFile(configPath, endpoints); err != nil {
+		t.Fatalf("AddEndpointsToFile failed: %v", err)
+	}
+
+	cfg, err := readConfig(configPath)
+	if err != nil {
+		t.Fatalf("failed to read config: %v", err)
+	}
+
+	provider := cfg["provider"].(map[string]interface{})
+
+	// Should have two yokai providers since baseURLs differ
+	yokaiCount := 0
+	for key := range provider {
+		if key == ProviderKey || strings.HasPrefix(key, ProviderKey+"-") {
+			yokaiCount++
+		}
+	}
+	if yokaiCount != 2 {
+		t.Errorf("expected 2 yokai providers, got %d (keys: %v)", yokaiCount, keysOf(provider))
+	}
+
+	// Each provider should have exactly one model and the correct baseURL
+	for key, val := range provider {
+		if key != ProviderKey && !strings.HasPrefix(key, ProviderKey+"-") {
+			continue
+		}
+		entry := val.(map[string]interface{})
+		options := entry["options"].(map[string]interface{})
+		baseURL := options["baseURL"].(string)
+		models := entry["models"].(map[string]interface{})
+
+		if len(models) != 1 {
+			t.Errorf("provider %s: expected 1 model, got %d", key, len(models))
+		}
+
+		// Verify the model matches the baseURL
+		if _, ok := models["Qwen/Qwen3.5-35B-A3B-FP8"]; ok {
+			if baseURL != "http://100.96.45.116:8282/v1" {
+				t.Errorf("Qwen model has wrong baseURL: %s", baseURL)
+			}
+		} else if _, ok := models["meta-llama/Llama-3.1-8B-Instruct"]; ok {
+			if baseURL != "http://100.96.45.116:8383/v1" {
+				t.Errorf("Llama model has wrong baseURL: %s", baseURL)
+			}
+		} else {
+			t.Errorf("provider %s has unexpected models: %v", key, keysOf(models))
+		}
+	}
+}
+
+func TestAddEndpointsSameBaseURL(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, "opencode.json")
+
+	endpoints := []Endpoint{
+		{
+			BaseURL:   "http://100.96.45.116:8282/v1",
+			ModelID:   "Qwen/Qwen3.5-35B-A3B-FP8",
+			ModelName: "Qwen 3.5 35B (yokai)",
+		},
+		{
+			BaseURL:   "http://100.96.45.116:8282/v1",
+			ModelID:   "meta-llama/Llama-3.1-8B-Instruct",
+			ModelName: "Llama 3.1 8B (yokai)",
+		},
+	}
+
+	if err := AddEndpointsToFile(configPath, endpoints); err != nil {
+		t.Fatalf("AddEndpointsToFile failed: %v", err)
+	}
+
+	cfg, err := readConfig(configPath)
+	if err != nil {
+		t.Fatalf("failed to read config: %v", err)
+	}
+
+	provider := cfg["provider"].(map[string]interface{})
+
+	// Should have exactly one yokai provider since baseURLs are the same
+	yokaiCount := 0
+	for key := range provider {
+		if key == ProviderKey || strings.HasPrefix(key, ProviderKey+"-") {
+			yokaiCount++
+		}
+	}
+	if yokaiCount != 1 {
+		t.Errorf("expected 1 yokai provider, got %d", yokaiCount)
+	}
+
+	yokai := provider[ProviderKey].(map[string]interface{})
+	models := yokai["models"].(map[string]interface{})
+	if len(models) != 2 {
+		t.Errorf("expected 2 models under single provider, got %d", len(models))
+	}
+}
+
+func TestAddEndpointsReplacesExisting(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, "opencode.json")
+
+	// First: add two providers
+	endpoints1 := []Endpoint{
+		{BaseURL: "http://host1:8000/v1", ModelID: "model-a", ModelName: "A (yokai)"},
+		{BaseURL: "http://host2:8000/v1", ModelID: "model-b", ModelName: "B (yokai)"},
+	}
+	if err := AddEndpointsToFile(configPath, endpoints1); err != nil {
+		t.Fatal(err)
+	}
+
+	// Second: add a single provider — old ones should be removed
+	endpoints2 := []Endpoint{
+		{BaseURL: "http://host3:8000/v1", ModelID: "model-c", ModelName: "C (yokai)"},
+	}
+	if err := AddEndpointsToFile(configPath, endpoints2); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := readConfig(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	provider := cfg["provider"].(map[string]interface{})
+	yokaiCount := 0
+	for key := range provider {
+		if key == ProviderKey || strings.HasPrefix(key, ProviderKey+"-") {
+			yokaiCount++
+		}
+	}
+	if yokaiCount != 1 {
+		t.Errorf("expected 1 yokai provider after replacement, got %d", yokaiCount)
+	}
+
+	yokai := provider[ProviderKey].(map[string]interface{})
+	options := yokai["options"].(map[string]interface{})
+	if options["baseURL"] != "http://host3:8000/v1" {
+		t.Errorf("expected new baseURL, got %v", options["baseURL"])
+	}
+}
+
 func TestAddEndpointsNoEndpoints(t *testing.T) {
 	t.Parallel()
 
@@ -200,7 +365,7 @@ func TestRemoveEndpoints(t *testing.T) {
 	tempDir := t.TempDir()
 	configPath := filepath.Join(tempDir, "opencode.json")
 
-	// Create config with yokai + other settings
+	// Create config with multiple yokai providers + other settings
 	cfg := map[string]interface{}{
 		"$schema": "https://opencode.ai/config.json",
 		"theme":   "system",
@@ -218,6 +383,19 @@ func TestRemoveEndpoints(t *testing.T) {
 				"models": map[string]interface{}{
 					"meta-llama/Llama-3.1-70B-Instruct": map[string]interface{}{
 						"name": "Llama 3.1 70B (yokai)",
+					},
+				},
+			},
+			ProviderKey + "-1": map[string]interface{}{
+				"npm":  NPMPackage,
+				"name": ProviderDisplayName,
+				"options": map[string]interface{}{
+					"baseURL": "http://192.168.1.100:8383/v1",
+					"apiKey":  "none",
+				},
+				"models": map[string]interface{}{
+					"Qwen/Qwen3.5-35B-A3B-FP8": map[string]interface{}{
+						"name": "Qwen 3.5 35B (yokai)",
 					},
 				},
 			},
@@ -248,9 +426,11 @@ func TestRemoveEndpoints(t *testing.T) {
 		t.Error("anthropic provider should be preserved")
 	}
 
-	// Verify yokai provider removed
-	if _, ok := provider[ProviderKey]; ok {
-		t.Error("yokai provider should be removed")
+	// Verify all yokai providers removed
+	for key := range provider {
+		if key == ProviderKey || strings.HasPrefix(key, ProviderKey+"-") {
+			t.Errorf("yokai provider %s should be removed", key)
+		}
 	}
 }
 
@@ -443,4 +623,13 @@ func readConfig(path string) (map[string]interface{}, error) {
 		return nil, err
 	}
 	return cfg, nil
+}
+
+func keysOf(m map[string]interface{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }

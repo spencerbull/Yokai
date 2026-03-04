@@ -82,15 +82,16 @@ type GPUData struct {
 }
 
 type ContainerData struct {
-	ID            string  `json:"id"`
-	Name          string  `json:"name"`
-	Image         string  `json:"image"`
-	Status        string  `json:"status"`
-	CPUPercent    float64 `json:"cpu_percent"`
-	MemUsedMB     int64   `json:"memory_used_mb"`
-	GPUMemMB      int64   `json:"gpu_memory_mb"`
-	UptimeSeconds int64   `json:"uptime_seconds"`
-	Port          int     `json:"port"`
+	ID            string            `json:"id"`
+	Name          string            `json:"name"`
+	Image         string            `json:"image"`
+	Status        string            `json:"status"`
+	CPUPercent    float64           `json:"cpu_percent"`
+	MemUsedMB     int64             `json:"memory_used_mb"`
+	GPUMemMB      int64             `json:"gpu_memory_mb"`
+	UptimeSeconds int64             `json:"uptime_seconds"`
+	Ports         map[string]string `json:"ports"`
+	Health        string            `json:"health"`
 }
 
 type DashboardDevice struct {
@@ -270,6 +271,9 @@ func (d *Dashboard) renderDeviceCards() string {
 	} else {
 		cardWidth = d.width - 4
 	}
+	if cardWidth < 20 {
+		cardWidth = 20
+	}
 
 	for i, device := range d.devices {
 		card := components.NewDeviceCard(
@@ -407,16 +411,28 @@ func (d *Dashboard) buildServiceRows() []components.ServiceRow {
 			continue
 		}
 
+		deviceLabel := device.Label
+		if deviceLabel == "" {
+			deviceLabel = device.ID
+		}
+
 		for _, container := range metrics.Containers {
-			// Map container to service type - this is a simple heuristic
 			serviceType := d.inferServiceType(container.Name)
 
+			// Strip the "yokai-" prefix for cleaner display
+			displayName := container.Name
+			if strings.HasPrefix(displayName, "yokai-") {
+				displayName = displayName[6:]
+			}
+
 			row := components.ServiceRow{
-				Name:       container.Name,
+				Name:       displayName,
 				Type:       serviceType,
-				Model:      d.getServiceModel(container.ID),
+				Model:      d.getServiceModel(container),
 				Status:     container.Status,
-				Port:       container.Port,
+				Health:     container.Health,
+				Device:     deviceLabel,
+				Port:       extractExternalPort(container.Ports),
 				CPUPercent: container.CPUPercent,
 				MemUsedMB:  container.MemUsedMB,
 				GPUMemMB:   container.GPUMemMB,
@@ -591,14 +607,43 @@ func (d *Dashboard) inferServiceType(containerName string) string {
 	return "unknown"
 }
 
-func (d *Dashboard) getServiceModel(containerID string) string {
-	// Try to find model from config by matching container ID
+func (d *Dashboard) getServiceModel(container ContainerData) string {
+	// Try matching by container ID first
 	for _, service := range d.cfg.Services {
-		if service.ContainerID == containerID {
-			return service.Model
+		if service.ContainerID != "" && service.ContainerID == container.ID {
+			if service.Model != "" {
+				return service.Model
+			}
 		}
 	}
-	return "unknown"
+
+	// Fall back to matching by name. The container name is "yokai-<service-id>"
+	// and the config service ID matches the suffix.
+	containerName := strings.TrimPrefix(container.Name, "yokai-")
+	for _, service := range d.cfg.Services {
+		if service.ID != "" && service.ID == containerName {
+			if service.Model != "" {
+				return service.Model
+			}
+		}
+	}
+
+	// Try to extract model from image name as last resort
+	if container.Image != "" {
+		// e.g. "vllm/vllm-openai:latest" → not useful, but a custom image might encode the model
+		return ""
+	}
+
+	return ""
+}
+
+// extractExternalPort returns the first external (host) port from the port map,
+// or 0 if none are mapped.
+func extractExternalPort(ports map[string]string) int {
+	for _, external := range ports {
+		return atoi(external)
+	}
+	return 0
 }
 
 func (d *Dashboard) findDeviceIDForContainer(containerID string) string {

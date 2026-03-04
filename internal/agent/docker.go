@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
+	"net/http"
 	"os/exec"
 	"path"
 	"regexp"
@@ -138,28 +140,41 @@ func runContainer(req ContainerRequest) (*ContainerResponse, error) {
 	// Sanitize container name
 	containerName := fmt.Sprintf("yokai-%s", sanitizeName(req.Name))
 
-	if isLlamaCppImage(req.Image) && req.Model != "" {
-		if req.Volumes == nil {
-			req.Volumes = make(map[string]string)
+	if isLlamaCppImage(req.Image) {
+		if req.Model != "" {
+			if req.Volumes == nil {
+				req.Volumes = make(map[string]string)
+			}
+			ensureModelsVolume(req.Volumes)
+			req.ExtraArgs = withLlamaModelArg(req.ExtraArgs, req.Model)
 		}
-		ensureModelsVolume(req.Volumes)
-		req.ExtraArgs = withLlamaModelArg(req.ExtraArgs, req.Model)
+		req.Ports = normalizeServicePorts(req.Ports, "8080")
+		req.ExtraArgs = withHostArg(req.ExtraArgs, "--host", "0.0.0.0")
 	}
 
-	if isVLLMImage(req.Image) && req.Model != "" {
-		if req.Volumes == nil {
-			req.Volumes = make(map[string]string)
+	if isVLLMImage(req.Image) {
+		if req.Model != "" {
+			if req.Volumes == nil {
+				req.Volumes = make(map[string]string)
+			}
+			ensureHFCacheVolume(req.Volumes)
+			req.ExtraArgs = withVLLMModelArg(req.ExtraArgs, req.Model)
 		}
-		ensureHFCacheVolume(req.Volumes)
-		req.ExtraArgs = withVLLMModelArg(req.ExtraArgs, req.Model)
+		req.Ports = normalizeServicePorts(req.Ports, "8000")
+		req.ExtraArgs = withHostArg(req.ExtraArgs, "--host", "0.0.0.0")
+		req.ExtraArgs = withVLLMToolCallArgs(req.ExtraArgs, req.Model)
+	}
+
+	if isComfyUIImage(req.Image) {
+		req.Ports = normalizeServicePorts(req.Ports, "8188")
 	}
 
 	// Build docker run command
 	args := []string{"run", "-d", "--name", containerName}
 
-	// Add ports
+	// Add ports — bind to 0.0.0.0 explicitly for external access
 	for internal, external := range req.Ports {
-		args = append(args, "-p", fmt.Sprintf("%s:%s", external, internal))
+		args = append(args, "-p", fmt.Sprintf("0.0.0.0:%s:%s", external, internal))
 	}
 
 	// Add environment variables
@@ -427,6 +442,163 @@ func imageSupportsPlatform(manifestJSON []byte, hostOS, hostArch string) (bool, 
 	}
 
 	return false, platforms, nil
+}
+
+// probeContainerHealth checks if a container's service is responding.
+// It tries the first external port it finds. For vLLM/llama.cpp it hits /health,
+// for other services it does a simple TCP dial.
+// Returns "healthy", "unhealthy", or "starting".
+func probeContainerHealth(ports map[string]string, image string) string {
+	if len(ports) == 0 {
+		return ""
+	}
+
+	// Find the first external port
+	var externalPort string
+	for _, ext := range ports {
+		externalPort = ext
+		break
+	}
+	if externalPort == "" {
+		return ""
+	}
+
+	addr := "127.0.0.1:" + externalPort
+
+	// For known inference servers, try their /health endpoint
+	imageLower := strings.ToLower(image)
+	if strings.Contains(imageLower, "vllm") || strings.Contains(imageLower, "llama") {
+		client := &http.Client{Timeout: 2 * time.Second}
+		resp, err := client.Get("http://" + addr + "/health")
+		if err != nil {
+			return "starting"
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			return "healthy"
+		}
+		return "unhealthy"
+	}
+
+	// For other services, check if the port is accepting connections
+	conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
+	if err != nil {
+		return "starting"
+	}
+	_ = conn.Close()
+	return "healthy"
+}
+
+// normalizeServicePorts remaps user-specified ports so the container-internal
+// port is the service's default. For example, if the user chose host port 8253
+// for vLLM (which listens on 8000 inside the container), this produces
+// {"8000": "8253"} so Docker maps host:8253 → container:8000.
+func normalizeServicePorts(ports map[string]string, defaultContainerPort string) map[string]string {
+	if len(ports) == 0 {
+		return map[string]string{defaultContainerPort: defaultContainerPort}
+	}
+
+	normalized := make(map[string]string, len(ports))
+	for internal, external := range ports {
+		// If the internal port matches the default, keep as-is
+		if internal == defaultContainerPort {
+			normalized[internal] = external
+			continue
+		}
+		// The user likely set both sides to the same host port (e.g. "8253":"8253").
+		// Remap so the container side uses the service's default port.
+		if internal == external {
+			normalized[defaultContainerPort] = external
+		} else {
+			// User explicitly set different internal/external — respect it
+			normalized[internal] = external
+		}
+	}
+
+	return normalized
+}
+
+// withHostArg injects a host bind flag (e.g. --host 0.0.0.0) into the extra
+// args string if it's not already present.
+// withVLLMToolCallArgs adds --enable-auto-tool-choice and --tool-call-parser
+// to vLLM extra args if not already present. The parser is inferred from the
+// model name so the right format is used for each model family.
+func withVLLMToolCallArgs(extraArgs, model string) string {
+	tokens := strings.Fields(extraArgs)
+	hasAutoTool := false
+	hasParser := false
+	for _, t := range tokens {
+		if t == "--enable-auto-tool-choice" {
+			hasAutoTool = true
+		}
+		if t == "--tool-call-parser" {
+			hasParser = true
+		}
+	}
+
+	if !hasAutoTool {
+		extraArgs = appendArg(extraArgs, "--enable-auto-tool-choice")
+	}
+	if !hasParser {
+		parser := inferToolCallParser(model)
+		extraArgs = appendArg(extraArgs, "--tool-call-parser "+parser)
+	}
+	return extraArgs
+}
+
+// inferToolCallParser returns the best vLLM --tool-call-parser value for a model.
+func inferToolCallParser(model string) string {
+	m := strings.ToLower(model)
+
+	switch {
+	case strings.Contains(m, "llama"):
+		return "llama3_json"
+	case strings.Contains(m, "mistral"), strings.Contains(m, "mixtral"):
+		return "mistral"
+	case strings.Contains(m, "jamba"):
+		return "jamba"
+	case strings.Contains(m, "internlm"):
+		return "internlm"
+	case strings.Contains(m, "granite"):
+		return "granite"
+	case strings.Contains(m, "qwen3-coder"), strings.Contains(m, "qwen3coder"):
+		return "qwen3_xml"
+	case strings.Contains(m, "qwen3.5"), strings.Contains(m, "qwen3_5"):
+		return "qwen3_coder"
+	case strings.Contains(m, "qwen"), strings.Contains(m, "hermes"):
+		return "hermes"
+	default:
+		// hermes is the most broadly compatible fallback
+		return "hermes"
+	}
+}
+
+func appendArg(extraArgs, arg string) string {
+	if strings.TrimSpace(extraArgs) == "" {
+		return arg
+	}
+	return extraArgs + " " + arg
+}
+
+func withHostArg(extraArgs, flag, value string) string {
+	tokens := strings.Fields(extraArgs)
+	for _, t := range tokens {
+		if t == flag {
+			return extraArgs // already present
+		}
+	}
+
+	hostArg := fmt.Sprintf("%s %s", flag, value)
+	if strings.TrimSpace(extraArgs) == "" {
+		return hostArg
+	}
+	return fmt.Sprintf("%s %s", extraArgs, hostArg)
+}
+
+// isComfyUIImage checks if the image is a ComfyUI image.
+func isComfyUIImage(image string) bool {
+	return strings.Contains(strings.ToLower(image), "comfyui") ||
+		strings.Contains(strings.ToLower(image), "comfy-ui")
 }
 
 func normalizeArch(arch string) string {
