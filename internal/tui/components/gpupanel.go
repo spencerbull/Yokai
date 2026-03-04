@@ -199,10 +199,3 @@ func GradientProgressBar(percent float64, width int, color lipgloss.Color) strin
 	return bar.String()
 }
 
-// padLine pads a line to the specified width with spaces.
-func padLine(line string, width int) string {
-	if len(line) >= width {
-		return line
-	}
-	return line + strings.Repeat(" ", width-len(line))
-}
