@@ -354,12 +354,13 @@ func (d *Dashboard) renderSparklines() string {
 		return ""
 	}
 
-	sparklineWidth := d.width - 20 // leave space for labels
-	if sparklineWidth < 20 {
-		sparklineWidth = 20
+	chartWidth := d.width - 6
+	if chartWidth < 20 {
+		chartWidth = 20
 	}
+	chartHeight := 6
 
-	var lines []string
+	var charts []string
 
 	for deviceID := range d.cpuHistory {
 		device := d.findDevice(deviceID)
@@ -367,26 +368,30 @@ func (d *Dashboard) renderSparklines() string {
 			continue
 		}
 
-		// CPU sparkline
+		// CPU streamline chart
 		if cpuVals, ok := d.cpuHistory[deviceID]; ok && len(cpuVals) > 0 {
-			cpu := components.NewSparkline(cpuVals, sparklineWidth, theme.Good)
-			cpuLine := fmt.Sprintf("%s CPU %s", device.Label, cpu.Render())
-			lines = append(lines, cpuLine)
+			label := fmt.Sprintf(" %s CPU", device.Label)
+			cpuTitle := theme.GoodStyle.Render(label)
+			cpu := components.NewStreamChart("CPU", cpuVals, chartWidth, chartHeight, theme.Good)
+			cpuPanel := theme.Panel(cpuTitle).Width(d.width - 2).Render(cpu.Render())
+			charts = append(charts, cpuPanel)
 		}
 
-		// RAM sparkline
+		// RAM streamline chart
 		if ramVals, ok := d.ramHistory[deviceID]; ok && len(ramVals) > 0 {
-			ram := components.NewSparkline(ramVals, sparklineWidth, theme.Warn)
-			ramLine := fmt.Sprintf("%s RAM %s", device.Label, ram.Render())
-			lines = append(lines, ramLine)
+			label := fmt.Sprintf(" %s RAM", device.Label)
+			ramTitle := theme.WarnStyle.Render(label)
+			ram := components.NewStreamChart("RAM", ramVals, chartWidth, chartHeight, theme.Accent)
+			ramPanel := theme.Panel(ramTitle).Width(d.width - 2).Render(ram.Render())
+			charts = append(charts, ramPanel)
 		}
 	}
 
-	if len(lines) == 0 {
+	if len(charts) == 0 {
 		return ""
 	}
 
-	return lipgloss.JoinVertical(lipgloss.Left, lines...)
+	return lipgloss.JoinVertical(lipgloss.Left, charts...)
 }
 
 func (d *Dashboard) renderServiceList() string {
