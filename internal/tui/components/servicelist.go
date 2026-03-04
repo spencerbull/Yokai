@@ -81,7 +81,7 @@ func (s ServiceList) Render() string {
 	// Rows
 	for i, svc := range s.Services {
 		svc.Selected = (i == s.Cursor)
-		lines = append(lines, s.renderRow(svc, widths))
+		lines = append(lines, s.renderRow(svc, widths, i))
 	}
 
 	return strings.Join(lines, "\n")
@@ -110,14 +110,19 @@ func (s ServiceList) columnWidths() []int {
 }
 
 func (s ServiceList) renderHeader(widths []int) string {
+	headerStyle := lipgloss.NewStyle().
+		Foreground(theme.TextMuted).
+		Bold(true).
+		Underline(true)
+
 	var parts []string
 	for i, col := range columns {
 		parts = append(parts, pad(col.header, widths[i]))
 	}
-	return theme.MutedStyle.Bold(true).Render(strings.Join(parts, " "))
+	return headerStyle.Render(strings.Join(parts, " "))
 }
 
-func (s ServiceList) renderRow(svc ServiceRow, widths []int) string {
+func (s ServiceList) renderRow(svc ServiceRow, widths []int, rowIdx int) string {
 	// Health indicator — use a fixed-width cell so alignment doesn't break
 	healthIcon := s.healthIndicator(svc)
 
@@ -134,6 +139,9 @@ func (s ServiceList) renderRow(svc ServiceRow, widths []int) string {
 
 	gpuStr := formatMem(svc.GPUMemMB)
 
+	// Status text with color
+	statusStr := s.statusText(svc)
+
 	cells := []string{
 		healthIcon,
 		truncate(svc.Name, widths[1]),
@@ -141,7 +149,7 @@ func (s ServiceList) renderRow(svc ServiceRow, widths []int) string {
 		truncate(svc.Device, widths[3]),
 		pad(portStr, widths[4]),
 		pad(gpuStr, widths[5]),
-		pad(svc.Uptime, widths[6]),
+		pad(statusStr, widths[6]),
 	}
 
 	// Pad each cell (except health icon which is special)
@@ -164,7 +172,36 @@ func (s ServiceList) renderRow(svc ServiceRow, widths []int) string {
 			Width(s.Width).
 			Render(row)
 	}
+
+	// Alternating row backgrounds for readability
+	if rowIdx%2 == 1 {
+		return lipgloss.NewStyle().
+			Background(lipgloss.Color("#1e1f2b")).
+			Foreground(theme.TextPrimary).
+			Width(s.Width).
+			Render(row)
+	}
 	return theme.PrimaryStyle.Render(row)
+}
+
+// statusText returns a short, color-coded status string.
+func (s ServiceList) statusText(svc ServiceRow) string {
+	h := svc.Health
+	if h == "" {
+		h = svc.Status
+	}
+	switch h {
+	case "healthy", "running":
+		return svc.Uptime
+	case "starting":
+		return "starting"
+	case "unhealthy", "error":
+		return "error"
+	case "stopped":
+		return "stopped"
+	default:
+		return svc.Uptime
+	}
 }
 
 func (s ServiceList) healthIndicator(svc ServiceRow) string {
