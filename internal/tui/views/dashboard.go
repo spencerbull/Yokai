@@ -204,29 +204,73 @@ func (d *Dashboard) View() string {
 	header := d.renderHeader()
 	sections = append(sections, header)
 
-	// Device cards
+	// Wide layout (>= 100 chars): btop-inspired grid
+	// Narrow layout (< 100 chars): single column stack
+	if d.width >= 100 {
+		sections = append(sections, d.renderGridLayout()...)
+	} else {
+		sections = append(sections, d.renderStackedLayout()...)
+	}
+
+	// Service list (always full width, bottom)
+	serviceList := d.renderServiceList()
+	sections = append(sections, serviceList)
+
+	return lipgloss.JoinVertical(lipgloss.Left, sections...)
+}
+
+// renderGridLayout renders btop-inspired side-by-side panels.
+func (d *Dashboard) renderGridLayout() []string {
+	var sections []string
+
+	// Top row: Device cards side-by-side
 	if len(d.devices) > 0 {
 		deviceCards := d.renderDeviceCards()
 		sections = append(sections, deviceCards)
 	}
 
-	// GPU panels
+	// Middle row: CPU/RAM charts (left) | GPU panels (right)
+	leftCol := d.renderSparklines()
+	rightCol := d.renderGPUPanels()
+
+	if leftCol != "" && rightCol != "" {
+		leftWidth := (d.width - 3) / 2
+		rightWidth := d.width - leftWidth - 3
+
+		leftStyled := lipgloss.NewStyle().Width(leftWidth).Render(leftCol)
+		rightStyled := lipgloss.NewStyle().Width(rightWidth).Render(rightCol)
+
+		middleRow := lipgloss.JoinHorizontal(lipgloss.Top, leftStyled, " ", rightStyled)
+		sections = append(sections, middleRow)
+	} else if leftCol != "" {
+		sections = append(sections, leftCol)
+	} else if rightCol != "" {
+		sections = append(sections, rightCol)
+	}
+
+	return sections
+}
+
+// renderStackedLayout renders single-column layout for narrow terminals.
+func (d *Dashboard) renderStackedLayout() []string {
+	var sections []string
+
+	if len(d.devices) > 0 {
+		deviceCards := d.renderDeviceCards()
+		sections = append(sections, deviceCards)
+	}
+
 	gpuPanels := d.renderGPUPanels()
 	if gpuPanels != "" {
 		sections = append(sections, gpuPanels)
 	}
 
-	// CPU/RAM sparklines
 	sparklines := d.renderSparklines()
 	if sparklines != "" {
 		sections = append(sections, sparklines)
 	}
 
-	// Service list
-	serviceList := d.renderServiceList()
-	sections = append(sections, serviceList)
-
-	return lipgloss.JoinVertical(lipgloss.Left, sections...)
+	return sections
 }
 
 func (d *Dashboard) renderError() string {
