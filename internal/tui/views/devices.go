@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spencerbull/yokai/internal/config"
 	sshpkg "github.com/spencerbull/yokai/internal/ssh"
+	"github.com/spencerbull/yokai/internal/tui/components"
 	"github.com/spencerbull/yokai/internal/tui/theme"
 )
 
@@ -67,12 +68,21 @@ func (dm *DeviceManager) Update(msg tea.Msg) (View, tea.Cmd) {
 	case connectionTestResult:
 		dm.testResults[msg.deviceID] = msg
 		delete(dm.testing, msg.deviceID)
+		if msg.err != nil {
+			return dm, ShowToast("Connection failed: "+msg.err.Error(), ToastError)
+		}
+		if msg.online {
+			return dm, ShowToast("Device online", ToastSuccess)
+		}
 		return dm, nil
 
 	case upgradeResultMsg:
 		delete(dm.upgrading, msg.deviceID)
 		dm.upgradeResults[msg.deviceID] = &msg
-		return dm, nil
+		if msg.err != nil {
+			return dm, ShowToast("Upgrade failed: "+msg.err.Error(), ToastError)
+		}
+		return dm, ShowToast("Agent upgraded successfully", ToastSuccess)
 
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -146,7 +156,11 @@ func (dm *DeviceManager) Update(msg tea.Msg) (View, tea.Cmd) {
 					return nil
 				}
 				msg := fmt.Sprintf("Remove device %q? This cannot be undone.", device.Label)
-				return dm, Navigate(NewConfirmView(msg, onConfirm, nil))
+				onConfirmWithToast := func() tea.Msg {
+					onConfirm()
+					return components.ShowToastMsg{Message: "Device removed", Level: ToastSuccess}
+				}
+				return dm, Navigate(NewConfirmView(msg, onConfirmWithToast, nil))
 			}
 		case "esc":
 			return dm, PopView()

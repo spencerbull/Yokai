@@ -2,9 +2,11 @@ package tui
 
 import (
 	"fmt"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	zone "github.com/lrstanley/bubblezone"
 	"github.com/spencerbull/yokai/internal/config"
 	"github.com/spencerbull/yokai/internal/tui/components"
@@ -32,6 +34,7 @@ type App struct {
 	quitting    bool
 	activeTab   int
 	showTabs    bool // show tab bar (hidden during onboarding)
+	toasts      components.ToastManager
 }
 
 // newApp creates the root app model.
@@ -39,6 +42,7 @@ func newApp(cfg *config.Config, version string) *App {
 	app := &App{
 		cfg:     cfg,
 		version: version,
+		toasts:  components.NewToastManager(),
 	}
 
 	// If no devices configured, start with onboarding; otherwise dashboard
@@ -92,6 +96,15 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		a.width = msg.Width
 		a.height = msg.Height
+	}
+
+	// Handle toast messages
+	if toastCmd := a.toasts.Update(msg); toastCmd != nil {
+		return a, toastCmd
+	}
+	if showMsg, ok := msg.(components.ShowToastMsg); ok {
+		cmd := a.toasts.Add(showMsg)
+		return a, cmd
 	}
 
 	// Check for navigation messages
@@ -201,7 +214,23 @@ func (a *App) View() string {
 	sections = append(sections, bar)
 
 	assembled := lipgloss.JoinVertical(lipgloss.Center, sections...)
-	return zone.Scan(lipgloss.Place(a.width, a.height, lipgloss.Center, lipgloss.Top, assembled))
+	output := lipgloss.Place(a.width, a.height, lipgloss.Center, lipgloss.Top, assembled)
+
+	// Overlay toasts in the top-right corner
+	if toastView := a.toasts.View(a.width); toastView != "" {
+		// Render toasts on top of the first lines of output
+		toastLines := strings.Split(toastView, "\n")
+		outputLines := strings.Split(output, "\n")
+		for i, tl := range toastLines {
+			if i < len(outputLines) {
+				// Overlay toast line (right-aligned) onto the output line
+				outputLines[i] = overlayRight(outputLines[i], tl, a.width)
+			}
+		}
+		output = strings.Join(outputLines, "\n")
+	}
+
+	return zone.Scan(output)
 }
 
 // navigate pushes current view onto stack and switches to the target.
@@ -268,6 +297,27 @@ func renderKeybindBar(binds []views.KeyBind, width int) string {
 		Padding(0, 1).
 		Width(width).
 		Render(line)
+}
+
+// overlayRight places the overlay string at the right edge of the base string,
+// respecting terminal width. Both strings may contain ANSI escape sequences.
+func overlayRight(base, overlay string, width int) string {
+	overlayW := ansi.StringWidth(overlay)
+	baseW := ansi.StringWidth(base)
+
+	if overlayW >= width {
+		return overlay
+	}
+
+	startCol := width - overlayW
+	if startCol > baseW {
+		// Pad base to reach the overlay position
+		return base + strings.Repeat(" ", startCol-baseW) + overlay
+	}
+
+	// Truncate base and append overlay
+	truncated := ansi.Truncate(base, startCol, "")
+	return truncated + overlay
 }
 
 // Run starts the TUI application.
