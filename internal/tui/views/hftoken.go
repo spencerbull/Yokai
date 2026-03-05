@@ -67,6 +67,9 @@ func (h *HFToken) Update(msg tea.Msg) (View, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		h.width = msg.Width
+		if h.width > theme.MaxContentWidth-2*theme.ContentPadding {
+			h.width = theme.MaxContentWidth - 2*theme.ContentPadding
+		}
 		h.height = msg.Height
 
 	case hfCheckMsg:

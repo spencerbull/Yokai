@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spencerbull/yokai/internal/config"
+	"github.com/spencerbull/yokai/internal/tui/components"
 	"github.com/spencerbull/yokai/internal/tui/theme"
 )
 
@@ -71,28 +72,40 @@ type Deploy struct {
 	deviceIdx int
 
 	// Step 3: image
-	imageTag string
+	imageTag    string
+	imageTyping bool // true = free-text input mode, false = picking from history
 
 	// Step 4: model
-	modelID string
+	modelID     string
+	modelTyping bool // true = free-text input mode, false = picking from history
 
 	// Step 5: config
 	port              string
 	extraArgs         string
 	activeConfigField int
 
+	// History (loaded from ~/.config/yokai/history.json)
+	history *config.History
+
 	// Deployment state
 	deployError string
+	spinner     components.LoadingSpinner
 	width       int
 	height      int
 }
 
 // NewDeploy creates the deploy wizard view.
 func NewDeploy(cfg *config.Config, version string) *Deploy {
+	h, err := config.LoadHistory()
+	if err != nil {
+		h = &config.History{}
+	}
+
 	return &Deploy{
 		cfg:     cfg,
 		version: version,
 		port:    "8000",
+		history: h,
 	}
 }
 
@@ -101,9 +114,24 @@ func (d *Deploy) Init() tea.Cmd {
 }
 
 func (d *Deploy) Update(msg tea.Msg) (View, tea.Cmd) {
+	// Forward spinner ticks when deploying
+	if d.currentStep == stepDeploying {
+		var spinnerCmd tea.Cmd
+		d.spinner, spinnerCmd = d.spinner.Update(msg)
+		if spinnerCmd != nil {
+			// Check for non-key messages (spinner ticks etc)
+			if _, ok := msg.(tea.KeyMsg); !ok {
+				return d, spinnerCmd
+			}
+		}
+	}
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		d.width = msg.Width
+		if d.width > theme.MaxContentWidth-2*theme.ContentPadding {
+			d.width = theme.MaxContentWidth - 2*theme.ContentPadding
+		}
 		d.height = msg.Height
 
 	case deployResultMsg:
@@ -111,6 +139,25 @@ func (d *Deploy) Update(msg tea.Msg) (View, tea.Cmd) {
 			d.deployError = msg.Error.Error()
 			d.currentStep = stepConfig
 		} else {
+			// Save container ID back to config so dashboard can match model
+			if msg.ContainerID != "" {
+				for i := range d.cfg.Services {
+					svc := &d.cfg.Services[i]
+					if svc.DeviceID == d.cfg.Devices[d.deviceIdx].ID &&
+						svc.Image == d.imageTag &&
+						svc.Model == d.modelID &&
+						svc.ContainerID == "" {
+						svc.ContainerID = msg.ContainerID
+						_ = config.Save(d.cfg)
+						break
+					}
+				}
+			}
+			// Save image and model to history for future deploys
+			d.history.AddImage(d.imageTag)
+			d.history.AddModel(d.modelID)
+			_ = config.SaveHistory(d.history)
+
 			// Success - pop back to dashboard
 			return d, PopView()
 		}
@@ -196,49 +243,164 @@ func (d *Deploy) updateDevice(msg tea.KeyMsg) (View, tea.Cmd) {
 	return d, nil
 }
 
-func (d *Deploy) updateImage(msg tea.KeyMsg) (View, tea.Cmd) {
-	switch msg.String() {
-	case "enter":
-		// Use default image for now
-		switch d.workload {
-		case wtVLLM:
-			d.imageTag = d.cfg.Preferences.DefaultVLLMImage
-		case wtLlamaCpp:
-			d.imageTag = d.cfg.Preferences.DefaultLlamaImage
-		case wtComfyUI:
-			d.imageTag = d.cfg.Preferences.DefaultComfyImage
+// imageOptions returns the list of images to pick from: history items + default.
+func (d *Deploy) imageOptions() []string {
+	defaultImg := ""
+	switch d.workload {
+	case wtVLLM:
+		defaultImg = d.cfg.Preferences.DefaultVLLMImage
+	case wtLlamaCpp:
+		defaultImg = d.cfg.Preferences.DefaultLlamaImage
+	case wtComfyUI:
+		defaultImg = d.cfg.Preferences.DefaultComfyImage
+	}
+
+	// Start with history, then append default if not already present
+	seen := make(map[string]bool)
+	var options []string
+	for _, img := range d.history.Images {
+		if !seen[img] {
+			options = append(options, img)
+			seen[img] = true
 		}
+	}
+	if defaultImg != "" && !seen[defaultImg] {
+		options = append(options, defaultImg)
+	}
+	return options
+}
+
+func (d *Deploy) updateImage(msg tea.KeyMsg) (View, tea.Cmd) {
+	options := d.imageOptions()
+
+	// If no history and no typing, start in typing mode
+	if len(options) == 0 {
+		d.imageTyping = true
+	}
+
+	if d.imageTyping {
+		switch msg.String() {
+		case "enter":
+			if d.imageTag == "" {
+				// Use default
+				switch d.workload {
+				case wtVLLM:
+					d.imageTag = d.cfg.Preferences.DefaultVLLMImage
+				case wtLlamaCpp:
+					d.imageTag = d.cfg.Preferences.DefaultLlamaImage
+				case wtComfyUI:
+					d.imageTag = d.cfg.Preferences.DefaultComfyImage
+				}
+			}
+			d.currentStep = stepModel
+			d.cursor = 0
+			d.imageTyping = false
+		case "backspace":
+			if len(d.imageTag) > 0 {
+				d.imageTag = d.imageTag[:len(d.imageTag)-1]
+			} else {
+				// Switch back to picker if there are options
+				if len(options) > 0 {
+					d.imageTyping = false
+				}
+			}
+		default:
+			s := msg.String()
+			if len(s) == 1 || (len(s) > 1 && !strings.HasPrefix(s, "ctrl+") && !strings.HasPrefix(s, "alt+")) {
+				d.imageTag += s
+			}
+		}
+		return d, nil
+	}
+
+	// Picker mode
+	switch msg.String() {
+	case "up", "k":
+		if d.cursor > 0 {
+			d.cursor--
+		}
+	case "down", "j":
+		if d.cursor < len(options) {
+			d.cursor++
+		}
+	case "enter":
+		if d.cursor >= len(options) {
+			// "Type custom" option selected
+			d.imageTyping = true
+			d.imageTag = ""
+			return d, nil
+		}
+		d.imageTag = options[d.cursor]
 		d.currentStep = stepModel
 		d.cursor = 0
-	case "backspace":
-		if len(d.imageTag) > 0 {
-			d.imageTag = d.imageTag[:len(d.imageTag)-1]
-		}
-	default:
-		s := msg.String()
-		if len(s) == 1 || (len(s) > 1 && !strings.HasPrefix(s, "ctrl+") && !strings.HasPrefix(s, "alt+")) {
-			d.imageTag += s
-		}
+	case "/":
+		// Switch to free-text typing
+		d.imageTyping = true
+		d.imageTag = ""
 	}
 	return d, nil
 }
 
 func (d *Deploy) updateModel(msg tea.KeyMsg) (View, tea.Cmd) {
+	if d.workload == wtComfyUI {
+		if msg.String() == "enter" {
+			d.modelID = ""
+			d.currentStep = stepConfig
+		}
+		return d, nil
+	}
+
+	models := d.history.Models
+
+	// If no history, start in typing mode
+	if len(models) == 0 {
+		d.modelTyping = true
+	}
+
+	if d.modelTyping {
+		switch msg.String() {
+		case "enter":
+			d.currentStep = stepConfig
+			d.cursor = 0
+			d.modelTyping = false
+		case "backspace":
+			if len(d.modelID) > 0 {
+				d.modelID = d.modelID[:len(d.modelID)-1]
+			} else if len(models) > 0 {
+				d.modelTyping = false
+			}
+		default:
+			s := msg.String()
+			if len(s) == 1 || (len(s) > 1 && !strings.HasPrefix(s, "ctrl+") && !strings.HasPrefix(s, "alt+")) {
+				d.modelID += s
+			}
+		}
+		return d, nil
+	}
+
+	// Picker mode
 	switch msg.String() {
+	case "up", "k":
+		if d.cursor > 0 {
+			d.cursor--
+		}
+	case "down", "j":
+		if d.cursor < len(models) {
+			d.cursor++
+		}
 	case "enter":
-		if d.workload == wtComfyUI {
-			d.modelID = "" // ComfyUI doesn't need a model
+		if d.cursor >= len(models) {
+			// "Type custom" option selected
+			d.modelTyping = true
+			d.modelID = ""
+			return d, nil
 		}
+		d.modelID = models[d.cursor]
 		d.currentStep = stepConfig
-	case "backspace":
-		if len(d.modelID) > 0 {
-			d.modelID = d.modelID[:len(d.modelID)-1]
-		}
-	default:
-		s := msg.String()
-		if len(s) == 1 || (len(s) > 1 && !strings.HasPrefix(s, "ctrl+") && !strings.HasPrefix(s, "alt+")) {
-			d.modelID += s
-		}
+		d.cursor = 0
+	case "/":
+		d.modelTyping = true
+		d.modelID = ""
 	}
 	return d, nil
 }
@@ -263,7 +425,8 @@ func (d *Deploy) updateConfig(msg tea.KeyMsg) (View, tea.Cmd) {
 		// Switch to deploying step and make API call
 		d.currentStep = stepDeploying
 		d.deployError = ""
-		return d, d.deployToAPI(svc)
+		d.spinner = components.NewLoadingSpinner("Deploying container...")
+		return d, tea.Batch(d.deployToAPI(svc), d.spinner.Init())
 	case "backspace":
 		switch d.activeConfigField {
 		case 0:
@@ -423,44 +586,23 @@ func (d *Deploy) View() string {
 
 	case stepImage:
 		body = theme.PrimaryStyle.Render("Docker image:") + "\n\n"
-		defaultImg := ""
-		switch d.workload {
-		case wtVLLM:
-			defaultImg = d.cfg.Preferences.DefaultVLLMImage
-		case wtLlamaCpp:
-			defaultImg = d.cfg.Preferences.DefaultLlamaImage
-		case wtComfyUI:
-			defaultImg = d.cfg.Preferences.DefaultComfyImage
-		}
-		if d.imageTag == "" {
-			body += theme.MutedStyle.Render("Default: "+defaultImg) + "\n"
-			body += theme.MutedStyle.Render("Press Enter to use default, or type a custom image") + "\n\n"
-		}
-		// Responsive width for input
-		inputWidth := 50
-		if d.width > 0 && d.width < 70 {
-			inputWidth = d.width - 20
-			if inputWidth < 30 {
-				inputWidth = 30
+		options := d.imageOptions()
+
+		if d.imageTyping || len(options) == 0 {
+			// Free-text input mode
+			defaultImg := ""
+			switch d.workload {
+			case wtVLLM:
+				defaultImg = d.cfg.Preferences.DefaultVLLMImage
+			case wtLlamaCpp:
+				defaultImg = d.cfg.Preferences.DefaultLlamaImage
+			case wtComfyUI:
+				defaultImg = d.cfg.Preferences.DefaultComfyImage
 			}
-		}
-
-		inputBox := lipgloss.NewStyle().
-			Border(lipgloss.NormalBorder()).
-			BorderForeground(theme.Accent).
-			Padding(0, 1).
-			Width(inputWidth).
-			Render(d.imageTag + "█")
-		body += inputBox
-
-	case stepModel:
-		if d.workload == wtComfyUI {
-			body = theme.PrimaryStyle.Render("ComfyUI does not require a model selection.") + "\n\n" +
-				theme.MutedStyle.Render("Press Enter to continue.")
-		} else {
-			body = theme.PrimaryStyle.Render("Model ID (HuggingFace):") + "\n\n"
-			body += theme.MutedStyle.Render("e.g. meta-llama/Llama-3.1-8B-Instruct") + "\n\n"
-			// Responsive width for input
+			if d.imageTag == "" {
+				body += theme.MutedStyle.Render("Default: "+defaultImg) + "\n"
+				body += theme.MutedStyle.Render("Press Enter to use default, or type a custom image") + "\n\n"
+			}
 			inputWidth := 50
 			if d.width > 0 && d.width < 70 {
 				inputWidth = d.width - 20
@@ -468,14 +610,89 @@ func (d *Deploy) View() string {
 					inputWidth = 30
 				}
 			}
-
 			inputBox := lipgloss.NewStyle().
 				Border(lipgloss.NormalBorder()).
 				BorderForeground(theme.Accent).
 				Padding(0, 1).
 				Width(inputWidth).
-				Render(d.modelID + "█")
+				Render(d.imageTag + "█")
 			body += inputBox
+			if len(options) > 0 {
+				body += "\n\n" + theme.MutedStyle.Render("Backspace to return to history")
+			}
+		} else {
+			// Picker mode — show history + default
+			body += theme.MutedStyle.Render("Recent images:") + "\n\n"
+			for i, opt := range options {
+				cursor := "  "
+				style := theme.PrimaryStyle
+				if i == d.cursor {
+					cursor = "> "
+					style = lipgloss.NewStyle().Foreground(theme.Accent).Bold(true)
+				}
+				body += cursor + style.Render(opt) + "\n"
+			}
+			// "Type custom" option at the end
+			cursor := "  "
+			style := theme.MutedStyle
+			if d.cursor == len(options) {
+				cursor = "> "
+				style = lipgloss.NewStyle().Foreground(theme.Accent).Bold(true)
+			}
+			body += cursor + style.Render("Type custom image...") + "\n"
+			body += "\n" + theme.MutedStyle.Render("/ to type custom")
+		}
+
+	case stepModel:
+		if d.workload == wtComfyUI {
+			body = theme.PrimaryStyle.Render("ComfyUI does not require a model selection.") + "\n\n" +
+				theme.MutedStyle.Render("Press Enter to continue.")
+		} else {
+			body = theme.PrimaryStyle.Render("Model ID (HuggingFace):") + "\n\n"
+			models := d.history.Models
+
+			if d.modelTyping || len(models) == 0 {
+				// Free-text input mode
+				body += theme.MutedStyle.Render("e.g. meta-llama/Llama-3.1-8B-Instruct") + "\n\n"
+				inputWidth := 50
+				if d.width > 0 && d.width < 70 {
+					inputWidth = d.width - 20
+					if inputWidth < 30 {
+						inputWidth = 30
+					}
+				}
+				inputBox := lipgloss.NewStyle().
+					Border(lipgloss.NormalBorder()).
+					BorderForeground(theme.Accent).
+					Padding(0, 1).
+					Width(inputWidth).
+					Render(d.modelID + "█")
+				body += inputBox
+				if len(models) > 0 {
+					body += "\n\n" + theme.MutedStyle.Render("Backspace to return to history")
+				}
+			} else {
+				// Picker mode — show history
+				body += theme.MutedStyle.Render("Recent models:") + "\n\n"
+				for i, m := range models {
+					cursor := "  "
+					style := theme.PrimaryStyle
+					if i == d.cursor {
+						cursor = "> "
+						style = lipgloss.NewStyle().Foreground(theme.Accent).Bold(true)
+					}
+					body += cursor + style.Render(m) + "\n"
+				}
+				// "Type custom" option at the end
+				cursor := "  "
+				style := theme.MutedStyle
+				if d.cursor == len(models) {
+					cursor = "> "
+					style = lipgloss.NewStyle().Foreground(theme.Accent).Bold(true)
+				}
+				body += cursor + style.Render("Type custom model...") + "\n"
+				body += "\n" + theme.MutedStyle.Render("/ to type custom")
+			}
 		}
 
 	case stepConfig:
@@ -503,9 +720,8 @@ func (d *Deploy) View() string {
 
 	case stepDeploying:
 		body = theme.PrimaryStyle.Render("Deploying service...") + "\n\n"
-		body += theme.MutedStyle.Render("●○○") + " Connecting to daemon\n"
-		body += theme.MutedStyle.Render("○●○") + " Starting container\n"
-		body += theme.MutedStyle.Render("○○●") + " Verifying deployment\n\n"
+		body += d.spinner.View() + "\n\n"
+		body += theme.MutedStyle.Render("This may take several minutes for large images.") + "\n"
 		body += theme.MutedStyle.Render("Press Esc to cancel")
 	}
 

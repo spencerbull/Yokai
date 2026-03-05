@@ -3,6 +3,8 @@ package views
 import (
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -19,24 +21,33 @@ type connectionTestResult struct {
 	err      error
 }
 
+type upgradeResultMsg struct {
+	deviceID string
+	err      error
+}
+
 // DeviceManager shows all registered devices with management options.
 type DeviceManager struct {
-	cfg         *config.Config
-	version     string
-	cursor      int
-	testResults map[string]connectionTestResult
-	testing     map[string]bool
-	width       int
-	height      int
+	cfg            *config.Config
+	version        string
+	cursor         int
+	testResults    map[string]connectionTestResult
+	testing        map[string]bool
+	upgrading      map[string]bool
+	upgradeResults map[string]*upgradeResultMsg
+	width          int
+	height         int
 }
 
 // NewDeviceManager creates the device manager view.
 func NewDeviceManager(cfg *config.Config, version string) *DeviceManager {
 	return &DeviceManager{
-		cfg:         cfg,
-		version:     version,
-		testResults: make(map[string]connectionTestResult),
-		testing:     make(map[string]bool),
+		cfg:            cfg,
+		version:        version,
+		testResults:    make(map[string]connectionTestResult),
+		testing:        make(map[string]bool),
+		upgrading:      make(map[string]bool),
+		upgradeResults: make(map[string]*upgradeResultMsg),
 	}
 }
 
@@ -48,12 +59,21 @@ func (dm *DeviceManager) Update(msg tea.Msg) (View, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		dm.width = msg.Width
+		if dm.width > theme.MaxContentWidth-2*theme.ContentPadding {
+			dm.width = theme.MaxContentWidth - 2*theme.ContentPadding
+		}
 		dm.height = msg.Height
 
 	case connectionTestResult:
 		dm.testResults[msg.deviceID] = msg
 		delete(dm.testing, msg.deviceID)
 		return dm, nil
+
+	case upgradeResultMsg:
+		delete(dm.upgrading, msg.deviceID)
+		dm.upgradeResults[msg.deviceID] = &msg
+		return dm, nil
+
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "up", "k":
@@ -78,6 +98,29 @@ func (dm *DeviceManager) Update(msg tea.Msg) (View, tea.Cmd) {
 					dm.testing[device.ID] = true
 					return dm, dm.testConnection(device)
 				}
+			}
+		case "u":
+			// Upgrade selected device agent
+			if len(dm.cfg.Devices) > 0 && dm.cursor < len(dm.cfg.Devices) {
+				device := dm.cfg.Devices[dm.cursor]
+				if !dm.upgrading[device.ID] {
+					dm.upgrading[device.ID] = true
+					delete(dm.upgradeResults, device.ID)
+					return dm, dm.upgradeDevice(device)
+				}
+			}
+		case "U":
+			// Upgrade ALL device agents
+			var cmds []tea.Cmd
+			for _, device := range dm.cfg.Devices {
+				if !dm.upgrading[device.ID] {
+					dm.upgrading[device.ID] = true
+					delete(dm.upgradeResults, device.ID)
+					cmds = append(cmds, dm.upgradeDevice(device))
+				}
+			}
+			if len(cmds) > 0 {
+				return dm, tea.Batch(cmds...)
 			}
 		case "x":
 			if len(dm.cfg.Devices) > 0 {
@@ -146,6 +189,40 @@ func (dm *DeviceManager) testConnection(device config.Device) tea.Cmd {
 	}
 }
 
+func (dm *DeviceManager) upgradeDevice(device config.Device) tea.Cmd {
+	return func() tea.Msg {
+		// Resolve the local binary path
+		localBinary, err := os.Executable()
+		if err != nil {
+			return upgradeResultMsg{deviceID: device.ID, err: fmt.Errorf("cannot find local binary: %w", err)}
+		}
+		localBinary, err = filepath.EvalSymlinks(localBinary)
+		if err != nil {
+			return upgradeResultMsg{deviceID: device.ID, err: fmt.Errorf("resolving binary path: %w", err)}
+		}
+
+		// Connect via SSH
+		client, err := sshpkg.Connect(sshpkg.ClientConfig{
+			Host:    device.Host,
+			User:    device.SSHUser,
+			KeyPath: device.SSHKey,
+		})
+		if err != nil {
+			return upgradeResultMsg{deviceID: device.ID, err: fmt.Errorf("SSH: %w", err)}
+		}
+		defer func() {
+			_ = client.Close()
+		}()
+
+		// Run the upgrade
+		if err := sshpkg.UpgradeAgent(client, localBinary, device.AgentPort); err != nil {
+			return upgradeResultMsg{deviceID: device.ID, err: err}
+		}
+
+		return upgradeResultMsg{deviceID: device.ID}
+	}
+}
+
 func (dm *DeviceManager) View() string {
 	title := lipgloss.NewStyle().Foreground(theme.Accent).Bold(true).Render("Device Manager")
 
@@ -179,10 +256,16 @@ func (dm *DeviceManager) View() string {
 			style = lipgloss.NewStyle().Foreground(theme.Accent).Bold(true)
 		}
 
-		// Determine status based on test results
+		// Determine status based on test/upgrade results
 		var status string
-		if dm.testing[dev.ID] {
+		if dm.upgrading[dev.ID] {
 			status = theme.StatusLoading()
+		} else if dm.testing[dev.ID] {
+			status = theme.StatusLoading()
+		} else if ur, exists := dm.upgradeResults[dev.ID]; exists && ur.err == nil {
+			status = theme.GoodStyle.Render("↑") // upgraded
+		} else if ur, exists := dm.upgradeResults[dev.ID]; exists && ur.err != nil {
+			status = theme.CritStyle.Render("!")
 		} else if result, exists := dm.testResults[dev.ID]; exists {
 			if result.err != nil {
 				status = theme.StatusOffline()
@@ -236,6 +319,17 @@ func (dm *DeviceManager) View() string {
 		} else {
 			detail += "\n" + theme.MutedStyle.Render("  Status: Not tested (press 't')")
 		}
+
+		// Show upgrade status
+		if dm.upgrading[dev.ID] {
+			detail += "\n" + theme.WarnStyle.Render("  Upgrading agent...")
+		} else if ur, exists := dm.upgradeResults[dev.ID]; exists {
+			if ur.err != nil {
+				detail += "\n" + theme.CritStyle.Render("  Upgrade failed: "+ur.err.Error())
+			} else {
+				detail += "\n" + theme.GoodStyle.Render("  Agent upgraded successfully")
+			}
+		}
 	}
 
 	// Responsive width for main view
@@ -263,6 +357,8 @@ func (dm *DeviceManager) KeyBinds() []KeyBind {
 		{Key: "a", Help: "add device"},
 		{Key: "e", Help: "edit"},
 		{Key: "t", Help: "test connection"},
+		{Key: "u", Help: "upgrade agent"},
+		{Key: "U", Help: "upgrade all"},
 		{Key: "x", Help: "remove"},
 		{Key: "Esc", Help: "back"},
 	}

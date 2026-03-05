@@ -211,6 +211,40 @@ func (tp *TunnelPool) keepAlive(t *tunnel, ctx context.Context) {
 	}
 }
 
+// UpdateConfig replaces the config pointer (caller holds Daemon.mu).
+func (tp *TunnelPool) UpdateConfig(cfg *config.Config) {
+	tp.mu.Lock()
+	defer tp.mu.Unlock()
+	tp.cfg = cfg
+}
+
+// ConnectDevice starts a tunnel for a single device (public wrapper around connectDevice).
+func (tp *TunnelPool) ConnectDevice(device config.Device) {
+	go tp.connectDevice(device)
+}
+
+// CloseDevice closes the tunnel for a single device.
+func (tp *TunnelPool) CloseDevice(deviceID string) {
+	tp.mu.Lock()
+	defer tp.mu.Unlock()
+
+	t, exists := tp.tunnels[deviceID]
+	if !exists {
+		return
+	}
+
+	if t.cancel != nil {
+		t.cancel()
+	}
+	if t.listener != nil {
+		_ = t.listener.Close()
+	}
+	if t.sshClient != nil {
+		_ = t.sshClient.Close()
+	}
+	delete(tp.tunnels, deviceID)
+}
+
 // CloseAll closes all SSH connections and TCP listeners
 func (tp *TunnelPool) CloseAll() {
 	tp.mu.Lock()

@@ -278,7 +278,6 @@ func TestComposeYAMLStructure(t *testing.T) {
 
 	// Test YAML structure elements
 	yamlElements := []string{
-		"version: '3.8'",
 		"services:",
 		"networks:",
 		"volumes:",

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/spencerbull/yokai/internal/tui/theme"
 )
 
@@ -37,6 +38,9 @@ func NewDeviceCard(label, host string, online bool, gpuType string, gpuCount int
 
 // Render returns the rendered string representation of the device card.
 func (d DeviceCard) Render() string {
+	if d.Width <= 0 {
+		return ""
+	}
 	if d.Width < 20 {
 		return strings.Repeat(" ", d.Width)
 	}
@@ -61,9 +65,9 @@ func (d DeviceCard) Render() string {
 	titlePart := fmt.Sprintf("%s (%s)", d.Label, d.Host)
 	statusPart := fmt.Sprintf("%s %s", statusDot, statusText)
 
-	// Calculate padding for title line
-	titleLen := len(titlePart)
-	statusLen := len(statusPart)
+	// Calculate padding for title line (use visual width for styled text)
+	titleLen := lipgloss.Width(titlePart)
+	statusLen := lipgloss.Width(statusPart)
 	dashesNeeded := contentWidth - titleLen - statusLen - 6 // -6 for spaces and dash separators
 	if dashesNeeded < 0 {
 		dashesNeeded = 0
@@ -80,12 +84,13 @@ func (d DeviceCard) Render() string {
 		title = titlePart + " " + statusPart
 	}
 
-	// Truncate title if it's still too long
-	if len(title) > contentWidth {
-		if contentWidth > 3 {
-			title = title[:contentWidth-3] + "..."
-		} else {
-			title = title[:contentWidth]
+	// Truncate title if it's still too long (use visual width for styled content)
+	if lipgloss.Width(title) > contentWidth {
+		// Rebuild with shorter titlePart to avoid cutting ANSI codes
+		maxTitleLen := contentWidth - statusLen - 4
+		if maxTitleLen > 3 {
+			titlePart = titlePart[:min(len(titlePart), maxTitleLen-3)] + "..."
+			title = titlePart + " " + statusPart
 		}
 	}
 
@@ -156,17 +161,13 @@ func (d DeviceCard) Render() string {
 	return panel
 }
 
-// truncateAndPad truncates a line if too long and pads to the specified width.
+// truncateAndPad pads a line to the specified visual width.
+// It uses lipgloss.Width to correctly handle strings containing
+// ANSI escape codes (styled text) and multi-byte Unicode characters.
 func (d DeviceCard) truncateAndPad(line string, width int) string {
-	if len(line) > width {
-		if width > 3 {
-			line = line[:width-3] + "..."
-		} else {
-			line = line[:width]
-		}
-	}
-	if len(line) < width {
-		line = line + strings.Repeat(" ", width-len(line))
+	visualWidth := lipgloss.Width(line)
+	if visualWidth < width {
+		line = line + strings.Repeat(" ", width-visualWidth)
 	}
 	return line
 }

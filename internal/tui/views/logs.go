@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spencerbull/yokai/internal/config"
+	"github.com/spencerbull/yokai/internal/tui/components"
 	"github.com/spencerbull/yokai/internal/tui/theme"
 )
 
@@ -36,6 +37,8 @@ type LogViewer struct {
 	height      int
 	cancel      context.CancelFunc
 	sseError    error
+	spinner     components.LoadingSpinner
+	connected   bool
 }
 
 // NewLogViewer creates the log viewer view.
@@ -49,16 +52,31 @@ func NewLogViewer(cfg *config.Config, version string, serviceID string, deviceID
 		follow:      true,
 		height:      20,
 		lines:       []string{},
+		spinner:     components.NewPulseSpinner("Connecting to log stream..."),
+		connected:   false,
 	}
 }
 
 func (l *LogViewer) Init() tea.Cmd {
-	return l.startSSE()
+	return tea.Batch(l.startSSE(), l.spinner.Init())
 }
 
 func (l *LogViewer) Update(msg tea.Msg) (View, tea.Cmd) {
+	// Forward spinner ticks when not connected
+	if !l.connected {
+		var spinnerCmd tea.Cmd
+		l.spinner, spinnerCmd = l.spinner.Update(msg)
+		if spinnerCmd != nil {
+			if _, ok := msg.(tea.KeyMsg); !ok {
+				return l, spinnerCmd
+			}
+		}
+	}
+
 	switch msg := msg.(type) {
 	case logLineMsg:
+		l.connected = true
+		l.spinner.Active = false
 		l.lines = append(l.lines, msg.Line)
 		if l.follow {
 			l.offset = len(l.lines) - l.height
@@ -135,10 +153,10 @@ func (l *LogViewer) View() string {
 		title += "\n" + theme.WarnStyle.Render("SSE Error: "+l.sseError.Error())
 	}
 
-	// Show placeholder if no logs yet
-	if len(l.lines) == 0 {
+	// Show spinner if not connected yet
+	if !l.connected && len(l.lines) == 0 {
 		l.lines = []string{
-			"Connecting to log stream...",
+			l.spinner.View(),
 			fmt.Sprintf("Device: %s, Container: %s", l.deviceID, l.containerID),
 		}
 	}
