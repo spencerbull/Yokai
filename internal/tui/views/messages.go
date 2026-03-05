@@ -1,6 +1,11 @@
 package views
 
-import tea "github.com/charmbracelet/bubbletea"
+import (
+	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/spencerbull/yokai/internal/tui/components"
+)
 
 // View is the interface all TUI screens implement.
 type View interface {
@@ -47,5 +52,34 @@ func NavigateReplace(target View) tea.Cmd {
 func PopView() tea.Cmd {
 	return func() tea.Msg {
 		return PopViewMsg{}
+	}
+}
+
+// Toast level aliases so views don't need to import components directly.
+const (
+	ToastInfo    = components.ToastInfo
+	ToastSuccess = components.ToastSuccess
+	ToastWarn    = components.ToastWarn
+	ToastError   = components.ToastError
+)
+
+// ShowToast returns a tea.Cmd that shows a toast notification.
+func ShowToast(message string, level components.ToastLevel) tea.Cmd {
+	return func() tea.Msg {
+		return components.ShowToastMsg{
+			Message: message,
+			Level:   level,
+		}
+	}
+}
+
+// ShowToastWithDuration returns a tea.Cmd that shows a toast with a custom duration.
+func ShowToastWithDuration(message string, level components.ToastLevel, duration time.Duration) tea.Cmd {
+	return func() tea.Msg {
+		return components.ShowToastMsg{
+			Message:  message,
+			Level:    level,
+			Duration: duration,
+		}
 	}
 }
