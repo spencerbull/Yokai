@@ -8,6 +8,10 @@ type View interface {
 	Update(msg tea.Msg) (View, tea.Cmd)
 	View() string
 	KeyBinds() []KeyBind
+	// InputActive returns true when the view has a focused text input
+	// that should receive raw key events (tab, digits, arrows, etc.)
+	// without the app-level tab bar intercepting them.
+	InputActive() bool
 }
 
 // KeyBind represents a keybind shown in the bottom bar.

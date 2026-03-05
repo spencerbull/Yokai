@@ -166,6 +166,8 @@ func (l *LocalNet) View() string {
 	return lipgloss.NewStyle().Padding(2, 0).Render(card)
 }
 
+func (l *LocalNet) InputActive() bool { return false }
+
 func (l *LocalNet) KeyBinds() []KeyBind {
 	return []KeyBind{
 		{Key: "↑/↓", Help: "navigate"},

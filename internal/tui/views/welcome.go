@@ -141,6 +141,8 @@ func (w *Welcome) View() string {
 	return centered
 }
 
+func (w *Welcome) InputActive() bool { return false }
+
 func (w *Welcome) KeyBinds() []KeyBind {
 	return []KeyBind{
 		{Key: "↑/↓", Help: "navigate"},

@@ -2,10 +2,13 @@ package views
 
 import (
 	"fmt"
+	"strconv"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spencerbull/yokai/internal/config"
+	"github.com/spencerbull/yokai/internal/tui/components"
 	"github.com/spencerbull/yokai/internal/tui/theme"
 )
 
@@ -13,8 +16,10 @@ type sshField int
 
 const (
 	fieldUser sshField = iota
+	fieldSSHPort
 	fieldAuthMethod
 	fieldKeyPath
+	fieldKeyPassphrase
 	fieldPassword
 )
 
@@ -30,19 +35,21 @@ var authMethodLabels = []string{"SSH Agent", "Key File", "Password"}
 
 // SSHCreds collects SSH credentials for connecting to a device.
 type SSHCreds struct {
-	cfg            *config.Config
-	version        string
-	host           string
-	label          string // human-friendly name (e.g. Tailscale hostname)
-	connectionType string
-	user           string
-	auth           authMethod
-	keyPath        string
-	password       string
-	activeField    sshField
-	err            string
-	width          int
-	height         int
+	cfg                *config.Config
+	version            string
+	host               string
+	label              string // human-friendly name (e.g. Tailscale hostname)
+	connectionType     string
+	userInput          textinput.Model
+	sshPortInput       textinput.Model
+	keyPathInput       textinput.Model
+	keyPassphraseInput textinput.Model
+	passwordInput      textinput.Model
+	auth               authMethod
+	activeField        sshField
+	err                string
+	width              int
+	height             int
 }
 
 // NewSSHCreds creates the SSH credentials view.
@@ -52,23 +59,40 @@ func NewSSHCreds(cfg *config.Config, version string, host, label, connType strin
 	if label == "" {
 		label = host
 	}
-	return &SSHCreds{
+
+	s := &SSHCreds{
 		cfg:            cfg,
 		version:        version,
 		host:           host,
 		label:          label,
 		connectionType: connType,
-		user:           "root",
-		keyPath:        "~/.ssh/id_ed25519",
+		auth:           authSSHAgent,
 		activeField:    fieldUser,
 	}
+
+	// Initialize text inputs using components helpers
+	s.userInput = components.NewTextField("username")
+	s.userInput.SetValue("root")
+	s.userInput.Focus()
+
+	s.sshPortInput = components.NewPortField("22")
+
+	s.keyPathInput = components.NewTextField("~/.ssh/id_ed25519")
+	s.keyPathInput.SetValue("~/.ssh/id_ed25519")
+
+	s.keyPassphraseInput = components.NewPasswordField("key passphrase (optional)")
+	s.passwordInput = components.NewPasswordField("password")
+
+	return s
 }
 
 func (s *SSHCreds) Init() tea.Cmd {
-	return nil
+	return textinput.Blink
 }
 
 func (s *SSHCreds) Update(msg tea.Msg) (View, tea.Cmd) {
+	var cmds []tea.Cmd
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		s.width = msg.Width
@@ -79,10 +103,12 @@ func (s *SSHCreds) Update(msg tea.Msg) (View, tea.Cmd) {
 
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "tab":
+		case "tab", "down":
 			s.nextField()
-		case "shift+tab":
+			return s, nil
+		case "shift+tab", "up":
 			s.prevField()
+			return s, nil
 		case "enter":
 			if s.activeField == fieldAuthMethod {
 				s.nextField()
@@ -94,23 +120,68 @@ func (s *SSHCreds) Update(msg tea.Msg) (View, tea.Cmd) {
 		case "left":
 			if s.activeField == fieldAuthMethod && s.auth > 0 {
 				s.auth--
+				return s, nil
 			}
 		case "right":
 			if s.activeField == fieldAuthMethod && s.auth < authPassword {
 				s.auth++
+				return s, nil
 			}
-		case "backspace":
-			s.handleBackspace()
-		default:
-			s.handleChar(msg.String())
+		}
+
+		// Forward key message to focused text input
+		var cmd tea.Cmd
+		switch s.activeField {
+		case fieldUser:
+			s.userInput, cmd = s.userInput.Update(msg)
+		case fieldSSHPort:
+			s.sshPortInput, cmd = s.sshPortInput.Update(msg)
+		case fieldKeyPath:
+			s.keyPathInput, cmd = s.keyPathInput.Update(msg)
+		case fieldKeyPassphrase:
+			s.keyPassphraseInput, cmd = s.keyPassphraseInput.Update(msg)
+		case fieldPassword:
+			s.passwordInput, cmd = s.passwordInput.Update(msg)
+		}
+		if cmd != nil {
+			cmds = append(cmds, cmd)
 		}
 	}
-	return s, nil
+
+	// Update all text inputs with non-key messages
+	if _, isKey := msg.(tea.KeyMsg); !isKey {
+		var cmd tea.Cmd
+		s.userInput, cmd = s.userInput.Update(msg)
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		s.sshPortInput, cmd = s.sshPortInput.Update(msg)
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		s.keyPathInput, cmd = s.keyPathInput.Update(msg)
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		s.keyPassphraseInput, cmd = s.keyPassphraseInput.Update(msg)
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		s.passwordInput, cmd = s.passwordInput.Update(msg)
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+
+	return s, tea.Batch(cmds...)
 }
 
 func (s *SSHCreds) nextField() {
+	s.blurCurrentField()
 	switch s.activeField {
 	case fieldUser:
+		s.activeField = fieldSSHPort
+	case fieldSSHPort:
 		s.activeField = fieldAuthMethod
 	case fieldAuthMethod:
 		switch s.auth {
@@ -118,69 +189,86 @@ func (s *SSHCreds) nextField() {
 			s.activeField = fieldKeyPath
 		case authPassword:
 			s.activeField = fieldPassword
+		default:
+			// SSH Agent — no extra fields, stay on auth method
 		}
-	case fieldKeyPath, fieldPassword:
+	case fieldKeyPath:
+		s.activeField = fieldKeyPassphrase
+	case fieldKeyPassphrase, fieldPassword:
 		// At the end
 	}
+	s.focusCurrentField()
 }
 
 func (s *SSHCreds) prevField() {
+	s.blurCurrentField()
 	switch s.activeField {
-	case fieldAuthMethod:
+	case fieldSSHPort:
 		s.activeField = fieldUser
+	case fieldAuthMethod:
+		s.activeField = fieldSSHPort
 	case fieldKeyPath, fieldPassword:
 		s.activeField = fieldAuthMethod
+	case fieldKeyPassphrase:
+		s.activeField = fieldKeyPath
+	}
+	s.focusCurrentField()
+}
+
+func (s *SSHCreds) focusCurrentField() {
+	switch s.activeField {
+	case fieldUser:
+		s.userInput.Focus()
+	case fieldSSHPort:
+		s.sshPortInput.Focus()
+	case fieldKeyPath:
+		s.keyPathInput.Focus()
+	case fieldKeyPassphrase:
+		s.keyPassphraseInput.Focus()
+	case fieldPassword:
+		s.passwordInput.Focus()
 	}
 }
 
-func (s *SSHCreds) handleBackspace() {
-	switch s.activeField {
-	case fieldUser:
-		if len(s.user) > 0 {
-			s.user = s.user[:len(s.user)-1]
-		}
-	case fieldKeyPath:
-		if len(s.keyPath) > 0 {
-			s.keyPath = s.keyPath[:len(s.keyPath)-1]
-		}
-	case fieldPassword:
-		if len(s.password) > 0 {
-			s.password = s.password[:len(s.password)-1]
-		}
-	}
-}
-
-func (s *SSHCreds) handleChar(ch string) {
-	if len(ch) != 1 {
-		return
-	}
-	switch s.activeField {
-	case fieldUser:
-		s.user += ch
-	case fieldKeyPath:
-		s.keyPath += ch
-	case fieldPassword:
-		s.password += ch
-	}
+func (s *SSHCreds) blurCurrentField() {
+	s.userInput.Blur()
+	s.sshPortInput.Blur()
+	s.keyPathInput.Blur()
+	s.keyPassphraseInput.Blur()
+	s.passwordInput.Blur()
 }
 
 func (s *SSHCreds) submit() tea.Cmd {
-	if s.user == "" {
+	if s.userInput.Value() == "" {
 		s.err = "Username is required"
 		return nil
 	}
+
+	// Validate SSH port
+	sshPort := 22
+	if s.sshPortInput.Value() != "" {
+		p, err := strconv.Atoi(s.sshPortInput.Value())
+		if err != nil || p < 1 || p > 65535 {
+			s.err = "SSH port must be between 1-65535"
+			return nil
+		}
+		sshPort = p
+	}
+
 	s.err = ""
 
 	sshKey := ""
+	passphrase := ""
 	password := ""
 	switch s.auth {
 	case authKeyFile:
-		sshKey = s.keyPath
+		sshKey = s.keyPathInput.Value()
+		passphrase = s.keyPassphraseInput.Value()
 	case authPassword:
-		password = s.password
+		password = s.passwordInput.Value()
 	}
 
-	return Navigate(NewBootstrap(s.cfg, s.version, s.host, s.label, s.connectionType, s.user, sshKey, password))
+	return Navigate(NewBootstrap(s.cfg, s.version, s.host, s.label, s.connectionType, s.userInput.Value(), sshKey, passphrase, password, sshPort))
 }
 
 func (s *SSHCreds) View() string {
@@ -191,9 +279,29 @@ func (s *SSHCreds) View() string {
 	title := lipgloss.NewStyle().Foreground(theme.Accent).Bold(true).
 		Render(fmt.Sprintf("SSH Credentials — %s", displayName))
 
+	// Responsive width for text inputs
+	inputWidth := 40
+	if s.width > 0 && s.width < 65 {
+		inputWidth = s.width - 25 // Account for padding and borders
+		if inputWidth < 25 {
+			inputWidth = 25
+		}
+	}
+
+	// Set width for all text inputs
+	s.userInput.Width = inputWidth
+	s.sshPortInput.Width = inputWidth
+	s.keyPathInput.Width = inputWidth
+	s.keyPassphraseInput.Width = inputWidth
+	s.passwordInput.Width = inputWidth
+
 	// User field
 	userLabel := s.fieldLabel("Username:", fieldUser)
-	userInput := s.fieldInput(s.user, fieldUser)
+	userInput := s.userInput.View()
+
+	// SSH Port field
+	portLabel := s.fieldLabel("SSH Port:", fieldSSHPort)
+	portInput := s.sshPortInput.View()
 
 	// Auth method selector
 	authLabel := s.fieldLabel("Auth Method:", fieldAuthMethod)
@@ -214,15 +322,16 @@ func (s *SSHCreds) View() string {
 	switch s.auth {
 	case authKeyFile:
 		keyLabel := s.fieldLabel("Key Path:", fieldKeyPath)
-		keyInput := s.fieldInput(s.keyPath, fieldKeyPath)
+		keyInput := s.keyPathInput.View()
 		extraField = keyLabel + "\n" + keyInput
+		// Passphrase field (optional)
+		ppLabel := s.fieldLabel("Key Passphrase:", fieldKeyPassphrase)
+		ppInput := s.keyPassphraseInput.View()
+		ppHint := theme.MutedStyle.Render("  Leave empty if key is not encrypted")
+		extraField += "\n" + ppLabel + "\n" + ppInput + "\n" + ppHint
 	case authPassword:
 		pwLabel := s.fieldLabel("Password:", fieldPassword)
-		masked := ""
-		for range s.password {
-			masked += "•"
-		}
-		pwInput := s.fieldInput(masked, fieldPassword)
+		pwInput := s.passwordInput.View()
 		extraField = pwLabel + "\n" + pwInput
 	case authSSHAgent:
 		extraField = theme.MutedStyle.Render("  Will use SSH_AUTH_SOCK agent")
@@ -233,8 +342,9 @@ func (s *SSHCreds) View() string {
 		errLine = "\n" + theme.CritStyle.Render(s.err)
 	}
 
-	body := fmt.Sprintf("%s\n%s\n\n%s\n%s\n\n%s%s",
+	body := fmt.Sprintf("%s\n%s\n%s\n%s\n\n%s\n%s\n\n%s%s",
 		userLabel, userInput,
+		portLabel, portInput,
 		authLabel, authChoices,
 		extraField, errLine)
 
@@ -265,38 +375,15 @@ func (s *SSHCreds) fieldLabel(label string, field sshField) string {
 	return style.Render(label)
 }
 
-func (s *SSHCreds) fieldInput(value string, field sshField) string {
-	borderColor := theme.Border
-	if s.activeField == field {
-		borderColor = theme.Accent
-	}
-	display := value
-	if s.activeField == field {
-		display += "█"
-	}
-
-	// Responsive width
-	inputWidth := 40
-	if s.width > 0 && s.width < 65 {
-		inputWidth = s.width - 25 // Account for padding and borders
-		if inputWidth < 25 {
-			inputWidth = 25
-		}
-	}
-
-	return lipgloss.NewStyle().
-		Border(lipgloss.NormalBorder()).
-		BorderForeground(borderColor).
-		Padding(0, 1).
-		Width(inputWidth).
-		Render(display)
-}
-
 func (s *SSHCreds) KeyBinds() []KeyBind {
 	return []KeyBind{
-		{Key: "Tab", Help: "next field"},
+		{Key: "Tab/↕", Help: "next field"},
 		{Key: "←/→", Help: "auth method"},
 		{Key: "Enter", Help: "connect"},
 		{Key: "Esc", Help: "back"},
 	}
+}
+
+func (s *SSHCreds) InputActive() bool {
+	return true
 }

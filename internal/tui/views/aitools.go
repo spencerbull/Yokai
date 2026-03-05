@@ -388,6 +388,8 @@ func (a *AITools) View() string {
 	return lipgloss.NewStyle().Padding(1, 0).Render(card)
 }
 
+func (a *AITools) InputActive() bool { return false }
+
 func (a *AITools) KeyBinds() []KeyBind {
 	return []KeyBind{
 		{Key: "j/k", Help: "navigate"},

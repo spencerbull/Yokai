@@ -35,6 +35,10 @@ func (m *mockView) KeyBinds() []KeyBind {
 	}
 }
 
+func (m *mockView) InputActive() bool {
+	return false
+}
+
 func TestNavigateCmd(t *testing.T) {
 	t.Parallel()
 

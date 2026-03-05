@@ -232,6 +232,8 @@ func (t *TailscaleView) View() string {
 	return lipgloss.NewStyle().Padding(2, 0).Render(card)
 }
 
+func (t *TailscaleView) InputActive() bool { return false }
+
 func (t *TailscaleView) KeyBinds() []KeyBind {
 	switch t.state {
 	case tsPeerList:
