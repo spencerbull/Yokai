@@ -109,6 +109,18 @@ func (dm *DeviceManager) Update(msg tea.Msg) (View, tea.Cmd) {
 					return dm, dm.upgradeDevice(device)
 				}
 			}
+		case "T":
+			// Test ALL device connections
+			var cmds []tea.Cmd
+			for _, device := range dm.cfg.Devices {
+				if !dm.testing[device.ID] {
+					dm.testing[device.ID] = true
+					cmds = append(cmds, dm.testConnection(device))
+				}
+			}
+			if len(cmds) > 0 {
+				return dm, tea.Batch(cmds...)
+			}
 		case "U":
 			// Upgrade ALL device agents
 			var cmds []tea.Cmd
@@ -360,6 +372,7 @@ func (dm *DeviceManager) KeyBinds() []KeyBind {
 		{Key: "a", Help: "add device"},
 		{Key: "e", Help: "edit"},
 		{Key: "t", Help: "test connection"},
+		{Key: "T", Help: "test all"},
 		{Key: "u", Help: "upgrade agent"},
 		{Key: "U", Help: "upgrade all"},
 		{Key: "x", Help: "remove"},
