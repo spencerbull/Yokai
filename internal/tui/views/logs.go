@@ -39,6 +39,7 @@ type LogViewer struct {
 	sseError    error
 	spinner     components.LoadingSpinner
 	connected   bool
+	logCh       chan string
 }
 
 // NewLogViewer creates the log viewer view.
@@ -84,7 +85,7 @@ func (l *LogViewer) Update(msg tea.Msg) (View, tea.Cmd) {
 				l.offset = 0
 			}
 		}
-		return l, nil
+		return l, l.waitForNextLine()
 
 	case logErrorMsg:
 		l.sseError = msg.Error
@@ -207,8 +208,25 @@ func (l *LogViewer) KeyBinds() []KeyBind {
 	}
 }
 
+// waitForNextLine returns a tea.Cmd that blocks until the next line arrives on the channel.
+func (l *LogViewer) waitForNextLine() tea.Cmd {
+	ch := l.logCh
+	if ch == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		line, ok := <-ch
+		if !ok {
+			return logErrorMsg{Error: fmt.Errorf("log stream closed")}
+		}
+		return logLineMsg{Line: line}
+	}
+}
+
 // startSSE starts a goroutine to read logs via SSE.
 func (l *LogViewer) startSSE() tea.Cmd {
+	l.logCh = make(chan string, 64)
+
 	return func() tea.Msg {
 		ctx, cancel := context.WithCancel(context.Background())
 		l.cancel = cancel
@@ -231,12 +249,9 @@ func (l *LogViewer) startSSE() tea.Cmd {
 			return logErrorMsg{Error: fmt.Errorf("SSE request failed: %w", err)}
 		}
 
-		// Note: In a real implementation, we'd need a way to send messages
-		// back to the UI from this goroutine. For now, we'll add some initial log lines.
 		go func() {
-			defer func() {
-				_ = resp.Body.Close() // Best-effort close of SSE response body.
-			}()
+			defer resp.Body.Close()
+			defer close(l.logCh)
 			defer cancel()
 
 			scanner := bufio.NewScanner(resp.Body)
@@ -245,15 +260,20 @@ func (l *LogViewer) startSSE() tea.Cmd {
 
 				// Parse SSE format (lines starting with "data: ")
 				if strings.HasPrefix(line, "data: ") {
-					logData := line[6:] // Remove "data: " prefix
-					// In a complete implementation, we'd send logData back to the UI
-					// For now, this establishes the SSE connection pattern
-					_ = logData
+					logData := line[6:]
+					select {
+					case l.logCh <- logData:
+					case <-ctx.Done():
+						return
+					}
 				}
 			}
 
 			if err := scanner.Err(); err != nil && ctx.Err() == nil {
-				_ = err // TODO: plumb async scanner errors back into the UI message loop.
+				select {
+				case l.logCh <- fmt.Sprintf("[error] scanner: %v", err):
+				case <-ctx.Done():
+				}
 			}
 		}()
 
