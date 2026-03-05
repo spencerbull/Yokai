@@ -4,6 +4,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"log"
+	"net/http"
 	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -31,6 +33,7 @@ type Bootstrap struct {
 	cfg            *config.Config
 	version        string
 	host           string
+	label          string // human-friendly device name
 	connectionType string
 	sshUser        string
 	sshKey         string
@@ -52,11 +55,16 @@ type bootstrapProgressMsg struct {
 }
 
 // NewBootstrap creates the bootstrap view.
-func NewBootstrap(cfg *config.Config, version string, host, connType, user, keyPath, password string) *Bootstrap {
+// label is a human-friendly name for the device (e.g. Tailscale hostname).
+func NewBootstrap(cfg *config.Config, version string, host, label, connType, user, keyPath, password string) *Bootstrap {
+	if label == "" {
+		label = host
+	}
 	return &Bootstrap{
 		cfg:            cfg,
 		version:        version,
 		host:           host,
+		label:          label,
 		connectionType: connType,
 		sshUser:        user,
 		sshKey:         keyPath,
@@ -146,7 +154,7 @@ func (b *Bootstrap) runMonitoringDeploy() tea.Cmd {
 			AgentHost:      b.host,
 			AgentPort:      7474,
 			PrometheusPort: 9090,
-			GrafanaPort:    3000,
+			GrafanaPort:    3001,
 			HasNvidiaGPU:   b.preflight != nil && b.preflight.GPUDetected,
 		}
 
@@ -176,8 +184,14 @@ EOF`, tmpDir, prometheusYAML)
 			return bootstrapProgressMsg{step: bsFailed, err: fmt.Errorf("writing prometheus config: %w", err)}
 		}
 
+		// Create directories referenced by compose volume mounts
+		mkdirCmd := fmt.Sprintf("mkdir -p %s/grafana/provisioning %s/grafana/dashboards", tmpDir, tmpDir)
+		if _, err := client.Exec(mkdirCmd); err != nil {
+			return bootstrapProgressMsg{step: bsFailed, err: fmt.Errorf("creating grafana dirs: %w", err)}
+		}
+
 		// Start monitoring stack
-		deployCmd := fmt.Sprintf("cd %s && docker compose up -d", tmpDir)
+		deployCmd := fmt.Sprintf("cd %s && docker compose up -d 2>&1", tmpDir)
 		if _, err := client.Exec(deployCmd); err != nil {
 			return bootstrapProgressMsg{step: bsFailed, err: fmt.Errorf("starting monitoring stack: %w", err)}
 		}
@@ -190,6 +204,9 @@ func (b *Bootstrap) Update(msg tea.Msg) (View, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		b.width = msg.Width
+		if b.width > theme.MaxContentWidth-2*theme.ContentPadding {
+			b.width = theme.MaxContentWidth - 2*theme.ContentPadding
+		}
 		b.height = msg.Height
 
 	case bootstrapProgressMsg:
@@ -214,7 +231,7 @@ func (b *Bootstrap) Update(msg tea.Msg) (View, tea.Cmd) {
 			// Add device to config
 			device := config.Device{
 				ID:             b.host,
-				Label:          b.host,
+				Label:          b.label,
 				Host:           b.host,
 				SSHUser:        b.sshUser,
 				SSHKey:         b.sshKey,
@@ -227,6 +244,18 @@ func (b *Bootstrap) Update(msg tea.Msg) (View, tea.Cmd) {
 			}
 			b.cfg.AddDevice(device)
 			_ = config.Save(b.cfg)
+
+			// Tell the daemon to hot-reload config so it picks up the new device
+			daemonAddr := b.cfg.Daemon.Listen
+			if daemonAddr == "" {
+				daemonAddr = "127.0.0.1:7473"
+			}
+			resp, err := http.Post("http://"+daemonAddr+"/reload", "application/json", nil)
+			if err != nil {
+				log.Printf("daemon reload failed: %v", err)
+			} else {
+				_ = resp.Body.Close()
+			}
 		}
 
 	case tea.KeyMsg:
@@ -262,8 +291,12 @@ func (b *Bootstrap) Update(msg tea.Msg) (View, tea.Cmd) {
 }
 
 func (b *Bootstrap) View() string {
+	displayName := b.label
+	if b.label != b.host {
+		displayName = fmt.Sprintf("%s (%s)", b.label, b.host)
+	}
 	title := lipgloss.NewStyle().Foreground(theme.Accent).Bold(true).
-		Render(fmt.Sprintf("Bootstrap — %s", b.host))
+		Render(fmt.Sprintf("Bootstrap — %s", displayName))
 
 	// Step indicators
 	var steps string

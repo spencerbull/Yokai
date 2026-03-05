@@ -203,6 +203,8 @@ func mergeContainerMetrics(metricContainers []ContainerMetrics, dockerContainers
 			}
 			metricContainers[idx].Status = container.Status
 			metricContainers[idx].Image = container.Image
+			metricContainers[idx].Uptime = container.Uptime
+			metricContainers[idx].Ports = container.Ports
 			continue
 		}
 
@@ -211,6 +213,8 @@ func mergeContainerMetrics(metricContainers []ContainerMetrics, dockerContainers
 			Name:   container.Name,
 			Image:  container.Image,
 			Status: container.Status,
+			Uptime: container.Uptime,
+			Ports:  container.Ports,
 		})
 
 		if id != "" {
@@ -218,6 +222,13 @@ func mergeContainerMetrics(metricContainers []ContainerMetrics, dockerContainers
 		}
 		if container.Name != "" {
 			nameIndex[container.Name] = len(metricContainers) - 1
+		}
+	}
+
+	// Probe health for running containers with exposed ports
+	for i := range metricContainers {
+		if metricContainers[i].Status == "running" && len(metricContainers[i].Ports) > 0 {
+			metricContainers[i].Health = probeContainerHealth(metricContainers[i].Ports, metricContainers[i].Image)
 		}
 	}
 

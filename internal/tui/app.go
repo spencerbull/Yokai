@@ -5,8 +5,20 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	zone "github.com/lrstanley/bubblezone"
 	"github.com/spencerbull/yokai/internal/config"
+	"github.com/spencerbull/yokai/internal/tui/components"
+	"github.com/spencerbull/yokai/internal/tui/theme"
 	"github.com/spencerbull/yokai/internal/tui/views"
+)
+
+// tabIndex constants for the main navigation tabs.
+const (
+	tabDashboard = 0
+	tabDevices   = 1
+	tabDeploy    = 2
+	tabLogs      = 3
+	tabSettings  = 4
 )
 
 // App is the root Bubbletea model.
@@ -18,6 +30,8 @@ type App struct {
 	width       int
 	height      int
 	quitting    bool
+	activeTab   int
+	showTabs    bool // show tab bar (hidden during onboarding)
 }
 
 // newApp creates the root app model.
@@ -30,8 +44,10 @@ func newApp(cfg *config.Config, version string) *App {
 	// If no devices configured, start with onboarding; otherwise dashboard
 	if cfg.HasDevices() {
 		app.currentView = views.NewDashboard(cfg, version)
+		app.showTabs = true
 	} else {
 		app.currentView = views.NewWelcome(cfg, version)
+		app.showTabs = false
 	}
 
 	return app
@@ -48,6 +64,27 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c":
 			a.quitting = true
 			return a, tea.Quit
+		}
+
+		// Tab bar navigation (only when tabs are shown and view stack is empty)
+		if a.showTabs && len(a.viewStack) == 0 {
+			if cmd := a.handleTabKey(msg.String()); cmd != nil {
+				return a, cmd
+			}
+		}
+
+	case tea.MouseMsg:
+		// Handle tab bar clicks
+		if a.showTabs && len(a.viewStack) == 0 && msg.Action == tea.MouseActionRelease {
+			tabs := components.DefaultTabs()
+			for i, tab := range tabs {
+				if zone.Get(tab.Label).InBounds(msg) {
+					if i != a.activeTab {
+						return a, a.switchToTab(i)
+					}
+					break
+				}
+			}
 		}
 
 	case tea.WindowSizeMsg:
@@ -69,6 +106,67 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return a, cmd
 }
 
+// handleTabKey processes tab-switching key presses.
+// Returns a command if a tab switch occurred, nil otherwise.
+func (a *App) handleTabKey(key string) tea.Cmd {
+	targetTab := -1
+
+	switch key {
+	case "tab":
+		targetTab = (a.activeTab + 1) % 5
+	case "shift+tab":
+		targetTab = (a.activeTab + 4) % 5
+	case "1":
+		targetTab = tabDashboard
+	case "2":
+		targetTab = tabDevices
+	case "3":
+		targetTab = tabDeploy
+	case "4":
+		// Logs needs a container context, skip direct tab
+		return nil
+	case "5":
+		targetTab = tabSettings
+	}
+
+	if targetTab < 0 || targetTab == a.activeTab {
+		return nil
+	}
+
+	return a.switchToTab(targetTab)
+}
+
+// switchToTab creates the view for the given tab index and switches to it.
+func (a *App) switchToTab(tab int) tea.Cmd {
+	var target views.View
+
+	switch tab {
+	case tabDashboard:
+		target = views.NewDashboard(a.cfg, a.version)
+	case tabDevices:
+		target = views.NewDeviceManager(a.cfg, a.version)
+	case tabDeploy:
+		target = views.NewDeploy(a.cfg, a.version)
+	case tabSettings:
+		target = views.NewAITools(a.cfg, a.version)
+	default:
+		return nil
+	}
+
+	a.activeTab = tab
+	a.currentView = target
+	a.viewStack = nil // Clear stack on tab switch
+
+	// Forward current window size so the new view can lay out correctly
+	// before the next terminal-driven WindowSizeMsg arrives.
+	if a.width > 0 {
+		sized, _ := a.currentView.Update(tea.WindowSizeMsg{Width: a.width, Height: a.height})
+		a.currentView = sized
+	}
+
+	return a.currentView.Init()
+}
+
 func (a *App) View() string {
 	if a.quitting {
 		return ""
@@ -77,13 +175,31 @@ func (a *App) View() string {
 		return "Loading..."
 	}
 
+	// Calculate the content width capped at MaxContentWidth
+	contentWidth := a.width
+	if contentWidth > theme.MaxContentWidth {
+		contentWidth = theme.MaxContentWidth
+	}
+
+	var sections []string
+
+	// Tab bar (shown when tabs are active)
+	if a.showTabs {
+		tabBar := components.NewTabBar(components.DefaultTabs(), a.activeTab, contentWidth)
+		sections = append(sections, tabBar.Render())
+	}
+
+	// Main content
 	content := a.currentView.View()
+	sections = append(sections, content)
 
-	// Render keybind bar at the bottom
+	// Keybind bar at the bottom
 	keybinds := a.currentView.KeyBinds()
-	bar := renderKeybindBar(keybinds, a.width)
+	bar := renderKeybindBar(keybinds, contentWidth)
+	sections = append(sections, bar)
 
-	return lipgloss.JoinVertical(lipgloss.Left, content, bar)
+	assembled := lipgloss.JoinVertical(lipgloss.Center, sections...)
+	return zone.Scan(lipgloss.Place(a.width, a.height, lipgloss.Center, lipgloss.Top, assembled))
 }
 
 // navigate pushes current view onto stack and switches to the target.
@@ -94,18 +210,33 @@ func (a *App) navigate(msg views.NavigateMsg) (tea.Model, tea.Cmd) {
 		a.viewStack = append(a.viewStack, a.currentView)
 		a.currentView = msg.Target
 	}
+
+	// Forward current window size so the new view renders at the right width.
+	if a.width > 0 {
+		sized, _ := a.currentView.Update(tea.WindowSizeMsg{Width: a.width, Height: a.height})
+		a.currentView = sized
+	}
+
 	cmd := a.currentView.Init()
 	return a, cmd
 }
 
-// popView restores the previous view from the stack.
+// popView restores the previous view from the stack and re-initializes it
+// so polling loops (e.g., the dashboard's metrics ticker) resume immediately.
 func (a *App) popView() (tea.Model, tea.Cmd) {
 	if len(a.viewStack) == 0 {
 		return a, nil
 	}
 	a.currentView = a.viewStack[len(a.viewStack)-1]
 	a.viewStack = a.viewStack[:len(a.viewStack)-1]
-	return a, nil
+
+	// Refresh window size in case terminal was resized while another view was active.
+	if a.width > 0 {
+		sized, _ := a.currentView.Update(tea.WindowSizeMsg{Width: a.width, Height: a.height})
+		a.currentView = sized
+	}
+
+	return a, a.currentView.Init()
 }
 
 func renderKeybindBar(binds []views.KeyBind, width int) string {
@@ -144,8 +275,9 @@ func Run(version string) error {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
+	zone.NewGlobal()
 	app := newApp(cfg, version)
-	p := tea.NewProgram(app, tea.WithAltScreen())
+	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	_, err = p.Run()
 	return err
 }

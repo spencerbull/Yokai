@@ -27,8 +27,11 @@ func NewSparkline(values []float64, width int, color lipgloss.Color) Sparkline {
 
 // Render returns the rendered string representation of the sparkline.
 func (s Sparkline) Render() string {
-	if len(s.Values) == 0 || s.Width <= 0 {
-		return strings.Repeat(" ", s.Width)
+	if s.Width <= 0 || len(s.Values) == 0 {
+		if s.Width > 0 {
+			return strings.Repeat(" ", s.Width)
+		}
+		return ""
 	}
 
 	// Use block characters for a single-row sparkline

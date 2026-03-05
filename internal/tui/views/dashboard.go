@@ -9,6 +9,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	zone "github.com/lrstanley/bubblezone"
 	"github.com/spencerbull/yokai/internal/config"
 	"github.com/spencerbull/yokai/internal/tui/components"
 	"github.com/spencerbull/yokai/internal/tui/theme"
@@ -35,6 +36,7 @@ type Dashboard struct {
 	// Sparkline data - maintain 60 samples for 2-minute history
 	cpuHistory map[string][]float64 // keyed by device ID
 	ramHistory map[string][]float64
+	gpuHistory map[string][]float64 // keyed by "deviceID-gpuIndex"
 	maxSamples int
 }
 
@@ -82,15 +84,16 @@ type GPUData struct {
 }
 
 type ContainerData struct {
-	ID            string  `json:"id"`
-	Name          string  `json:"name"`
-	Image         string  `json:"image"`
-	Status        string  `json:"status"`
-	CPUPercent    float64 `json:"cpu_percent"`
-	MemUsedMB     int64   `json:"memory_used_mb"`
-	GPUMemMB      int64   `json:"gpu_memory_mb"`
-	UptimeSeconds int64   `json:"uptime_seconds"`
-	Port          int     `json:"port"`
+	ID            string            `json:"id"`
+	Name          string            `json:"name"`
+	Image         string            `json:"image"`
+	Status        string            `json:"status"`
+	CPUPercent    float64           `json:"cpu_percent"`
+	MemUsedMB     int64             `json:"memory_used_mb"`
+	GPUMemMB      int64             `json:"gpu_memory_mb"`
+	UptimeSeconds int64             `json:"uptime_seconds"`
+	Ports         map[string]string `json:"ports"`
+	Health        string            `json:"health"`
 }
 
 type DashboardDevice struct {
@@ -114,6 +117,7 @@ func NewDashboard(cfg *config.Config, version string) *Dashboard {
 		devices:    []DashboardDevice{},
 		cpuHistory: make(map[string][]float64),
 		ramHistory: make(map[string][]float64),
+		gpuHistory: make(map[string][]float64),
 		maxSamples: 60, // 60 samples * 2s = 2 minutes of history
 	}
 }
@@ -126,6 +130,9 @@ func (d *Dashboard) Update(msg tea.Msg) (View, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		d.width = msg.Width
+		if d.width > theme.MaxContentWidth-2*theme.ContentPadding {
+			d.width = theme.MaxContentWidth - 2*theme.ContentPadding
+		}
 		d.height = msg.Height
 
 	case MetricsMsg:
@@ -153,6 +160,17 @@ func (d *Dashboard) Update(msg tea.Msg) (View, tea.Cmd) {
 
 	case tickMsg:
 		return d, tea.Batch(d.pollMetrics(), d.pollDevices())
+
+	case tea.MouseMsg:
+		if msg.Action == tea.MouseActionRelease {
+			// Check if a service row was clicked
+			for i := range d.serviceContainers {
+				if zone.Get(components.ServiceRowZoneID(i)).InBounds(msg) {
+					d.selectedService = i
+					break
+				}
+			}
+		}
 
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -197,35 +215,87 @@ func (d *Dashboard) View() string {
 		return d.renderError()
 	}
 
+	// Guard: if we haven't received a WindowSizeMsg yet, use a sensible default.
+	if d.width == 0 {
+		d.width = theme.MaxContentWidth - 2*theme.ContentPadding
+	}
+
 	var sections []string
 
 	// Header
 	header := d.renderHeader()
 	sections = append(sections, header)
 
-	// Device cards
+	// Wide layout (>= 100 chars): btop-inspired grid
+	// Narrow layout (< 100 chars): single column stack
+	if d.width >= 100 {
+		sections = append(sections, d.renderGridLayout()...)
+	} else {
+		sections = append(sections, d.renderStackedLayout()...)
+	}
+
+	// Service list (always full width, bottom)
+	serviceList := d.renderServiceList()
+	sections = append(sections, serviceList)
+
+	// Use Left alignment so the outer lipgloss.Place() in app.go handles centering.
+	// Wrap at d.width so the assembled block has the correct width for centering.
+	content := lipgloss.JoinVertical(lipgloss.Left, sections...)
+	return lipgloss.NewStyle().Width(d.width).Render(content)
+}
+
+// renderGridLayout renders btop-inspired side-by-side panels.
+func (d *Dashboard) renderGridLayout() []string {
+	var sections []string
+
+	// Top row: Device cards side-by-side
 	if len(d.devices) > 0 {
 		deviceCards := d.renderDeviceCards()
 		sections = append(sections, deviceCards)
 	}
 
-	// GPU panels
+	// Middle row: CPU/RAM charts (left) | GPU panels (right)
+	leftWidth := (d.width - 3) / 2
+	rightWidth := d.width - leftWidth - 3
+
+	leftCol := d.renderSparklines2(leftWidth)
+	rightCol := d.renderGPUPanels2(rightWidth)
+
+	if leftCol != "" && rightCol != "" {
+		leftStyled := lipgloss.NewStyle().Width(leftWidth).Render(leftCol)
+		rightStyled := lipgloss.NewStyle().Width(rightWidth).Render(rightCol)
+
+		middleRow := lipgloss.JoinHorizontal(lipgloss.Top, leftStyled, " ", rightStyled)
+		sections = append(sections, middleRow)
+	} else if leftCol != "" {
+		sections = append(sections, leftCol)
+	} else if rightCol != "" {
+		sections = append(sections, rightCol)
+	}
+
+	return sections
+}
+
+// renderStackedLayout renders single-column layout for narrow terminals.
+func (d *Dashboard) renderStackedLayout() []string {
+	var sections []string
+
+	if len(d.devices) > 0 {
+		deviceCards := d.renderDeviceCards()
+		sections = append(sections, deviceCards)
+	}
+
 	gpuPanels := d.renderGPUPanels()
 	if gpuPanels != "" {
 		sections = append(sections, gpuPanels)
 	}
 
-	// CPU/RAM sparklines
 	sparklines := d.renderSparklines()
 	if sparklines != "" {
 		sections = append(sections, sparklines)
 	}
 
-	// Service list
-	serviceList := d.renderServiceList()
-	sections = append(sections, serviceList)
-
-	return lipgloss.JoinVertical(lipgloss.Left, sections...)
+	return sections
 }
 
 func (d *Dashboard) renderError() string {
@@ -270,6 +340,9 @@ func (d *Dashboard) renderDeviceCards() string {
 	} else {
 		cardWidth = d.width - 4
 	}
+	if cardWidth < 20 {
+		cardWidth = 20
+	}
 
 	for i, device := range d.devices {
 		card := components.NewDeviceCard(
@@ -305,14 +378,23 @@ func (d *Dashboard) renderDeviceCards() string {
 }
 
 func (d *Dashboard) renderGPUPanels() string {
+	return d.renderGPUPanels2(d.width)
+}
+
+func (d *Dashboard) renderGPUPanels2(availableWidth int) string {
 	if len(d.metrics) == 0 {
 		return ""
 	}
 
 	var panels []string
-	panelWidth := d.width - 4
+	panelWidth := availableWidth - 2
 	if panelWidth < 40 {
 		panelWidth = 40
+	}
+
+	chartWidth := panelWidth - 4
+	if chartWidth < 20 {
+		chartWidth = 20
 	}
 
 	for deviceID, metrics := range d.metrics {
@@ -335,6 +417,16 @@ func (d *Dashboard) renderGPUPanels() string {
 				panelWidth,
 			)
 			panels = append(panels, panel.Render())
+
+			// GPU utilization history chart
+			historyKey := fmt.Sprintf("%s-%d", deviceID, gpu.Index)
+			if gpuVals, ok := d.gpuHistory[historyKey]; ok && len(gpuVals) > 0 {
+				label := fmt.Sprintf(" GPU %d Util %d%%", gpu.Index, gpu.UtilPercent)
+				gpuTitle := lipgloss.NewStyle().Foreground(theme.Accent).Render(label)
+				gpuChart := components.NewStreamChart("GPU Util", gpuVals, chartWidth, 6, theme.Accent)
+				chartPanel := theme.RenderPanel(gpuTitle, gpuChart.Render(), panelWidth)
+				panels = append(panels, chartPanel)
+			}
 		}
 	}
 
@@ -346,16 +438,24 @@ func (d *Dashboard) renderGPUPanels() string {
 }
 
 func (d *Dashboard) renderSparklines() string {
+	return d.renderSparklines2(d.width)
+}
+
+func (d *Dashboard) renderSparklines2(availableWidth int) string {
 	if len(d.cpuHistory) == 0 && len(d.ramHistory) == 0 {
 		return ""
 	}
 
-	sparklineWidth := d.width - 20 // leave space for labels
-	if sparklineWidth < 20 {
-		sparklineWidth = 20
+	// Panel border + padding takes 4 chars (2 border + 2 padding),
+	// then the chart Y-axis labels take ~6 chars
+	panelWidth := availableWidth - 2
+	chartWidth := panelWidth - 4 // inner content after border+padding
+	if chartWidth < 20 {
+		chartWidth = 20
 	}
+	chartHeight := 6
 
-	var lines []string
+	var charts []string
 
 	for deviceID := range d.cpuHistory {
 		device := d.findDevice(deviceID)
@@ -363,26 +463,30 @@ func (d *Dashboard) renderSparklines() string {
 			continue
 		}
 
-		// CPU sparkline
+		// CPU streamline chart
 		if cpuVals, ok := d.cpuHistory[deviceID]; ok && len(cpuVals) > 0 {
-			cpu := components.NewSparkline(cpuVals, sparklineWidth, theme.Good)
-			cpuLine := fmt.Sprintf("%s CPU %s", device.Label, cpu.Render())
-			lines = append(lines, cpuLine)
+			label := fmt.Sprintf(" %s CPU %.0f%%", device.Label, cpuVals[len(cpuVals)-1])
+			cpuTitle := theme.GoodStyle.Render(label)
+			cpu := components.NewStreamChart("CPU", cpuVals, chartWidth, chartHeight, theme.Good)
+			cpuPanel := theme.RenderPanel(cpuTitle, cpu.Render(), panelWidth)
+			charts = append(charts, cpuPanel)
 		}
 
-		// RAM sparkline
+		// RAM streamline chart
 		if ramVals, ok := d.ramHistory[deviceID]; ok && len(ramVals) > 0 {
-			ram := components.NewSparkline(ramVals, sparklineWidth, theme.Warn)
-			ramLine := fmt.Sprintf("%s RAM %s", device.Label, ram.Render())
-			lines = append(lines, ramLine)
+			label := fmt.Sprintf(" %s RAM %.0f%%", device.Label, ramVals[len(ramVals)-1])
+			ramTitle := theme.WarnStyle.Render(label)
+			ram := components.NewStreamChart("RAM", ramVals, chartWidth, chartHeight, theme.Accent)
+			ramPanel := theme.RenderPanel(ramTitle, ram.Render(), panelWidth)
+			charts = append(charts, ramPanel)
 		}
 	}
 
-	if len(lines) == 0 {
+	if len(charts) == 0 {
 		return ""
 	}
 
-	return lipgloss.JoinVertical(lipgloss.Left, lines...)
+	return lipgloss.JoinVertical(lipgloss.Left, charts...)
 }
 
 func (d *Dashboard) renderServiceList() string {
@@ -394,7 +498,7 @@ func (d *Dashboard) renderServiceList() string {
 	title := theme.TitleStyle.Render("Services")
 	content := serviceList.Render()
 
-	return theme.Panel(title).Width(d.width - 2).Render(content)
+	return theme.RenderPanel(title, content, d.width)
 }
 
 func (d *Dashboard) buildServiceRows() []components.ServiceRow {
@@ -407,16 +511,25 @@ func (d *Dashboard) buildServiceRows() []components.ServiceRow {
 			continue
 		}
 
+		deviceLabel := device.Label
+		if deviceLabel == "" {
+			deviceLabel = device.ID
+		}
+
 		for _, container := range metrics.Containers {
-			// Map container to service type - this is a simple heuristic
 			serviceType := d.inferServiceType(container.Name)
 
+			// Strip the "yokai-" prefix for cleaner display
+			displayName := strings.TrimPrefix(container.Name, "yokai-")
+
 			row := components.ServiceRow{
-				Name:       container.Name,
+				Name:       displayName,
 				Type:       serviceType,
-				Model:      d.getServiceModel(container.ID),
+				Model:      d.getServiceModel(container),
 				Status:     container.Status,
-				Port:       container.Port,
+				Health:     container.Health,
+				Device:     deviceLabel,
+				Port:       extractExternalPort(container.Ports),
 				CPUPercent: container.CPUPercent,
 				MemUsedMB:  container.MemUsedMB,
 				GPUMemMB:   container.GPUMemMB,
@@ -489,6 +602,18 @@ func (d *Dashboard) updateSparklineData() {
 		d.ramHistory[deviceID] = append(d.ramHistory[deviceID], metrics.RAM.Percent)
 		if len(d.ramHistory[deviceID]) > d.maxSamples {
 			d.ramHistory[deviceID] = d.ramHistory[deviceID][1:]
+		}
+
+		// Update GPU history
+		for _, gpu := range metrics.GPUs {
+			key := fmt.Sprintf("%s-%d", deviceID, gpu.Index)
+			if _, ok := d.gpuHistory[key]; !ok {
+				d.gpuHistory[key] = make([]float64, 0, d.maxSamples)
+			}
+			d.gpuHistory[key] = append(d.gpuHistory[key], float64(gpu.UtilPercent))
+			if len(d.gpuHistory[key]) > d.maxSamples {
+				d.gpuHistory[key] = d.gpuHistory[key][1:]
+			}
 		}
 	}
 }
@@ -591,14 +716,43 @@ func (d *Dashboard) inferServiceType(containerName string) string {
 	return "unknown"
 }
 
-func (d *Dashboard) getServiceModel(containerID string) string {
-	// Try to find model from config by matching container ID
+func (d *Dashboard) getServiceModel(container ContainerData) string {
+	// Try matching by container ID first
 	for _, service := range d.cfg.Services {
-		if service.ContainerID == containerID {
-			return service.Model
+		if service.ContainerID != "" && service.ContainerID == container.ID {
+			if service.Model != "" {
+				return service.Model
+			}
 		}
 	}
-	return "unknown"
+
+	// Fall back to matching by name. The container name is "yokai-<service-id>"
+	// and the config service ID matches the suffix.
+	containerName := strings.TrimPrefix(container.Name, "yokai-")
+	for _, service := range d.cfg.Services {
+		if service.ID != "" && service.ID == containerName {
+			if service.Model != "" {
+				return service.Model
+			}
+		}
+	}
+
+	// Try to extract model from image name as last resort
+	if container.Image != "" {
+		// e.g. "vllm/vllm-openai:latest" → not useful, but a custom image might encode the model
+		return ""
+	}
+
+	return ""
+}
+
+// extractExternalPort returns the first external (host) port from the port map,
+// or 0 if none are mapped.
+func extractExternalPort(ports map[string]string) int {
+	for _, external := range ports {
+		return atoi(external)
+	}
+	return 0
 }
 
 func (d *Dashboard) findDeviceIDForContainer(containerID string) string {
