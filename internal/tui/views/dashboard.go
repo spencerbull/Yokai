@@ -9,6 +9,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	zone "github.com/lrstanley/bubblezone"
 	"github.com/spencerbull/yokai/internal/config"
 	"github.com/spencerbull/yokai/internal/tui/components"
 	"github.com/spencerbull/yokai/internal/tui/theme"
@@ -158,6 +159,17 @@ func (d *Dashboard) Update(msg tea.Msg) (View, tea.Cmd) {
 	case tickMsg:
 		return d, tea.Batch(d.pollMetrics(), d.pollDevices())
 
+	case tea.MouseMsg:
+		if msg.Action == tea.MouseActionRelease {
+			// Check if a service row was clicked
+			for i := range d.serviceContainers {
+				if zone.Get(components.ServiceRowZoneID(i)).InBounds(msg) {
+					d.selectedService = i
+					break
+				}
+			}
+		}
+
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "q":
@@ -233,13 +245,13 @@ func (d *Dashboard) renderGridLayout() []string {
 	}
 
 	// Middle row: CPU/RAM charts (left) | GPU panels (right)
-	leftCol := d.renderSparklines()
-	rightCol := d.renderGPUPanels()
+	leftWidth := (d.width - 3) / 2
+	rightWidth := d.width - leftWidth - 3
+
+	leftCol := d.renderSparklines2(leftWidth)
+	rightCol := d.renderGPUPanels2(rightWidth)
 
 	if leftCol != "" && rightCol != "" {
-		leftWidth := (d.width - 3) / 2
-		rightWidth := d.width - leftWidth - 3
-
 		leftStyled := lipgloss.NewStyle().Width(leftWidth).Render(leftCol)
 		rightStyled := lipgloss.NewStyle().Width(rightWidth).Render(rightCol)
 
@@ -356,12 +368,16 @@ func (d *Dashboard) renderDeviceCards() string {
 }
 
 func (d *Dashboard) renderGPUPanels() string {
+	return d.renderGPUPanels2(d.width)
+}
+
+func (d *Dashboard) renderGPUPanels2(availableWidth int) string {
 	if len(d.metrics) == 0 {
 		return ""
 	}
 
 	var panels []string
-	panelWidth := d.width - 4
+	panelWidth := availableWidth - 2
 	if panelWidth < 40 {
 		panelWidth = 40
 	}
@@ -397,11 +413,18 @@ func (d *Dashboard) renderGPUPanels() string {
 }
 
 func (d *Dashboard) renderSparklines() string {
+	return d.renderSparklines2(d.width)
+}
+
+func (d *Dashboard) renderSparklines2(availableWidth int) string {
 	if len(d.cpuHistory) == 0 && len(d.ramHistory) == 0 {
 		return ""
 	}
 
-	chartWidth := d.width - 6
+	// Panel border + padding takes 4 chars (2 border + 2 padding),
+	// then the chart Y-axis labels take ~6 chars
+	panelWidth := availableWidth - 2
+	chartWidth := panelWidth - 4 // inner content after border+padding
 	if chartWidth < 20 {
 		chartWidth = 20
 	}
@@ -420,7 +443,7 @@ func (d *Dashboard) renderSparklines() string {
 			label := fmt.Sprintf(" %s CPU", device.Label)
 			cpuTitle := theme.GoodStyle.Render(label)
 			cpu := components.NewStreamChart("CPU", cpuVals, chartWidth, chartHeight, theme.Good)
-			cpuPanel := theme.Panel(cpuTitle).Width(d.width - 2).Render(cpu.Render())
+			cpuPanel := theme.Panel(cpuTitle).Width(panelWidth).Render(cpu.Render())
 			charts = append(charts, cpuPanel)
 		}
 
@@ -429,7 +452,7 @@ func (d *Dashboard) renderSparklines() string {
 			label := fmt.Sprintf(" %s RAM", device.Label)
 			ramTitle := theme.WarnStyle.Render(label)
 			ram := components.NewStreamChart("RAM", ramVals, chartWidth, chartHeight, theme.Accent)
-			ramPanel := theme.Panel(ramTitle).Width(d.width - 2).Render(ram.Render())
+			ramPanel := theme.Panel(ramTitle).Width(panelWidth).Render(ram.Render())
 			charts = append(charts, ramPanel)
 		}
 	}

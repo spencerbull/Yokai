@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	zone "github.com/lrstanley/bubblezone"
 	"github.com/spencerbull/yokai/internal/tui/theme"
 )
 
@@ -72,7 +73,8 @@ func (tb TabBar) Render() string {
 		} else {
 			tabStr = keyHint + inactiveStyle.Render(tab.Label)
 		}
-		parts = append(parts, tabStr)
+		// Wrap in a zone mark so mouse clicks can target this tab
+		parts = append(parts, zone.Mark(tab.Label, tabStr))
 		if i < len(tb.Tabs)-1 {
 			parts = append(parts, separatorStyle.Render("│"))
 		}

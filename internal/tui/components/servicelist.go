@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	zone "github.com/lrstanley/bubblezone"
 	"github.com/spencerbull/yokai/internal/tui/theme"
 )
 
@@ -165,23 +166,25 @@ func (s ServiceList) renderRow(svc ServiceRow, widths []int, rowIdx int) string 
 
 	row := strings.Join(parts, " ")
 
+	zoneID := ServiceRowZoneID(rowIdx)
+
 	if svc.Selected {
-		return lipgloss.NewStyle().
+		return zone.Mark(zoneID, lipgloss.NewStyle().
 			Background(theme.Highlight).
 			Foreground(theme.TextPrimary).
 			Width(s.Width).
-			Render(row)
+			Render(row))
 	}
 
 	// Alternating row backgrounds for readability
 	if rowIdx%2 == 1 {
-		return lipgloss.NewStyle().
+		return zone.Mark(zoneID, lipgloss.NewStyle().
 			Background(lipgloss.Color("#1e1f2b")).
 			Foreground(theme.TextPrimary).
 			Width(s.Width).
-			Render(row)
+			Render(row))
 	}
-	return theme.PrimaryStyle.Render(row)
+	return zone.Mark(zoneID, theme.PrimaryStyle.Render(row))
 }
 
 // statusText returns a short, color-coded status string.
@@ -223,6 +226,12 @@ func (s ServiceList) healthIndicator(svc ServiceRow) string {
 	default:
 		return lipgloss.NewStyle().Foreground(theme.TextMuted).Render("?")
 	}
+}
+
+// ServiceRowZoneID returns the zone ID for a service row at the given index.
+// Used by both the service list renderer and the dashboard mouse handler.
+func ServiceRowZoneID(rowIdx int) string {
+	return fmt.Sprintf("svc-row-%d", rowIdx)
 }
 
 // helpers
