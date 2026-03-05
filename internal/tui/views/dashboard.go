@@ -196,7 +196,10 @@ func (d *Dashboard) Update(msg tea.Msg) (View, tea.Cmd) {
 			}
 		case "s":
 			if container := d.getSelectedContainer(); container != nil {
-				return d, d.stopService(container.ID)
+				containerID := container.ID
+				name := container.Name
+				msg := fmt.Sprintf("Stop service %q?", name)
+				return d, Navigate(NewConfirmView(msg, d.stopService(containerID), nil))
 			}
 		case "r":
 			if container := d.getSelectedContainer(); container != nil {
