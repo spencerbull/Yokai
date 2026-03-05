@@ -22,17 +22,30 @@ var (
 	Success     = lipgloss.Color("#73daca")
 )
 
-// Panel creates a rounded-border panel with an optional title.
-func Panel(title string) lipgloss.Style {
+// PanelStyle returns the base style for a bordered panel.
+func PanelStyle() lipgloss.Style {
 	border := lipgloss.RoundedBorder()
-	s := lipgloss.NewStyle().
+	return lipgloss.NewStyle().
 		Border(border).
 		BorderForeground(Border).
 		Padding(0, 1)
-	if title != "" {
-		s = s.BorderTop(true)
+}
+
+// Panel creates a rounded-border panel with an optional title.
+// NOTE: The title is stored but only used as a hint for BorderTop.
+// Use RenderPanel() to actually display a title above panel content.
+func Panel(title string) lipgloss.Style {
+	return PanelStyle()
+}
+
+// RenderPanel renders content inside a bordered panel with a visible title line.
+func RenderPanel(title string, content string, width int) string {
+	panel := PanelStyle().Width(width - 2).Render(content)
+	if title == "" {
+		return panel
 	}
-	return s
+	titleLine := title
+	return lipgloss.JoinVertical(lipgloss.Left, titleLine, panel)
 }
 
 // TitleStyle renders panel titles (bold, accent colored).
