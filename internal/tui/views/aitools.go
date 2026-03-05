@@ -390,6 +390,8 @@ func (a *AITools) View() string {
 
 func (a *AITools) InputActive() bool { return false }
 
+func (a *AITools) Name() string { return "Settings" }
+
 func (a *AITools) KeyBinds() []KeyBind {
 	return []KeyBind{
 		{Key: "j/k", Help: "navigate"},

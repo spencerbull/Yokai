@@ -28,6 +28,8 @@ func (m *mockView) View() string {
 	return "mock view"
 }
 
+func (m *mockView) Name() string { return "Mock" }
+
 func (m *mockView) KeyBinds() []KeyBind {
 	return []KeyBind{
 		{Key: "q", Help: "quit"},

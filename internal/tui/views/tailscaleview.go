@@ -234,6 +234,8 @@ func (t *TailscaleView) View() string {
 
 func (t *TailscaleView) InputActive() bool { return false }
 
+func (t *TailscaleView) Name() string { return "Tailscale" }
+
 func (t *TailscaleView) KeyBinds() []KeyBind {
 	switch t.state {
 	case tsPeerList:

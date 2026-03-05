@@ -380,6 +380,8 @@ func (dm *DeviceManager) View() string {
 
 func (dm *DeviceManager) InputActive() bool { return false }
 
+func (dm *DeviceManager) Name() string { return "Devices" }
+
 func (dm *DeviceManager) KeyBinds() []KeyBind {
 	return []KeyBind{
 		{Key: "↑/↓", Help: "navigate"},

@@ -125,6 +125,8 @@ func (h *Help) View() string {
 
 func (h *Help) InputActive() bool { return false }
 
+func (h *Help) Name() string { return "Help" }
+
 func (h *Help) KeyBinds() []KeyBind {
 	return nil
 }

@@ -143,6 +143,8 @@ func (w *Welcome) View() string {
 
 func (w *Welcome) InputActive() bool { return false }
 
+func (w *Welcome) Name() string { return "Welcome" }
+
 func (w *Welcome) KeyBinds() []KeyBind {
 	return []KeyBind{
 		{Key: "↑/↓", Help: "navigate"},
