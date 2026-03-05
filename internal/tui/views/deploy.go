@@ -271,8 +271,6 @@ func (d *Deploy) Update(msg tea.Msg) (View, tea.Cmd) {
 
 func (d *Deploy) updateType(msg tea.KeyMsg) (View, tea.Cmd) {
 	switch msg.String() {
-	case "backspace":
-		return d, PopView()
 	case "up", "k":
 		if d.cursor > 0 {
 			d.cursor--
@@ -300,9 +298,6 @@ func (d *Deploy) updateType(msg tea.KeyMsg) (View, tea.Cmd) {
 
 func (d *Deploy) updateDevice(msg tea.KeyMsg) (View, tea.Cmd) {
 	switch msg.String() {
-	case "backspace":
-		d.currentStep--
-		return d, nil
 	case "up", "k":
 		if d.cursor > 0 {
 			d.cursor--
