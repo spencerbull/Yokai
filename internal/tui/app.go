@@ -66,8 +66,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, tea.Quit
 		}
 
-		// Tab bar navigation (only when tabs are shown and view stack is empty)
-		if a.showTabs && len(a.viewStack) == 0 {
+		// Tab bar navigation (only when tabs are shown, view stack is empty,
+		// and the current view doesn't have an active text input that needs
+		// raw key events like tab, digits, etc.)
+		if a.showTabs && len(a.viewStack) == 0 && !a.currentView.InputActive() {
 			if cmd := a.handleTabKey(msg.String()); cmd != nil {
 				return a, cmd
 			}

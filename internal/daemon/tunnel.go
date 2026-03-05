@@ -91,7 +91,7 @@ func (tp *TunnelPool) establishTunnel(t *tunnel, device config.Device) error {
 	// Create SSH connection
 	sshConfig := ssh.ClientConfig{
 		Host:     device.Host,
-		Port:     "22", // Default SSH port
+		Port:     fmt.Sprintf("%d", device.SSHPortOrDefault()),
 		User:     device.SSHUser,
 		KeyPath:  device.SSHKey,
 		Password: "", // No password fallback for now

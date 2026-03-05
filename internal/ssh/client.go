@@ -18,11 +18,12 @@ import (
 
 // ClientConfig holds SSH connection parameters.
 type ClientConfig struct {
-	Host     string
-	Port     string
-	User     string
-	KeyPath  string // path to private key, empty to try defaults
-	Password string // fallback password auth
+	Host          string
+	Port          string
+	User          string
+	KeyPath       string // path to private key, empty to try defaults
+	KeyPassphrase string // passphrase for encrypted private key
+	Password      string // fallback password auth
 }
 
 // Client wraps an SSH connection.
@@ -173,7 +174,7 @@ func resolveAuth(cfg ClientConfig) ([]ssh.AuthMethod, error) {
 
 	// 1. Explicit key path
 	if cfg.KeyPath != "" {
-		if m, err := keyAuth(expandPath(cfg.KeyPath)); err == nil {
+		if m, err := keyAuth(expandPath(cfg.KeyPath), cfg.KeyPassphrase); err == nil {
 			methods = append(methods, m)
 		}
 	}
@@ -193,7 +194,7 @@ func resolveAuth(cfg ClientConfig) ([]ssh.AuthMethod, error) {
 		if p == expandPath(cfg.KeyPath) {
 			continue // already tried
 		}
-		if m, err := keyAuth(p); err == nil {
+		if m, err := keyAuth(p, ""); err == nil {
 			methods = append(methods, m)
 		}
 	}
@@ -210,12 +211,17 @@ func resolveAuth(cfg ClientConfig) ([]ssh.AuthMethod, error) {
 	return methods, nil
 }
 
-func keyAuth(path string) (ssh.AuthMethod, error) {
+func keyAuth(path, passphrase string) (ssh.AuthMethod, error) {
 	key, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	signer, err := ssh.ParsePrivateKey(key)
+	var signer ssh.Signer
+	if passphrase != "" {
+		signer, err = ssh.ParsePrivateKeyWithPassphrase(key, []byte(passphrase))
+	} else {
+		signer, err = ssh.ParsePrivateKey(key)
+	}
 	if err != nil {
 		return nil, err
 	}
