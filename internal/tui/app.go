@@ -5,6 +5,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	zone "github.com/lrstanley/bubblezone"
 	"github.com/spencerbull/yokai/internal/config"
 	"github.com/spencerbull/yokai/internal/tui/components"
 	"github.com/spencerbull/yokai/internal/tui/theme"
@@ -69,6 +70,20 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.showTabs && len(a.viewStack) == 0 {
 			if cmd := a.handleTabKey(msg.String()); cmd != nil {
 				return a, cmd
+			}
+		}
+
+	case tea.MouseMsg:
+		// Handle tab bar clicks
+		if a.showTabs && len(a.viewStack) == 0 && msg.Action == tea.MouseActionRelease {
+			tabs := components.DefaultTabs()
+			for i, tab := range tabs {
+				if zone.Get(tab.Label).InBounds(msg) {
+					if i != a.activeTab {
+						return a, a.switchToTab(i)
+					}
+					break
+				}
 			}
 		}
 
@@ -176,7 +191,7 @@ func (a *App) View() string {
 	sections = append(sections, bar)
 
 	assembled := lipgloss.JoinVertical(lipgloss.Center, sections...)
-	return lipgloss.Place(a.width, a.height, lipgloss.Center, lipgloss.Top, assembled)
+	return zone.Scan(lipgloss.Place(a.width, a.height, lipgloss.Center, lipgloss.Top, assembled))
 }
 
 // navigate pushes current view onto stack and switches to the target.
@@ -238,8 +253,9 @@ func Run(version string) error {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
+	zone.NewGlobal()
 	app := newApp(cfg, version)
-	p := tea.NewProgram(app, tea.WithAltScreen())
+	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	_, err = p.Run()
 	return err
 }

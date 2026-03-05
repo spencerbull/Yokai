@@ -164,16 +164,11 @@ func TestSparklineRenderNegativeWidth(t *testing.T) {
 	values := []float64{1, 2, 3}
 	sparkline := NewSparkline(values, -5, lipgloss.Color("#000000"))
 
-	// The current implementation panics on negative width - this is expected behavior
-	// In a real implementation, this might need fixing, but for testing purposes
-	// we'll verify it panics as expected
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic for negative width, but function completed normally")
-		}
-	}()
-
-	sparkline.Render()
+	// Negative width should return empty string without panicking
+	result := sparkline.Render()
+	if result != "" {
+		t.Errorf("expected empty string for negative width, got %q", result)
+	}
 }
 
 func TestSparklineRenderNegativeValues(t *testing.T) {

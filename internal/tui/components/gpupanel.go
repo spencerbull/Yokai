@@ -77,11 +77,12 @@ func (g GPUPanel) Render() string {
 	tempStyle := lipgloss.NewStyle().Foreground(tColor)
 	tempStr := tempStyle.Render(fmt.Sprintf("🌡 %d°C", g.TempC))
 
-	// Calculate spacing for util line
+	// Calculate spacing for util line using visual width (not byte length)
+	// to account for ANSI escape codes in styled strings
 	utilBarStr := utilBar.Render()
-	// Account for ANSI escape codes in tempStr for spacing calculation
-	tempPlainLen := len(fmt.Sprintf("🌡 %d°C", g.TempC))
-	utilLineSpacing := contentWidth - len(utilBarStr) - tempPlainLen
+	utilBarVisualWidth := lipgloss.Width(utilBarStr)
+	tempPlainLen := lipgloss.Width(tempStr)
+	utilLineSpacing := contentWidth - utilBarVisualWidth - tempPlainLen
 	if utilLineSpacing < 1 {
 		utilLineSpacing = 1
 	}
@@ -126,9 +127,9 @@ func (g GPUPanel) Render() string {
 	powerStr := fmt.Sprintf("⚡ %s", powerStyle.Render(fmt.Sprintf("%dW/%dW", g.PowerDrawW, g.PowerLimitW)))
 
 	fanStr := fmt.Sprintf("💨 %d%%", g.FanPercent)
-	// Plain text length for spacing (without ANSI codes)
-	powerPlainLen := len(fmt.Sprintf("⚡ %dW/%dW", g.PowerDrawW, g.PowerLimitW))
-	fanPlainLen := len(fmt.Sprintf("💨 %d%%", g.FanPercent))
+	// Use lipgloss.Width for visual width that handles emojis and ANSI codes
+	powerPlainLen := lipgloss.Width(powerStr)
+	fanPlainLen := lipgloss.Width(fanStr)
 	powerLineSpacing := contentWidth - powerPlainLen - fanPlainLen
 	if powerLineSpacing < 1 {
 		powerLineSpacing = 1
@@ -198,4 +199,3 @@ func GradientProgressBar(percent float64, width int, color lipgloss.Color) strin
 	bar.WriteString("]")
 	return bar.String()
 }
-
