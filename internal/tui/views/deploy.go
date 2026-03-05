@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spencerbull/yokai/internal/config"
@@ -72,16 +73,16 @@ type Deploy struct {
 	deviceIdx int
 
 	// Step 3: image
-	imageTag    string
+	imageInput  textinput.Model
 	imageTyping bool // true = free-text input mode, false = picking from history
 
 	// Step 4: model
-	modelID     string
+	modelInput  textinput.Model
 	modelTyping bool // true = free-text input mode, false = picking from history
 
 	// Step 5: config
-	port              string
-	extraArgs         string
+	portInput         textinput.Model
+	extraArgsInput    textinput.Model
 	activeConfigField int
 
 	// History (loaded from ~/.config/yokai/history.json)
@@ -101,11 +102,26 @@ func NewDeploy(cfg *config.Config, version string) *Deploy {
 		h = &config.History{}
 	}
 
+	// Initialize text inputs
+	imageInput := components.NewTextField("Docker image")
+	modelInput := components.NewTextField("e.g. meta-llama/Llama-3.1-8B-Instruct")
+	portInput := components.NewPortField("8000")
+	extraArgsInput := components.NewTextField("Extra arguments")
+
+	// Set initial defaults but blur the inputs
+	imageInput.Blur()
+	modelInput.Blur()
+	portInput.Blur()
+	extraArgsInput.Blur()
+
 	return &Deploy{
-		cfg:     cfg,
-		version: version,
-		port:    "8000",
-		history: h,
+		cfg:            cfg,
+		version:        version,
+		history:        h,
+		imageInput:     imageInput,
+		modelInput:     modelInput,
+		portInput:      portInput,
+		extraArgsInput: extraArgsInput,
 	}
 }
 
@@ -113,7 +129,23 @@ func (d *Deploy) Init() tea.Cmd {
 	return nil
 }
 
+// InputActive returns true when the view has active text inputs
+func (d *Deploy) InputActive() bool {
+	switch d.currentStep {
+	case stepImage:
+		return d.imageTyping
+	case stepModel:
+		return d.modelTyping
+	case stepConfig:
+		return true // Always has text inputs
+	default:
+		return false
+	}
+}
+
 func (d *Deploy) Update(msg tea.Msg) (View, tea.Cmd) {
+	var cmds []tea.Cmd
+
 	// Forward spinner ticks when deploying
 	if d.currentStep == stepDeploying {
 		var spinnerCmd tea.Cmd
@@ -134,6 +166,27 @@ func (d *Deploy) Update(msg tea.Msg) (View, tea.Cmd) {
 		}
 		d.height = msg.Height
 
+		// Update text input widths
+		inputWidth := 50
+		if d.width > 0 && d.width < 70 {
+			inputWidth = d.width - 20
+			if inputWidth < 30 {
+				inputWidth = 30
+			}
+		}
+		d.imageInput.Width = inputWidth
+		d.modelInput.Width = inputWidth
+
+		configWidth := 30
+		if d.width > 0 && d.width < 70 {
+			configWidth = d.width - 30
+			if configWidth < 20 {
+				configWidth = 20
+			}
+		}
+		d.portInput.Width = configWidth
+		d.extraArgsInput.Width = configWidth
+
 	case deployResultMsg:
 		if msg.Error != nil {
 			d.deployError = msg.Error.Error()
@@ -144,8 +197,8 @@ func (d *Deploy) Update(msg tea.Msg) (View, tea.Cmd) {
 				for i := range d.cfg.Services {
 					svc := &d.cfg.Services[i]
 					if svc.DeviceID == d.cfg.Devices[d.deviceIdx].ID &&
-						svc.Image == d.imageTag &&
-						svc.Model == d.modelID &&
+						svc.Image == d.imageInput.Value() &&
+						svc.Model == d.modelInput.Value() &&
 						svc.ContainerID == "" {
 						svc.ContainerID = msg.ContainerID
 						_ = config.Save(d.cfg)
@@ -154,8 +207,8 @@ func (d *Deploy) Update(msg tea.Msg) (View, tea.Cmd) {
 				}
 			}
 			// Save image and model to history for future deploys
-			d.history.AddImage(d.imageTag)
-			d.history.AddModel(d.modelID)
+			d.history.AddImage(d.imageInput.Value())
+			d.history.AddModel(d.modelInput.Value())
 			_ = config.SaveHistory(d.history)
 
 			// Success - pop back to dashboard
@@ -169,7 +222,16 @@ func (d *Deploy) Update(msg tea.Msg) (View, tea.Cmd) {
 			if d.currentStep == stepType {
 				return d, PopView()
 			}
-			d.currentStep--
+			// When leaving typing mode, blur the inputs
+			if d.currentStep == stepImage && d.imageTyping {
+				d.imageTyping = false
+				d.imageInput.Blur()
+			} else if d.currentStep == stepModel && d.modelTyping {
+				d.modelTyping = false
+				d.modelInput.Blur()
+			} else {
+				d.currentStep--
+			}
 			return d, nil
 		}
 
@@ -179,14 +241,30 @@ func (d *Deploy) Update(msg tea.Msg) (View, tea.Cmd) {
 		case stepDevice:
 			return d.updateDevice(msg)
 		case stepImage:
-			return d.updateImage(msg)
+			var cmd tea.Cmd
+			d, cmd = d.updateImage(msg)
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
 		case stepModel:
-			return d.updateModel(msg)
+			var cmd tea.Cmd
+			d, cmd = d.updateModel(msg)
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
 		case stepConfig:
-			return d.updateConfig(msg)
+			var cmd tea.Cmd
+			d, cmd = d.updateConfig(msg)
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
 		case stepDeploying:
 			return d.updateDeploying(msg)
 		}
+	}
+
+	if len(cmds) > 0 {
+		return d, tea.Batch(cmds...)
 	}
 	return d, nil
 }
@@ -210,11 +288,11 @@ func (d *Deploy) updateType(msg tea.KeyMsg) (View, tea.Cmd) {
 		// Set default port based on type
 		switch d.workload {
 		case wtVLLM:
-			d.port = "8000"
+			d.portInput.SetValue("8000")
 		case wtLlamaCpp:
-			d.port = "8080"
+			d.portInput.SetValue("8080")
 		case wtComfyUI:
-			d.port = "8188"
+			d.portInput.SetValue("8188")
 		}
 	}
 	return d, nil
@@ -270,47 +348,51 @@ func (d *Deploy) imageOptions() []string {
 	return options
 }
 
-func (d *Deploy) updateImage(msg tea.KeyMsg) (View, tea.Cmd) {
+func (d *Deploy) updateImage(msg tea.KeyMsg) (*Deploy, tea.Cmd) {
 	options := d.imageOptions()
 
 	// If no history and no typing, start in typing mode
 	if len(options) == 0 {
 		d.imageTyping = true
+		d.imageInput.Focus()
 	}
 
 	if d.imageTyping {
 		switch msg.String() {
 		case "enter":
-			if d.imageTag == "" {
+			if d.imageInput.Value() == "" {
 				// Use default
 				switch d.workload {
 				case wtVLLM:
-					d.imageTag = d.cfg.Preferences.DefaultVLLMImage
+					d.imageInput.SetValue(d.cfg.Preferences.DefaultVLLMImage)
 				case wtLlamaCpp:
-					d.imageTag = d.cfg.Preferences.DefaultLlamaImage
+					d.imageInput.SetValue(d.cfg.Preferences.DefaultLlamaImage)
 				case wtComfyUI:
-					d.imageTag = d.cfg.Preferences.DefaultComfyImage
+					d.imageInput.SetValue(d.cfg.Preferences.DefaultComfyImage)
 				}
 			}
 			d.currentStep = stepModel
 			d.cursor = 0
 			d.imageTyping = false
+			d.imageInput.Blur()
+			return d, nil
 		case "backspace":
-			if len(d.imageTag) > 0 {
-				d.imageTag = d.imageTag[:len(d.imageTag)-1]
-			} else {
-				// Switch back to picker if there are options
-				if len(options) > 0 {
-					d.imageTyping = false
-				}
+			// Check if input is empty before forwarding to textinput
+			if d.imageInput.Value() == "" && len(options) > 0 {
+				d.imageTyping = false
+				d.imageInput.Blur()
+				return d, nil
 			}
+			// Forward to textinput
+			var cmd tea.Cmd
+			d.imageInput, cmd = d.imageInput.Update(msg)
+			return d, cmd
 		default:
-			s := msg.String()
-			if len(s) == 1 || (len(s) > 1 && !strings.HasPrefix(s, "ctrl+") && !strings.HasPrefix(s, "alt+")) {
-				d.imageTag += s
-			}
+			// Forward to textinput
+			var cmd tea.Cmd
+			d.imageInput, cmd = d.imageInput.Update(msg)
+			return d, cmd
 		}
-		return d, nil
 	}
 
 	// Picker mode
@@ -327,25 +409,29 @@ func (d *Deploy) updateImage(msg tea.KeyMsg) (View, tea.Cmd) {
 		if d.cursor >= len(options) {
 			// "Type custom" option selected
 			d.imageTyping = true
-			d.imageTag = ""
+			d.imageInput.SetValue("")
+			d.imageInput.Focus()
 			return d, nil
 		}
-		d.imageTag = options[d.cursor]
+		d.imageInput.SetValue(options[d.cursor])
 		d.currentStep = stepModel
 		d.cursor = 0
 	case "/":
 		// Switch to free-text typing
 		d.imageTyping = true
-		d.imageTag = ""
+		d.imageInput.SetValue("")
+		d.imageInput.Focus()
 	}
 	return d, nil
 }
 
-func (d *Deploy) updateModel(msg tea.KeyMsg) (View, tea.Cmd) {
+func (d *Deploy) updateModel(msg tea.KeyMsg) (*Deploy, tea.Cmd) {
 	if d.workload == wtComfyUI {
 		if msg.String() == "enter" {
-			d.modelID = ""
+			d.modelInput.SetValue("")
 			d.currentStep = stepConfig
+			d.activeConfigField = 0
+			d.portInput.Focus()
 		}
 		return d, nil
 	}
@@ -355,6 +441,7 @@ func (d *Deploy) updateModel(msg tea.KeyMsg) (View, tea.Cmd) {
 	// If no history, start in typing mode
 	if len(models) == 0 {
 		d.modelTyping = true
+		d.modelInput.Focus()
 	}
 
 	if d.modelTyping {
@@ -363,19 +450,27 @@ func (d *Deploy) updateModel(msg tea.KeyMsg) (View, tea.Cmd) {
 			d.currentStep = stepConfig
 			d.cursor = 0
 			d.modelTyping = false
+			d.modelInput.Blur()
+			d.activeConfigField = 0
+			d.portInput.Focus()
+			return d, nil
 		case "backspace":
-			if len(d.modelID) > 0 {
-				d.modelID = d.modelID[:len(d.modelID)-1]
-			} else if len(models) > 0 {
+			// Check if input is empty before forwarding to textinput
+			if d.modelInput.Value() == "" && len(models) > 0 {
 				d.modelTyping = false
+				d.modelInput.Blur()
+				return d, nil
 			}
+			// Forward to textinput
+			var cmd tea.Cmd
+			d.modelInput, cmd = d.modelInput.Update(msg)
+			return d, cmd
 		default:
-			s := msg.String()
-			if len(s) == 1 || (len(s) > 1 && !strings.HasPrefix(s, "ctrl+") && !strings.HasPrefix(s, "alt+")) {
-				d.modelID += s
-			}
+			// Forward to textinput
+			var cmd tea.Cmd
+			d.modelInput, cmd = d.modelInput.Update(msg)
+			return d, cmd
 		}
-		return d, nil
 	}
 
 	// Picker mode
@@ -392,32 +487,68 @@ func (d *Deploy) updateModel(msg tea.KeyMsg) (View, tea.Cmd) {
 		if d.cursor >= len(models) {
 			// "Type custom" option selected
 			d.modelTyping = true
-			d.modelID = ""
+			d.modelInput.SetValue("")
+			d.modelInput.Focus()
 			return d, nil
 		}
-		d.modelID = models[d.cursor]
+		d.modelInput.SetValue(models[d.cursor])
 		d.currentStep = stepConfig
 		d.cursor = 0
+		d.activeConfigField = 0
+		d.portInput.Focus()
 	case "/":
 		d.modelTyping = true
-		d.modelID = ""
+		d.modelInput.SetValue("")
+		d.modelInput.Focus()
 	}
 	return d, nil
 }
 
-func (d *Deploy) updateConfig(msg tea.KeyMsg) (View, tea.Cmd) {
+func (d *Deploy) updateConfig(msg tea.KeyMsg) (*Deploy, tea.Cmd) {
 	switch msg.String() {
 	case "tab":
+		// Move focus to next field
 		d.activeConfigField = (d.activeConfigField + 1) % 2
+		if d.activeConfigField == 0 {
+			d.portInput.Focus()
+			d.extraArgsInput.Blur()
+		} else {
+			d.extraArgsInput.Focus()
+			d.portInput.Blur()
+		}
+		return d, nil
+	case "shift+tab":
+		// Move focus to previous field
+		d.activeConfigField = (d.activeConfigField - 1 + 2) % 2
+		if d.activeConfigField == 0 {
+			d.portInput.Focus()
+			d.extraArgsInput.Blur()
+		} else {
+			d.extraArgsInput.Focus()
+			d.portInput.Blur()
+		}
+		return d, nil
+	case "up", "k":
+		// Move focus up (to port field)
+		d.activeConfigField = 0
+		d.portInput.Focus()
+		d.extraArgsInput.Blur()
+		return d, nil
+	case "down", "j":
+		// Move focus down (to extra args field)
+		d.activeConfigField = 1
+		d.extraArgsInput.Focus()
+		d.portInput.Blur()
+		return d, nil
 	case "enter":
 		// Save to config first
 		svc := config.Service{
-			ID:       fmt.Sprintf("%s-%s", strings.ToLower(workloadLabels[d.workload]), sanitize(d.modelID)),
+			ID:       fmt.Sprintf("%s-%s", strings.ToLower(workloadLabels[d.workload]), sanitize(d.modelInput.Value())),
 			DeviceID: d.cfg.Devices[d.deviceIdx].ID,
 			Type:     strings.ToLower(workloadLabels[d.workload]),
-			Image:    d.imageTag,
-			Model:    d.modelID,
-			Port:     atoi(d.port),
+			Image:    d.imageInput.Value(),
+			Model:    d.modelInput.Value(),
+			Port:     atoi(d.portInput.Value()),
 		}
 		d.cfg.Services = append(d.cfg.Services, svc)
 		_ = config.Save(d.cfg)
@@ -426,30 +557,22 @@ func (d *Deploy) updateConfig(msg tea.KeyMsg) (View, tea.Cmd) {
 		d.currentStep = stepDeploying
 		d.deployError = ""
 		d.spinner = components.NewLoadingSpinner("Deploying container...")
+
+		// Blur inputs
+		d.portInput.Blur()
+		d.extraArgsInput.Blur()
+
 		return d, tea.Batch(d.deployToAPI(svc), d.spinner.Init())
-	case "backspace":
-		switch d.activeConfigField {
-		case 0:
-			if len(d.port) > 0 {
-				d.port = d.port[:len(d.port)-1]
-			}
-		case 1:
-			if len(d.extraArgs) > 0 {
-				d.extraArgs = d.extraArgs[:len(d.extraArgs)-1]
-			}
-		}
 	default:
-		s := msg.String()
-		if len(s) == 1 || (len(s) > 1 && !strings.HasPrefix(s, "ctrl+") && !strings.HasPrefix(s, "alt+")) {
-			switch d.activeConfigField {
-			case 0:
-				d.port += s
-			case 1:
-				d.extraArgs += s
-			}
+		// Forward to the active textinput
+		var cmd tea.Cmd
+		if d.activeConfigField == 0 {
+			d.portInput, cmd = d.portInput.Update(msg)
+		} else {
+			d.extraArgsInput, cmd = d.extraArgsInput.Update(msg)
 		}
+		return d, cmd
 	}
-	return d, nil
 }
 
 func (d *Deploy) updateDeploying(msg tea.KeyMsg) (View, tea.Cmd) {
@@ -475,10 +598,10 @@ func (d *Deploy) deployToAPI(svc config.Service) tea.Cmd {
 			Image:     svc.Image,
 			Name:      svc.ID,
 			Model:     svc.Model,
-			Ports:     map[string]string{d.port: d.port},
+			Ports:     map[string]string{d.portInput.Value(): d.portInput.Value()},
 			Env:       map[string]string{},
 			GPUIDs:    "all",
-			ExtraArgs: d.extraArgs,
+			ExtraArgs: d.extraArgsInput.Value(),
 			Volumes:   map[string]string{},
 		}
 
@@ -599,24 +722,11 @@ func (d *Deploy) View() string {
 			case wtComfyUI:
 				defaultImg = d.cfg.Preferences.DefaultComfyImage
 			}
-			if d.imageTag == "" {
+			if d.imageInput.Value() == "" {
 				body += theme.MutedStyle.Render("Default: "+defaultImg) + "\n"
 				body += theme.MutedStyle.Render("Press Enter to use default, or type a custom image") + "\n\n"
 			}
-			inputWidth := 50
-			if d.width > 0 && d.width < 70 {
-				inputWidth = d.width - 20
-				if inputWidth < 30 {
-					inputWidth = 30
-				}
-			}
-			inputBox := lipgloss.NewStyle().
-				Border(lipgloss.NormalBorder()).
-				BorderForeground(theme.Accent).
-				Padding(0, 1).
-				Width(inputWidth).
-				Render(d.imageTag + "█")
-			body += inputBox
+			body += d.imageInput.View()
 			if len(options) > 0 {
 				body += "\n\n" + theme.MutedStyle.Render("Backspace to return to history")
 			}
@@ -654,20 +764,7 @@ func (d *Deploy) View() string {
 			if d.modelTyping || len(models) == 0 {
 				// Free-text input mode
 				body += theme.MutedStyle.Render("e.g. meta-llama/Llama-3.1-8B-Instruct") + "\n\n"
-				inputWidth := 50
-				if d.width > 0 && d.width < 70 {
-					inputWidth = d.width - 20
-					if inputWidth < 30 {
-						inputWidth = 30
-					}
-				}
-				inputBox := lipgloss.NewStyle().
-					Border(lipgloss.NormalBorder()).
-					BorderForeground(theme.Accent).
-					Padding(0, 1).
-					Width(inputWidth).
-					Render(d.modelID + "█")
-				body += inputBox
+				body += d.modelInput.View()
 				if len(models) > 0 {
 					body += "\n\n" + theme.MutedStyle.Render("Backspace to return to history")
 				}
@@ -697,8 +794,11 @@ func (d *Deploy) View() string {
 
 	case stepConfig:
 		body = theme.PrimaryStyle.Render("Configuration:") + "\n\n"
-		body += d.configField("Port:", d.port, 0) + "\n"
-		body += d.configField("Extra args:", d.extraArgs, 1) + "\n\n"
+		body += theme.MutedStyle.Render("Port:") + "\n"
+		body += d.portInput.View() + "\n\n"
+		body += theme.MutedStyle.Render("Extra args:") + "\n"
+		body += d.extraArgsInput.View() + "\n\n"
+		body += theme.MutedStyle.Render("Tab to switch fields") + "\n\n"
 
 		// Show deployment error if any
 		if d.deployError != "" {
@@ -711,11 +811,11 @@ func (d *Deploy) View() string {
 		if d.deviceIdx < len(d.cfg.Devices) {
 			body += fmt.Sprintf("  Device: %s\n", d.cfg.Devices[d.deviceIdx].Label)
 		}
-		body += fmt.Sprintf("  Image:  %s\n", d.imageTag)
-		if d.modelID != "" {
-			body += fmt.Sprintf("  Model:  %s\n", d.modelID)
+		body += fmt.Sprintf("  Image:  %s\n", d.imageInput.Value())
+		if d.modelInput.Value() != "" {
+			body += fmt.Sprintf("  Model:  %s\n", d.modelInput.Value())
 		}
-		body += fmt.Sprintf("  Port:   %s\n", d.port)
+		body += fmt.Sprintf("  Port:   %s\n", d.portInput.Value())
 		body += "\n" + theme.SuccessStyle.Render("Press Enter to deploy")
 
 	case stepDeploying:
@@ -742,34 +842,6 @@ func (d *Deploy) View() string {
 		Render(title + "\n" + stepBar + "\n\n" + body)
 
 	return lipgloss.NewStyle().Padding(1, 0).Render(card)
-}
-
-func (d *Deploy) configField(label, value string, idx int) string {
-	borderColor := theme.Border
-	if d.activeConfigField == idx {
-		borderColor = theme.Accent
-	}
-	display := value
-	if d.activeConfigField == idx {
-		display += "█"
-	}
-
-	// Responsive width for config fields
-	fieldWidth := 30
-	if d.width > 0 && d.width < 70 {
-		fieldWidth = d.width - 30
-		if fieldWidth < 20 {
-			fieldWidth = 20
-		}
-	}
-
-	return theme.MutedStyle.Render(label) + "\n" +
-		lipgloss.NewStyle().
-			Border(lipgloss.NormalBorder()).
-			BorderForeground(borderColor).
-			Padding(0, 1).
-			Width(fieldWidth).
-			Render(display)
 }
 
 func (d *Deploy) KeyBinds() []KeyBind {

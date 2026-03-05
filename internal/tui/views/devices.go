@@ -141,10 +141,10 @@ func (dm *DeviceManager) testConnection(device config.Device) tea.Cmd {
 	return func() tea.Msg {
 		// First test SSH connectivity
 		client, err := sshpkg.Connect(sshpkg.ClientConfig{
-			Host:     device.Host,
-			User:     device.SSHUser,
-			KeyPath:  device.SSHKey,
-			Password: "", // Only try key-based auth for now
+			Host:    device.Host,
+			Port:    fmt.Sprintf("%d", device.SSHPortOrDefault()),
+			User:    device.SSHUser,
+			KeyPath: device.SSHKey,
 		})
 		if err != nil {
 			return connectionTestResult{
@@ -204,6 +204,7 @@ func (dm *DeviceManager) upgradeDevice(device config.Device) tea.Cmd {
 		// Connect via SSH
 		client, err := sshpkg.Connect(sshpkg.ClientConfig{
 			Host:    device.Host,
+			Port:    fmt.Sprintf("%d", device.SSHPortOrDefault()),
 			User:    device.SSHUser,
 			KeyPath: device.SSHKey,
 		})
@@ -350,6 +351,8 @@ func (dm *DeviceManager) View() string {
 
 	return lipgloss.NewStyle().Padding(1, 0).Render(card)
 }
+
+func (dm *DeviceManager) InputActive() bool { return false }
 
 func (dm *DeviceManager) KeyBinds() []KeyBind {
 	return []KeyBind{

@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spencerbull/yokai/internal/config"
 	"github.com/spencerbull/yokai/internal/hf"
+	"github.com/spencerbull/yokai/internal/tui/components"
 	"github.com/spencerbull/yokai/internal/tui/theme"
 )
 
@@ -24,15 +26,16 @@ const (
 
 // HFToken handles HuggingFace token detection and input.
 type HFToken struct {
-	cfg      *config.Config
-	version  string
-	state    hfState
-	token    string
-	envToken string
-	username string
-	err      string
-	width    int
-	height   int
+	cfg        *config.Config
+	version    string
+	state      hfState
+	token      string
+	tokenInput textinput.Model
+	envToken   string
+	username   string
+	err        string
+	width      int
+	height     int
 }
 
 type hfCheckMsg struct {
@@ -46,11 +49,20 @@ type hfValidateMsg struct {
 
 // NewHFToken creates the HuggingFace token view.
 func NewHFToken(cfg *config.Config, version string) *HFToken {
+	tokenInput := components.NewTextField("hf_...")
+	tokenInput.Width = 45
+
 	return &HFToken{
-		cfg:     cfg,
-		version: version,
-		state:   hfChecking,
+		cfg:        cfg,
+		version:    version,
+		state:      hfChecking,
+		tokenInput: tokenInput,
 	}
+}
+
+// InputActive returns true when the token input is active.
+func (h *HFToken) InputActive() bool {
+	return h.state == hfInput
 }
 
 func (h *HFToken) Init() tea.Cmd {
@@ -64,6 +76,8 @@ func (h *HFToken) Init() tea.Cmd {
 }
 
 func (h *HFToken) Update(msg tea.Msg) (View, tea.Cmd) {
+	var cmd tea.Cmd
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		h.width = msg.Width
@@ -72,76 +86,114 @@ func (h *HFToken) Update(msg tea.Msg) (View, tea.Cmd) {
 		}
 		h.height = msg.Height
 
+		// Update textinput width responsively
+		inputWidth := 45
+		if h.width > 0 && h.width < 65 {
+			inputWidth = h.width - 20
+			if inputWidth < 30 {
+				inputWidth = 30
+			}
+		}
+		h.tokenInput.Width = inputWidth
+
 	case hfCheckMsg:
 		if msg.envToken != "" {
 			h.envToken = msg.envToken
 			h.token = msg.envToken
+			h.tokenInput.SetValue(msg.envToken)
 			h.state = hfFound
 		} else if h.cfg.HFToken != "" {
 			h.token = h.cfg.HFToken
+			h.tokenInput.SetValue(h.cfg.HFToken)
 			h.state = hfFound
 		} else {
 			h.state = hfInput
+			h.tokenInput.Focus()
 		}
 
 	case hfValidateMsg:
 		if msg.err != nil {
 			h.state = hfInvalid
 			h.err = msg.err.Error()
+			h.tokenInput.Blur()
 		} else {
 			h.state = hfValid
 			h.username = msg.username
-			h.cfg.HFToken = h.token
+			h.cfg.HFToken = h.tokenInput.Value()
+			h.tokenInput.Blur()
 			_ = config.Save(h.cfg)
 		}
 
 	case tea.KeyMsg:
-		switch msg.String() {
-		case "enter":
-			switch h.state {
-			case hfFound:
-				// Use detected token, validate it
-				h.state = hfValidating
-				return h, h.validateToken()
-			case hfInput:
-				if h.token == "" {
+		switch h.state {
+		case hfInput:
+			// In input state, only handle specific keys explicitly
+			switch msg.String() {
+			case "enter":
+				if h.tokenInput.Value() == "" {
 					h.err = "Token is required for model downloads"
 					return h, nil
 				}
 				h.state = hfValidating
+				h.tokenInput.Blur()
 				return h, h.validateToken()
-			case hfValid:
+			case "esc":
+				return h, PopView()
+			default:
+				// Forward ALL other keys to textinput (including 's')
+				h.tokenInput, cmd = h.tokenInput.Update(msg)
+				return h, cmd
+			}
+
+		case hfFound:
+			switch msg.String() {
+			case "enter":
+				// Use detected token, validate it
+				h.state = hfValidating
+				return h, h.validateToken()
+			case "s":
+				// Skip token setup - only works in hfFound state
 				return h, NavigateReplace(NewDashboard(h.cfg, h.version))
-			case hfInvalid:
+			case "esc":
+				return h, PopView()
+			}
+
+		case hfValid:
+			switch msg.String() {
+			case "enter":
+				return h, NavigateReplace(NewDashboard(h.cfg, h.version))
+			case "esc":
+				return h, PopView()
+			}
+
+		case hfInvalid:
+			switch msg.String() {
+			case "enter":
 				h.state = hfInput
 				h.err = ""
+				h.tokenInput.Focus()
+			case "esc":
+				return h, PopView()
 			}
-		case "s":
-			if h.state == hfInput || h.state == hfFound {
-				// Skip token setup
-				return h, NavigateReplace(NewDashboard(h.cfg, h.version))
-			}
-		case "esc":
-			return h, PopView()
-		case "backspace":
-			if h.state == hfInput && len(h.token) > 0 {
-				h.token = h.token[:len(h.token)-1]
-			}
-		case "ctrl+u":
-			if h.state == hfInput {
-				h.token = ""
-			}
+
 		default:
-			if h.state == hfInput && len(msg.String()) == 1 {
-				h.token += msg.String()
+			switch msg.String() {
+			case "esc":
+				return h, PopView()
 			}
 		}
 	}
-	return h, nil
+
+	// Update textinput if we're not in hfInput state (to handle unfocus, etc.)
+	if h.state != hfInput {
+		h.tokenInput, cmd = h.tokenInput.Update(msg)
+	}
+
+	return h, cmd
 }
 
 func (h *HFToken) validateToken() tea.Cmd {
-	token := h.token
+	token := h.tokenInput.Value()
 	return func() tea.Msg {
 		client := hf.NewClient(token)
 		username, err := client.ValidateToken()
@@ -173,26 +225,13 @@ func (h *HFToken) View() string {
 		body = theme.PrimaryStyle.Render("Enter your HuggingFace token:") + "\n" +
 			theme.MutedStyle.Render("(needed for downloading gated models)") + "\n\n"
 
-		// Responsive width
-		inputWidth := 45
-		if h.width > 0 && h.width < 65 {
-			inputWidth = h.width - 20
-			if inputWidth < 30 {
-				inputWidth = 30
-			}
-		}
+		// Render the textinput
+		body += h.tokenInput.View()
 
-		inputBox := lipgloss.NewStyle().
-			Border(lipgloss.NormalBorder()).
-			BorderForeground(theme.Accent).
-			Padding(0, 1).
-			Width(inputWidth).
-			Render(h.token + "█")
-		body += inputBox
 		if h.err != "" {
 			body += "\n" + theme.CritStyle.Render(h.err)
 		}
-		body += "\n\n" + theme.MutedStyle.Render("Get a token at: https://huggingface.co/settings/tokens\nPress 's' to skip")
+		body += "\n\n" + theme.MutedStyle.Render("Get a token at: https://huggingface.co/settings/tokens\nPress 's' to skip not available in input mode")
 
 	case hfValidating:
 		body = theme.StatusLoading() + " " + theme.PrimaryStyle.Render("Validating token...")
@@ -234,6 +273,11 @@ func (h *HFToken) KeyBinds() []KeyBind {
 	case hfInput:
 		return []KeyBind{
 			{Key: "Enter", Help: "validate"},
+			{Key: "Esc", Help: "back"},
+		}
+	case hfFound:
+		return []KeyBind{
+			{Key: "Enter", Help: "validate"},
 			{Key: "s", Help: "skip"},
 			{Key: "Esc", Help: "back"},
 		}
@@ -244,7 +288,6 @@ func (h *HFToken) KeyBinds() []KeyBind {
 	default:
 		return []KeyBind{
 			{Key: "Enter", Help: "continue"},
-			{Key: "s", Help: "skip"},
 			{Key: "Esc", Help: "back"},
 		}
 	}

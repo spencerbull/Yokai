@@ -196,6 +196,8 @@ func (l *LogViewer) View() string {
 	return card
 }
 
+func (l *LogViewer) InputActive() bool { return false }
+
 func (l *LogViewer) KeyBinds() []KeyBind {
 	return []KeyBind{
 		{Key: "↑/↓", Help: "scroll"},
