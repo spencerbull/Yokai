@@ -14,6 +14,11 @@ import (
 	"github.com/spencerbull/yokai/internal/tui/theme"
 )
 
+// hasSSHConfig returns true if ~/.ssh/config exists and has non-wildcard hosts.
+func hasSSHConfig() bool {
+	return len(sshpkg.DiscoverSSHHosts()) > 0
+}
+
 type connectionTestResult struct {
 	deviceID string
 	online   bool
@@ -85,6 +90,9 @@ func (dm *DeviceManager) Update(msg tea.Msg) (View, tea.Cmd) {
 				dm.cursor++
 			}
 		case "a":
+			if hasSSHConfig() {
+				return dm, Navigate(NewSSHConfigPicker(dm.cfg, dm.version))
+			}
 			return dm, Navigate(NewWelcome(dm.cfg, dm.version))
 		case "e":
 			if len(dm.cfg.Devices) > 0 {
