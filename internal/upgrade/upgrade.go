@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/spencerbull/yokai/internal/platform"
 )
 
 const (
@@ -179,7 +181,7 @@ func Run(currentVersion string) error {
 	}
 
 	// Make it executable
-	if err := os.Chmod(currentBinaryPath, 0755); err != nil {
+	if err := platform.ChmodIfSupported(currentBinaryPath, 0755); err != nil {
 		return fmt.Errorf("failed to make binary executable: %w", err)
 	}
 
@@ -252,7 +254,7 @@ func extractTarGz(src, dst string) error {
 				return err
 			}
 
-			if err := os.Chmod(path, header.FileInfo().Mode()); err != nil {
+			if err := platform.ChmodIfSupported(path, header.FileInfo().Mode()); err != nil {
 				return err
 			}
 		}
