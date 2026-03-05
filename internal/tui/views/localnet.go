@@ -168,6 +168,8 @@ func (l *LocalNet) View() string {
 
 func (l *LocalNet) InputActive() bool { return false }
 
+func (l *LocalNet) Name() string { return "Local Network" }
+
 func (l *LocalNet) KeyBinds() []KeyBind {
 	return []KeyBind{
 		{Key: "↑/↓", Help: "navigate"},

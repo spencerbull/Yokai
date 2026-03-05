@@ -8,6 +8,8 @@ type View interface {
 	Update(msg tea.Msg) (View, tea.Cmd)
 	View() string
 	KeyBinds() []KeyBind
+	// Name returns a short display name for the view (used in the status bar breadcrumbs).
+	Name() string
 	// InputActive returns true when the view has a focused text input
 	// that should receive raw key events (tab, digits, arrows, etc.)
 	// without the app-level tab bar intercepting them.

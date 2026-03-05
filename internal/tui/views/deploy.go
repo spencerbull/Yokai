@@ -839,6 +839,8 @@ func (d *Deploy) View() string {
 	return lipgloss.NewStyle().Padding(1, 0).Render(card)
 }
 
+func (d *Deploy) Name() string { return "Deploy" }
+
 func (d *Deploy) KeyBinds() []KeyBind {
 	return []KeyBind{
 		{Key: "↑/↓", Help: "navigate"},

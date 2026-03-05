@@ -375,6 +375,8 @@ func (s *SSHCreds) fieldLabel(label string, field sshField) string {
 	return style.Render(label)
 }
 
+func (s *SSHCreds) Name() string { return "SSH Credentials" }
+
 func (s *SSHCreds) KeyBinds() []KeyBind {
 	return []KeyBind{
 		{Key: "Tab/↕", Help: "next field"},
