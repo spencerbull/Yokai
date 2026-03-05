@@ -123,6 +123,8 @@ func (h *Help) View() string {
 	return lipgloss.NewStyle().Padding(1, 0).Render(card)
 }
 
+func (h *Help) InputActive() bool { return false }
+
 func (h *Help) KeyBinds() []KeyBind {
 	return nil
 }

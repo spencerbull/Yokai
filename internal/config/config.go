@@ -34,17 +34,26 @@ type Device struct {
 	Host           string   `json:"host"`
 	SSHUser        string   `json:"ssh_user,omitempty"`
 	SSHKey         string   `json:"ssh_key,omitempty"`
-	ConnectionType string   `json:"connection_type"` // "tailscale", "local", "manual"
+	SSHPort        int      `json:"ssh_port,omitempty"` // default 22
+	ConnectionType string   `json:"connection_type"`    // "tailscale", "local", "manual"
 	AgentPort      int      `json:"agent_port"`
 	AgentToken     string   `json:"agent_token,omitempty"`
 	GPUType        string   `json:"gpu_type,omitempty"` // "nvidia", "amd", "apple", ""
 	Tags           []string `json:"tags,omitempty"`
 }
 
+// SSHPortOrDefault returns the device's SSH port, defaulting to 22.
+func (d Device) SSHPortOrDefault() int {
+	if d.SSHPort <= 0 {
+		return 22
+	}
+	return d.SSHPort
+}
+
 type Service struct {
 	ID          string `json:"id"`
 	DeviceID    string `json:"device_id"`
-	Type        string `json:"type"`  // "vllm", "llamacpp", "comfyui"
+	Type        string `json:"type"` // "vllm", "llamacpp", "comfyui"
 	Image       string `json:"image"`
 	Model       string `json:"model,omitempty"`
 	Port        int    `json:"port"`
@@ -53,10 +62,10 @@ type Service struct {
 }
 
 type Preferences struct {
-	Theme              string `json:"theme"`
-	DefaultVLLMImage   string `json:"default_vllm_image"`
-	DefaultLlamaImage  string `json:"default_llama_image"`
-	DefaultComfyImage  string `json:"default_comfyui_image"`
+	Theme             string `json:"theme"`
+	DefaultVLLMImage  string `json:"default_vllm_image"`
+	DefaultLlamaImage string `json:"default_llama_image"`
+	DefaultComfyImage string `json:"default_comfyui_image"`
 }
 
 // DefaultConfig returns a config with sensible defaults.
@@ -71,10 +80,10 @@ func DefaultConfig() *Config {
 		Devices:  []Device{},
 		Services: []Service{},
 		Preferences: Preferences{
-			Theme:              "tokyonight",
-			DefaultVLLMImage:   "vllm/vllm-openai:latest",
-			DefaultLlamaImage:  "ghcr.io/ggml-org/llama.cpp:server-cuda",
-			DefaultComfyImage:  "yanwk/comfyui-boot:latest",
+			Theme:             "tokyonight",
+			DefaultVLLMImage:  "vllm/vllm-openai:latest",
+			DefaultLlamaImage: "ghcr.io/ggml-org/llama.cpp:server-cuda",
+			DefaultComfyImage: "yanwk/comfyui-boot:latest",
 		},
 	}
 }

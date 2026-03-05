@@ -785,6 +785,8 @@ func formatUptime(seconds int64) string {
 	return fmt.Sprintf("%dm", mins)
 }
 
+func (d *Dashboard) InputActive() bool { return false }
+
 func (d *Dashboard) KeyBinds() []KeyBind {
 	return []KeyBind{
 		{Key: "n", Help: "new"},

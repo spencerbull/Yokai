@@ -37,7 +37,9 @@ type Bootstrap struct {
 	connectionType string
 	sshUser        string
 	sshKey         string
+	sshPassphrase  string // passphrase for encrypted SSH key
 	sshPassword    string
+	sshPort        int
 
 	step       bootstrapStep
 	err        string
@@ -56,9 +58,12 @@ type bootstrapProgressMsg struct {
 
 // NewBootstrap creates the bootstrap view.
 // label is a human-friendly name for the device (e.g. Tailscale hostname).
-func NewBootstrap(cfg *config.Config, version string, host, label, connType, user, keyPath, password string) *Bootstrap {
+func NewBootstrap(cfg *config.Config, version string, host, label, connType, user, keyPath, passphrase, password string, sshPort int) *Bootstrap {
 	if label == "" {
 		label = host
+	}
+	if sshPort <= 0 {
+		sshPort = 22
 	}
 	return &Bootstrap{
 		cfg:            cfg,
@@ -68,7 +73,9 @@ func NewBootstrap(cfg *config.Config, version string, host, label, connType, use
 		connectionType: connType,
 		sshUser:        user,
 		sshKey:         keyPath,
+		sshPassphrase:  passphrase,
 		sshPassword:    password,
+		sshPort:        sshPort,
 		step:           bsConnecting,
 	}
 }
@@ -81,10 +88,12 @@ func (b *Bootstrap) runBootstrap() tea.Cmd {
 	return func() tea.Msg {
 		// Step 1: Connect via SSH
 		client, err := sshpkg.Connect(sshpkg.ClientConfig{
-			Host:     b.host,
-			User:     b.sshUser,
-			KeyPath:  b.sshKey,
-			Password: b.sshPassword,
+			Host:          b.host,
+			Port:          fmt.Sprintf("%d", b.sshPort),
+			User:          b.sshUser,
+			KeyPath:       b.sshKey,
+			KeyPassphrase: b.sshPassphrase,
+			Password:      b.sshPassword,
 		})
 		if err != nil {
 			return bootstrapProgressMsg{step: bsFailed, err: fmt.Errorf("SSH connect: %w", err)}
@@ -137,10 +146,12 @@ func (b *Bootstrap) runMonitoringDeploy() tea.Cmd {
 	return func() tea.Msg {
 		// Connect to SSH for monitoring deployment
 		client, err := sshpkg.Connect(sshpkg.ClientConfig{
-			Host:     b.host,
-			User:     b.sshUser,
-			KeyPath:  b.sshKey,
-			Password: b.sshPassword,
+			Host:          b.host,
+			Port:          fmt.Sprintf("%d", b.sshPort),
+			User:          b.sshUser,
+			KeyPath:       b.sshKey,
+			KeyPassphrase: b.sshPassphrase,
+			Password:      b.sshPassword,
 		})
 		if err != nil {
 			return bootstrapProgressMsg{step: bsFailed, err: fmt.Errorf("SSH connect for monitoring: %w", err)}
@@ -235,6 +246,7 @@ func (b *Bootstrap) Update(msg tea.Msg) (View, tea.Cmd) {
 				Host:           b.host,
 				SSHUser:        b.sshUser,
 				SSHKey:         b.sshKey,
+				SSHPort:        b.sshPort,
 				ConnectionType: b.connectionType,
 				AgentPort:      7474,
 				AgentToken:     b.agentToken,
@@ -396,6 +408,8 @@ func boolStatus(ok bool, detail string) string {
 	}
 	return theme.CritStyle.Render("✗") + " not found"
 }
+
+func (b *Bootstrap) InputActive() bool { return false }
 
 func (b *Bootstrap) KeyBinds() []KeyBind {
 	switch b.step {
