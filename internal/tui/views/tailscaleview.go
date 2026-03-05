@@ -121,7 +121,7 @@ func (t *TailscaleView) Update(msg tea.Msg) (View, tea.Cmd) {
 					// Navigate to SSH creds for first selected peer
 					// TODO: handle multi-device flow
 					peer := selectedPeers[0]
-					return t, Navigate(NewSSHCreds(t.cfg, t.version, peer.TailAddr, "tailscale"))
+					return t, Navigate(NewSSHCreds(t.cfg, t.version, peer.TailAddr, peer.HostName, "tailscale"))
 				}
 			case "esc":
 				return t, PopView()

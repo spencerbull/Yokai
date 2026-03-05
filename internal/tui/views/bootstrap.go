@@ -33,6 +33,7 @@ type Bootstrap struct {
 	cfg            *config.Config
 	version        string
 	host           string
+	label          string // human-friendly device name
 	connectionType string
 	sshUser        string
 	sshKey         string
@@ -54,11 +55,16 @@ type bootstrapProgressMsg struct {
 }
 
 // NewBootstrap creates the bootstrap view.
-func NewBootstrap(cfg *config.Config, version string, host, connType, user, keyPath, password string) *Bootstrap {
+// label is a human-friendly name for the device (e.g. Tailscale hostname).
+func NewBootstrap(cfg *config.Config, version string, host, label, connType, user, keyPath, password string) *Bootstrap {
+	if label == "" {
+		label = host
+	}
 	return &Bootstrap{
 		cfg:            cfg,
 		version:        version,
 		host:           host,
+		label:          label,
 		connectionType: connType,
 		sshUser:        user,
 		sshKey:         keyPath,
@@ -225,7 +231,7 @@ func (b *Bootstrap) Update(msg tea.Msg) (View, tea.Cmd) {
 			// Add device to config
 			device := config.Device{
 				ID:             b.host,
-				Label:          b.host,
+				Label:          b.label,
 				Host:           b.host,
 				SSHUser:        b.sshUser,
 				SSHKey:         b.sshKey,
@@ -285,8 +291,12 @@ func (b *Bootstrap) Update(msg tea.Msg) (View, tea.Cmd) {
 }
 
 func (b *Bootstrap) View() string {
+	displayName := b.label
+	if b.label != b.host {
+		displayName = fmt.Sprintf("%s (%s)", b.label, b.host)
+	}
 	title := lipgloss.NewStyle().Foreground(theme.Accent).Bold(true).
-		Render(fmt.Sprintf("Bootstrap — %s", b.host))
+		Render(fmt.Sprintf("Bootstrap — %s", displayName))
 
 	// Step indicators
 	var steps string

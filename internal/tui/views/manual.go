@@ -46,7 +46,7 @@ func (m *Manual) Update(msg tea.Msg) (View, tea.Cmd) {
 				return m, nil
 			}
 			m.err = ""
-			return m, Navigate(NewSSHCreds(m.cfg, m.version, m.input, "manual"))
+			return m, Navigate(NewSSHCreds(m.cfg, m.version, m.input, "", "manual"))
 		case "esc":
 			return m, PopView()
 		case "backspace":

@@ -33,6 +33,7 @@ type SSHCreds struct {
 	cfg            *config.Config
 	version        string
 	host           string
+	label          string // human-friendly name (e.g. Tailscale hostname)
 	connectionType string
 	user           string
 	auth           authMethod
@@ -45,11 +46,17 @@ type SSHCreds struct {
 }
 
 // NewSSHCreds creates the SSH credentials view.
-func NewSSHCreds(cfg *config.Config, version string, host string, connType string) *SSHCreds {
+// label is a human-friendly display name for the device (e.g. a Tailscale
+// hostname). When empty, the host address is used as the label.
+func NewSSHCreds(cfg *config.Config, version string, host, label, connType string) *SSHCreds {
+	if label == "" {
+		label = host
+	}
 	return &SSHCreds{
 		cfg:            cfg,
 		version:        version,
 		host:           host,
+		label:          label,
 		connectionType: connType,
 		user:           "root",
 		keyPath:        "~/.ssh/id_ed25519",
@@ -173,12 +180,16 @@ func (s *SSHCreds) submit() tea.Cmd {
 		password = s.password
 	}
 
-	return Navigate(NewBootstrap(s.cfg, s.version, s.host, s.connectionType, s.user, sshKey, password))
+	return Navigate(NewBootstrap(s.cfg, s.version, s.host, s.label, s.connectionType, s.user, sshKey, password))
 }
 
 func (s *SSHCreds) View() string {
+	displayName := s.label
+	if s.label != s.host {
+		displayName = fmt.Sprintf("%s (%s)", s.label, s.host)
+	}
 	title := lipgloss.NewStyle().Foreground(theme.Accent).Bold(true).
-		Render(fmt.Sprintf("SSH Credentials — %s", s.host))
+		Render(fmt.Sprintf("SSH Credentials — %s", displayName))
 
 	// User field
 	userLabel := s.fieldLabel("Username:", fieldUser)
