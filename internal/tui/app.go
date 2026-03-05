@@ -156,6 +156,14 @@ func (a *App) switchToTab(tab int) tea.Cmd {
 	a.activeTab = tab
 	a.currentView = target
 	a.viewStack = nil // Clear stack on tab switch
+
+	// Forward current window size so the new view can lay out correctly
+	// before the next terminal-driven WindowSizeMsg arrives.
+	if a.width > 0 {
+		sized, _ := a.currentView.Update(tea.WindowSizeMsg{Width: a.width, Height: a.height})
+		a.currentView = sized
+	}
+
 	return a.currentView.Init()
 }
 
@@ -202,6 +210,13 @@ func (a *App) navigate(msg views.NavigateMsg) (tea.Model, tea.Cmd) {
 		a.viewStack = append(a.viewStack, a.currentView)
 		a.currentView = msg.Target
 	}
+
+	// Forward current window size so the new view renders at the right width.
+	if a.width > 0 {
+		sized, _ := a.currentView.Update(tea.WindowSizeMsg{Width: a.width, Height: a.height})
+		a.currentView = sized
+	}
+
 	cmd := a.currentView.Init()
 	return a, cmd
 }
@@ -214,6 +229,13 @@ func (a *App) popView() (tea.Model, tea.Cmd) {
 	}
 	a.currentView = a.viewStack[len(a.viewStack)-1]
 	a.viewStack = a.viewStack[:len(a.viewStack)-1]
+
+	// Refresh window size in case terminal was resized while another view was active.
+	if a.width > 0 {
+		sized, _ := a.currentView.Update(tea.WindowSizeMsg{Width: a.width, Height: a.height})
+		a.currentView = sized
+	}
+
 	return a, a.currentView.Init()
 }
 

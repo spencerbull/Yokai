@@ -213,6 +213,11 @@ func (d *Dashboard) View() string {
 		return d.renderError()
 	}
 
+	// Guard: if we haven't received a WindowSizeMsg yet, use a sensible default.
+	if d.width == 0 {
+		d.width = theme.MaxContentWidth - 2*theme.ContentPadding
+	}
+
 	var sections []string
 
 	// Header
@@ -231,7 +236,10 @@ func (d *Dashboard) View() string {
 	serviceList := d.renderServiceList()
 	sections = append(sections, serviceList)
 
-	return lipgloss.JoinVertical(lipgloss.Center, sections...)
+	// Use Left alignment so the outer lipgloss.Place() in app.go handles centering.
+	// Wrap at d.width so the assembled block has the correct width for centering.
+	content := lipgloss.JoinVertical(lipgloss.Left, sections...)
+	return lipgloss.NewStyle().Width(d.width).Render(content)
 }
 
 // renderGridLayout renders btop-inspired side-by-side panels.
