@@ -424,7 +424,7 @@ func (d *Dashboard) renderGPUPanels2(availableWidth int) string {
 				label := fmt.Sprintf(" GPU %d Util %d%%", gpu.Index, gpu.UtilPercent)
 				gpuTitle := lipgloss.NewStyle().Foreground(theme.Accent).Render(label)
 				gpuChart := components.NewStreamChart("GPU Util", gpuVals, chartWidth, 6, theme.Accent)
-				chartPanel := theme.Panel(gpuTitle).Width(panelWidth).Render(gpuChart.Render())
+				chartPanel := theme.RenderPanel(gpuTitle, gpuChart.Render(), panelWidth)
 				panels = append(panels, chartPanel)
 			}
 		}
@@ -468,7 +468,7 @@ func (d *Dashboard) renderSparklines2(availableWidth int) string {
 			label := fmt.Sprintf(" %s CPU %.0f%%", device.Label, cpuVals[len(cpuVals)-1])
 			cpuTitle := theme.GoodStyle.Render(label)
 			cpu := components.NewStreamChart("CPU", cpuVals, chartWidth, chartHeight, theme.Good)
-			cpuPanel := theme.Panel(cpuTitle).Width(panelWidth).Render(cpu.Render())
+			cpuPanel := theme.RenderPanel(cpuTitle, cpu.Render(), panelWidth)
 			charts = append(charts, cpuPanel)
 		}
 
@@ -477,7 +477,7 @@ func (d *Dashboard) renderSparklines2(availableWidth int) string {
 			label := fmt.Sprintf(" %s RAM %.0f%%", device.Label, ramVals[len(ramVals)-1])
 			ramTitle := theme.WarnStyle.Render(label)
 			ram := components.NewStreamChart("RAM", ramVals, chartWidth, chartHeight, theme.Accent)
-			ramPanel := theme.Panel(ramTitle).Width(panelWidth).Render(ram.Render())
+			ramPanel := theme.RenderPanel(ramTitle, ram.Render(), panelWidth)
 			charts = append(charts, ramPanel)
 		}
 	}
@@ -498,7 +498,7 @@ func (d *Dashboard) renderServiceList() string {
 	title := theme.TitleStyle.Render("Services")
 	content := serviceList.Render()
 
-	return theme.Panel(title).Width(d.width - 2).Render(content)
+	return theme.RenderPanel(title, content, d.width)
 }
 
 func (d *Dashboard) buildServiceRows() []components.ServiceRow {
