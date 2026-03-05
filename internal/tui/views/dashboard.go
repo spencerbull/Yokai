@@ -36,6 +36,7 @@ type Dashboard struct {
 	// Sparkline data - maintain 60 samples for 2-minute history
 	cpuHistory map[string][]float64 // keyed by device ID
 	ramHistory map[string][]float64
+	gpuHistory map[string][]float64 // keyed by "deviceID-gpuIndex"
 	maxSamples int
 }
 
@@ -116,6 +117,7 @@ func NewDashboard(cfg *config.Config, version string) *Dashboard {
 		devices:    []DashboardDevice{},
 		cpuHistory: make(map[string][]float64),
 		ramHistory: make(map[string][]float64),
+		gpuHistory: make(map[string][]float64),
 		maxSamples: 60, // 60 samples * 2s = 2 minutes of history
 	}
 }
@@ -390,6 +392,11 @@ func (d *Dashboard) renderGPUPanels2(availableWidth int) string {
 		panelWidth = 40
 	}
 
+	chartWidth := panelWidth - 4
+	if chartWidth < 20 {
+		chartWidth = 20
+	}
+
 	for deviceID, metrics := range d.metrics {
 		device := d.findDevice(deviceID)
 		if device == nil {
@@ -410,6 +417,16 @@ func (d *Dashboard) renderGPUPanels2(availableWidth int) string {
 				panelWidth,
 			)
 			panels = append(panels, panel.Render())
+
+			// GPU utilization history chart
+			historyKey := fmt.Sprintf("%s-%d", deviceID, gpu.Index)
+			if gpuVals, ok := d.gpuHistory[historyKey]; ok && len(gpuVals) > 0 {
+				label := fmt.Sprintf(" GPU %d Util %d%%", gpu.Index, gpu.UtilPercent)
+				gpuTitle := lipgloss.NewStyle().Foreground(theme.Accent).Render(label)
+				gpuChart := components.NewStreamChart("GPU Util", gpuVals, chartWidth, 6, theme.Accent)
+				chartPanel := theme.Panel(gpuTitle).Width(panelWidth).Render(gpuChart.Render())
+				panels = append(panels, chartPanel)
+			}
 		}
 	}
 
@@ -448,7 +465,7 @@ func (d *Dashboard) renderSparklines2(availableWidth int) string {
 
 		// CPU streamline chart
 		if cpuVals, ok := d.cpuHistory[deviceID]; ok && len(cpuVals) > 0 {
-			label := fmt.Sprintf(" %s CPU", device.Label)
+			label := fmt.Sprintf(" %s CPU %.0f%%", device.Label, cpuVals[len(cpuVals)-1])
 			cpuTitle := theme.GoodStyle.Render(label)
 			cpu := components.NewStreamChart("CPU", cpuVals, chartWidth, chartHeight, theme.Good)
 			cpuPanel := theme.Panel(cpuTitle).Width(panelWidth).Render(cpu.Render())
@@ -457,7 +474,7 @@ func (d *Dashboard) renderSparklines2(availableWidth int) string {
 
 		// RAM streamline chart
 		if ramVals, ok := d.ramHistory[deviceID]; ok && len(ramVals) > 0 {
-			label := fmt.Sprintf(" %s RAM", device.Label)
+			label := fmt.Sprintf(" %s RAM %.0f%%", device.Label, ramVals[len(ramVals)-1])
 			ramTitle := theme.WarnStyle.Render(label)
 			ram := components.NewStreamChart("RAM", ramVals, chartWidth, chartHeight, theme.Accent)
 			ramPanel := theme.Panel(ramTitle).Width(panelWidth).Render(ram.Render())
@@ -585,6 +602,18 @@ func (d *Dashboard) updateSparklineData() {
 		d.ramHistory[deviceID] = append(d.ramHistory[deviceID], metrics.RAM.Percent)
 		if len(d.ramHistory[deviceID]) > d.maxSamples {
 			d.ramHistory[deviceID] = d.ramHistory[deviceID][1:]
+		}
+
+		// Update GPU history
+		for _, gpu := range metrics.GPUs {
+			key := fmt.Sprintf("%s-%d", deviceID, gpu.Index)
+			if _, ok := d.gpuHistory[key]; !ok {
+				d.gpuHistory[key] = make([]float64, 0, d.maxSamples)
+			}
+			d.gpuHistory[key] = append(d.gpuHistory[key], float64(gpu.UtilPercent))
+			if len(d.gpuHistory[key]) > d.maxSamples {
+				d.gpuHistory[key] = d.gpuHistory[key][1:]
+			}
 		}
 	}
 }
