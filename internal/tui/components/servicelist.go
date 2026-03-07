@@ -46,16 +46,44 @@ type column struct {
 	header   string
 	minWidth int
 	flex     int // relative share of extra space (0 = fixed)
+	id       string
 }
 
-var columns = []column{
-	{header: "", minWidth: 2, flex: 0}, // health indicator
-	{header: "Service", minWidth: 12, flex: 3},
-	{header: "Model", minWidth: 10, flex: 4},
-	{header: "Device", minWidth: 8, flex: 1},
-	{header: "Port", minWidth: 5, flex: 0},
-	{header: "GPU Mem", minWidth: 7, flex: 0},
-	{header: "Uptime", minWidth: 6, flex: 0},
+// allColumns defines the superset of columns; some may be hidden dynamically.
+var allColumns = []column{
+	{id: "health", header: "", minWidth: 2, flex: 0},
+	{id: "service", header: "Service", minWidth: 12, flex: 3},
+	{id: "model", header: "Model", minWidth: 10, flex: 4},
+	{id: "device", header: "Device", minWidth: 8, flex: 1},
+	{id: "port", header: "Port", minWidth: 5, flex: 0},
+	{id: "gpumem", header: "GPU Mem", minWidth: 7, flex: 0},
+	{id: "uptime", header: "Uptime", minWidth: 6, flex: 0},
+}
+
+// activeColumns returns columns that have data, hiding empty ones.
+func (s ServiceList) activeColumns() []column {
+	hasModel := false
+	hasGPUMem := false
+	for _, svc := range s.Services {
+		if svc.Model != "" {
+			hasModel = true
+		}
+		if svc.GPUMemMB > 0 {
+			hasGPUMem = true
+		}
+	}
+
+	var cols []column
+	for _, col := range allColumns {
+		if col.id == "model" && !hasModel {
+			continue
+		}
+		if col.id == "gpumem" && !hasGPUMem {
+			continue
+		}
+		cols = append(cols, col)
+	}
+	return cols
 }
 
 // Render returns the rendered string representation of the service list.
@@ -69,11 +97,12 @@ func (s ServiceList) Render() string {
 		return theme.MutedStyle.Render(emptyMsg)
 	}
 
-	widths := s.columnWidths()
+	cols := s.activeColumns()
+	widths := s.columnWidths(cols)
 	var lines []string
 
 	// Header
-	lines = append(lines, s.renderHeader(widths))
+	lines = append(lines, s.renderHeader(widths, cols))
 
 	// Thin separator
 	sep := theme.MutedStyle.Render(strings.Repeat("─", s.Width))
@@ -82,26 +111,26 @@ func (s ServiceList) Render() string {
 	// Rows
 	for i, svc := range s.Services {
 		svc.Selected = (i == s.Cursor)
-		lines = append(lines, s.renderRow(svc, widths, i))
+		lines = append(lines, s.renderRow(svc, widths, cols, i))
 	}
 
 	return strings.Join(lines, "\n")
 }
 
-func (s ServiceList) columnWidths() []int {
-	widths := make([]int, len(columns))
+func (s ServiceList) columnWidths(cols []column) []int {
+	widths := make([]int, len(cols))
 	totalMin := 0
 	totalFlex := 0
-	for i, col := range columns {
+	for i, col := range cols {
 		widths[i] = col.minWidth
 		totalMin += col.minWidth
 		totalFlex += col.flex
 	}
-	totalMin += len(columns) - 1 // column gaps
+	totalMin += len(cols) - 1 // column gaps
 
 	extra := s.Width - totalMin
 	if extra > 0 && totalFlex > 0 {
-		for i, col := range columns {
+		for i, col := range cols {
 			if col.flex > 0 {
 				widths[i] += extra * col.flex / totalFlex
 			}
@@ -110,55 +139,54 @@ func (s ServiceList) columnWidths() []int {
 	return widths
 }
 
-func (s ServiceList) renderHeader(widths []int) string {
+func (s ServiceList) renderHeader(widths []int, cols []column) string {
 	headerStyle := lipgloss.NewStyle().
 		Foreground(theme.TextMuted).
 		Bold(true).
 		Underline(true)
 
 	var parts []string
-	for i, col := range columns {
+	for i, col := range cols {
 		parts = append(parts, pad(col.header, widths[i]))
 	}
 	return headerStyle.Render(strings.Join(parts, " "))
 }
 
-func (s ServiceList) renderRow(svc ServiceRow, widths []int, rowIdx int) string {
-	// Health indicator — use a fixed-width cell so alignment doesn't break
-	healthIcon := s.healthIndicator(svc)
-
-	// Short model: strip org prefix for display (e.g. "Qwen/Qwen3.5-35B" -> "Qwen3.5-35B")
-	model := svc.Model
-	if idx := strings.LastIndex(model, "/"); idx >= 0 && idx < len(model)-1 {
-		model = model[idx+1:]
+// cellValue returns the value for a given column id.
+func (s ServiceList) cellValue(svc ServiceRow, col column, width int) string {
+	switch col.id {
+	case "health":
+		return s.healthIndicator(svc)
+	case "service":
+		return truncate(svc.Name, width)
+	case "model":
+		model := svc.Model
+		if idx := strings.LastIndex(model, "/"); idx >= 0 && idx < len(model)-1 {
+			model = model[idx+1:]
+		}
+		return truncate(model, width)
+	case "device":
+		return truncate(svc.Device, width)
+	case "port":
+		if svc.Port > 0 {
+			return fmt.Sprintf("%d", svc.Port)
+		}
+		return ""
+	case "gpumem":
+		return formatMem(svc.GPUMemMB)
+	case "uptime":
+		return s.statusText(svc)
+	default:
+		return ""
 	}
+}
 
-	portStr := ""
-	if svc.Port > 0 {
-		portStr = fmt.Sprintf("%d", svc.Port)
-	}
-
-	gpuStr := formatMem(svc.GPUMemMB)
-
-	// Status text with color
-	statusStr := s.statusText(svc)
-
-	cells := []string{
-		healthIcon,
-		truncate(svc.Name, widths[1]),
-		truncate(model, widths[2]),
-		truncate(svc.Device, widths[3]),
-		pad(portStr, widths[4]),
-		pad(gpuStr, widths[5]),
-		pad(statusStr, widths[6]),
-	}
-
-	// Pad each cell (except health icon which is special)
+func (s ServiceList) renderRow(svc ServiceRow, widths []int, cols []column, rowIdx int) string {
 	var parts []string
-	for i, cell := range cells {
-		if i == 0 {
-			// Health icon: pad the plain-text width to the column width
-			parts = append(parts, cell+strings.Repeat(" ", max(0, widths[0]-1)))
+	for i, col := range cols {
+		cell := s.cellValue(svc, col, widths[i])
+		if col.id == "health" {
+			parts = append(parts, cell+strings.Repeat(" ", max(0, widths[i]-1)))
 		} else {
 			parts = append(parts, pad(cell, widths[i]))
 		}

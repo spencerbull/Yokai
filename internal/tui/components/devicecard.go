@@ -51,7 +51,7 @@ func (d DeviceCard) Render() string {
 		contentWidth = 10
 	}
 
-	// Title line: "My Server (192.168.1.100) ── ● online ──"
+	// Title line: "finn  ● online" (label left, status right-aligned)
 	statusDot := ""
 	statusText := ""
 	if d.Online {
@@ -62,54 +62,47 @@ func (d DeviceCard) Render() string {
 		statusText = "offline"
 	}
 
-	titlePart := fmt.Sprintf("%s (%s)", d.Label, d.Host)
+	titlePart := d.Label
 	statusPart := fmt.Sprintf("%s %s", statusDot, statusText)
 
-	// Calculate padding for title line (use visual width for styled text)
+	// Right-align status within content width
 	titleLen := lipgloss.Width(titlePart)
 	statusLen := lipgloss.Width(statusPart)
-	dashesNeeded := contentWidth - titleLen - statusLen - 6 // -6 for spaces and dash separators
-	if dashesNeeded < 0 {
-		dashesNeeded = 0
+	gap := contentWidth - titleLen - statusLen
+	if gap < 1 {
+		gap = 1
 	}
 
-	leftDashes := dashesNeeded / 2
-	rightDashes := dashesNeeded - leftDashes
+	title := titlePart + strings.Repeat(" ", gap) + statusPart
 
-	var title string
-	if dashesNeeded > 0 {
-		title = titlePart + " " + strings.Repeat("─", leftDashes+1) + " " + statusPart + " " + strings.Repeat("─", rightDashes)
-	} else {
-		// Not enough space for dashes, just use basic format
-		title = titlePart + " " + statusPart
-	}
-
-	// Truncate title if it's still too long (use visual width for styled content)
+	// Truncate title if still too long
 	if lipgloss.Width(title) > contentWidth {
-		// Rebuild with shorter titlePart to avoid cutting ANSI codes
-		maxTitleLen := contentWidth - statusLen - 4
+		maxTitleLen := contentWidth - statusLen - 2
 		if maxTitleLen > 3 {
 			titlePart = titlePart[:min(len(titlePart), maxTitleLen-3)] + "..."
-			title = titlePart + " " + statusPart
+			gap = contentWidth - lipgloss.Width(titlePart) - statusLen
+			if gap < 1 {
+				gap = 1
+			}
+			title = titlePart + strings.Repeat(" ", gap) + statusPart
 		}
 	}
 
-	// GPU line: "GPU: 2x NVIDIA RTX 4090"
+	// GPU line: show actual name like "RTX Pro 6000", fallback to type
 	gpuLine := ""
 	if d.GPUCount > 0 && d.GPUType != "" {
+		gpuDisplay := d.GPUType
+		// Strip common prefixes for cleaner display
+		gpuDisplay = strings.TrimPrefix(gpuDisplay, "NVIDIA ")
 		if d.GPUCount == 1 {
-			gpuLine = fmt.Sprintf("GPU: %s", d.GPUType)
+			gpuLine = fmt.Sprintf("GPU  %s", gpuDisplay)
 		} else {
-			gpuLine = fmt.Sprintf("GPU: %dx %s", d.GPUCount, d.GPUType)
+			gpuLine = fmt.Sprintf("GPU  %dx %s", d.GPUCount, gpuDisplay)
 		}
 	} else if d.GPUCount > 0 {
-		if d.GPUCount == 1 {
-			gpuLine = "GPU: 1 device"
-		} else {
-			gpuLine = fmt.Sprintf("GPU: %d devices", d.GPUCount)
-		}
+		gpuLine = fmt.Sprintf("GPU  %d device(s)", d.GPUCount)
 	} else {
-		gpuLine = "GPU: None"
+		gpuLine = "GPU  none"
 	}
 
 	// Metrics line: "CPU [████░░░░░░] 32%  RAM [██████░░] 67%"
@@ -136,15 +129,15 @@ func (d DeviceCard) Render() string {
 		cpuLabel, cpuBar, cpuPercentStr,
 		ramLabel, ramBar, ramPercentStr)
 
-	// Services line: "Services: 3 running"
+	// Services line
 	var servicesLine string
 	switch d.ServiceCount {
 	case 0:
-		servicesLine = "Services: None"
+		servicesLine = "Svc  none"
 	case 1:
-		servicesLine = "Services: 1 running"
+		servicesLine = "Svc  1 running"
 	default:
-		servicesLine = fmt.Sprintf("Services: %d running", d.ServiceCount)
+		servicesLine = fmt.Sprintf("Svc  %d running", d.ServiceCount)
 	}
 
 	// Truncate and pad lines to content width
