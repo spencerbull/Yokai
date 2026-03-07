@@ -286,178 +286,135 @@ func (d *Dashboard) View() string {
 	return lipgloss.NewStyle().Width(d.width).Render(content)
 }
 
-// renderGridLayout renders btop-inspired side-by-side panels.
+// renderGridLayout renders per-device sections: card + side-by-side sparklines.
 func (d *Dashboard) renderGridLayout() []string {
 	var sections []string
 
-	leftWidth := (d.width - 1) / 2
-	rightWidth := d.width - leftWidth - 1
+	for _, device := range d.devices {
+		// Render device card (full width) with GPU info inline
+		card := d.renderDeviceCardWithGPU(device, d.width)
+		sections = append(sections, card)
 
-	// Top row: Device card (left) + GPU panel (right), matched heights
-	if len(d.devices) > 0 {
-		deviceCard := d.renderDeviceCardSingle(leftWidth)
-		gpuPanel := d.renderGPUInfoPanel(rightWidth)
-
-		if deviceCard != "" && gpuPanel != "" {
-			// Match heights by padding shorter side
-			leftLines := strings.Count(deviceCard, "\n") + 1
-			rightLines := strings.Count(gpuPanel, "\n") + 1
-			if leftLines < rightLines {
-				deviceCard += strings.Repeat("\n", rightLines-leftLines)
-			} else if rightLines < leftLines {
-				gpuPanel += strings.Repeat("\n", leftLines-rightLines)
-			}
-			topRow := lipgloss.JoinHorizontal(lipgloss.Top,
-				lipgloss.NewStyle().Width(leftWidth).Render(deviceCard),
-				" ",
-				lipgloss.NewStyle().Width(rightWidth).Render(gpuPanel))
-			sections = append(sections, topRow)
-		} else if deviceCard != "" {
-			sections = append(sections, deviceCard)
-		} else if gpuPanel != "" {
-			sections = append(sections, gpuPanel)
+		// Render sparklines for this device horizontally (CPU | RAM | GPU side by side)
+		sparklines := d.renderDeviceSparklines(device.ID, d.width)
+		if sparklines != "" {
+			sections = append(sections, sparklines)
 		}
-	}
-
-	// Middle row: CPU/RAM charts (left) | GPU util charts (right)
-	leftCol := d.renderSparklines2(leftWidth)
-	rightCol := d.renderGPUCharts(rightWidth)
-
-	if leftCol != "" && rightCol != "" {
-		// Match heights
-		leftLines := strings.Count(leftCol, "\n") + 1
-		rightLines := strings.Count(rightCol, "\n") + 1
-		if leftLines < rightLines {
-			leftCol += strings.Repeat("\n", rightLines-leftLines)
-		} else if rightLines < leftLines {
-			rightCol += strings.Repeat("\n", leftLines-rightLines)
-		}
-		middleRow := lipgloss.JoinHorizontal(lipgloss.Top,
-			lipgloss.NewStyle().Width(leftWidth).Render(leftCol),
-			" ",
-			lipgloss.NewStyle().Width(rightWidth).Render(rightCol))
-		sections = append(sections, middleRow)
-	} else if leftCol != "" {
-		sections = append(sections, leftCol)
-	} else if rightCol != "" {
-		sections = append(sections, rightCol)
 	}
 
 	return sections
 }
 
-// renderDeviceCardSingle renders a single device card for the left column of grid layout.
-func (d *Dashboard) renderDeviceCardSingle(width int) string {
-	if len(d.devices) == 0 {
-		return ""
+// renderDeviceCardWithGPU renders a full-width device card with GPU metrics inline.
+func (d *Dashboard) renderDeviceCardWithGPU(device DashboardDevice, width int) string {
+	var gpus []components.GPUMetrics
+	if m, ok := d.metrics[device.ID]; ok {
+		for _, gpu := range m.GPUs {
+			gpus = append(gpus, components.GPUMetrics{
+				Name:        gpu.Name,
+				UtilPercent: gpu.UtilPercent,
+				VRAMUsedMB:  gpu.VRAMUsedMB,
+				VRAMTotalMB: gpu.VRAMTotalMB,
+				TempC:       gpu.TempC,
+				PowerDrawW:  float64(gpu.PowerDrawW),
+				PowerLimitW: float64(gpu.PowerLimitW),
+				FanPercent:  gpu.FanPercent,
+			})
+		}
 	}
-	device := d.devices[0]
-	gpuName := d.getGPUNameForDevice(device.ID)
-	if gpuName == "" {
-		gpuName = device.GPUType
-	}
-	card := components.NewDeviceCard(
+
+	card := components.NewDeviceCardFull(
 		device.Label,
 		device.Host,
 		device.Online,
-		gpuName,
-		device.GPUCount,
 		device.CPUPercent,
 		device.RAMPercent,
 		device.ServiceCount,
+		gpus,
 		width,
 	)
 	return card.Render()
 }
 
-// renderGPUInfoPanel renders the GPU info panel for the right column of grid layout.
-func (d *Dashboard) renderGPUInfoPanel(width int) string {
-	if len(d.metrics) == 0 {
+// renderDeviceSparklines renders CPU + RAM + optionally GPU sparklines side by side for one device.
+func (d *Dashboard) renderDeviceSparklines(deviceID string, availableWidth int) string {
+	cpuVals := d.cpuHistory[deviceID]
+	ramVals := d.ramHistory[deviceID]
+	if len(cpuVals) == 0 && len(ramVals) == 0 {
 		return ""
 	}
-	panelWidth := width
-	if panelWidth < 40 {
-		panelWidth = 40
-	}
-	for _, metrics := range d.metrics {
-		for _, gpu := range metrics.GPUs {
-			panel := components.NewGPUPanel(
-				gpu.Index,
-				gpu.Name,
-				gpu.TempC,
-				gpu.UtilPercent,
-				gpu.VRAMUsedMB,
-				gpu.VRAMTotalMB,
-				gpu.PowerDrawW,
-				gpu.PowerLimitW,
-				gpu.FanPercent,
-				panelWidth,
-			)
-			return panel.Render()
-		}
-	}
-	return ""
-}
 
-// renderGPUCharts renders GPU utilization history charts for the right column.
-func (d *Dashboard) renderGPUCharts(availableWidth int) string {
-	if len(d.metrics) == 0 {
-		return ""
-	}
-	panelWidth := availableWidth - 2
-	if panelWidth < 40 {
-		panelWidth = 40
-	}
-	chartWidth := panelWidth - 4
-	if chartWidth < 20 {
-		chartWidth = 20
-	}
-
-	var panels []string
-	for deviceID, metrics := range d.metrics {
-		for _, gpu := range metrics.GPUs {
+	// Determine if this device has GPU history
+	var gpuVals []float64
+	var gpuLabel string
+	if m, ok := d.metrics[deviceID]; ok {
+		for _, gpu := range m.GPUs {
 			historyKey := fmt.Sprintf("%s-%d", deviceID, gpu.Index)
-			if gpuVals, ok := d.gpuHistory[historyKey]; ok && len(gpuVals) > 0 {
-				label := fmt.Sprintf(" GPU %d Util %d%%", gpu.Index, gpu.UtilPercent)
-				gpuTitle := lipgloss.NewStyle().Foreground(theme.Accent).Render(label)
-				gpuChart := components.NewStreamChart("GPU Util", gpuVals, chartWidth, 5, theme.Accent)
-				chartPanel := theme.RenderPanel(gpuTitle, gpuChart.Render(), panelWidth)
-				panels = append(panels, chartPanel)
+			if vals, ok := d.gpuHistory[historyKey]; ok && len(vals) > 0 {
+				gpuVals = vals
+				gpuLabel = fmt.Sprintf("GPU %d%%", gpu.UtilPercent)
+				break
 			}
 		}
 	}
-	if len(panels) == 0 {
-		return ""
-	}
-	return lipgloss.JoinVertical(lipgloss.Left, panels...)
-}
 
-// getGPUNameForDevice returns the actual GPU name from metrics for a device.
-func (d *Dashboard) getGPUNameForDevice(deviceID string) string {
-	m, ok := d.metrics[deviceID]
-	if !ok || len(m.GPUs) == 0 {
+	numCharts := 2
+	if len(gpuVals) > 0 {
+		numCharts = 3
+	}
+
+	chartWidth := (availableWidth - numCharts + 1) / numCharts
+	if chartWidth < 20 {
+		chartWidth = 20
+	}
+	chartHeight := 5
+	innerWidth := chartWidth - 4
+	if innerWidth < 10 {
+		innerWidth = 10
+	}
+
+	var charts []string
+
+	if len(cpuVals) > 0 {
+		label := fmt.Sprintf(" CPU %.0f%%", cpuVals[len(cpuVals)-1])
+		cpuTitle := theme.GoodStyle.Render(label)
+		cpu := components.NewStreamChart("CPU", cpuVals, innerWidth, chartHeight, theme.Good)
+		charts = append(charts, theme.RenderPanel(cpuTitle, cpu.Render(), chartWidth))
+	}
+
+	if len(ramVals) > 0 {
+		label := fmt.Sprintf(" RAM %.0f%%", ramVals[len(ramVals)-1])
+		ramTitle := theme.WarnStyle.Render(label)
+		ram := components.NewStreamChart("RAM", ramVals, innerWidth, chartHeight, theme.Accent)
+		charts = append(charts, theme.RenderPanel(ramTitle, ram.Render(), chartWidth))
+	}
+
+	if len(gpuVals) > 0 {
+		gpuTitle := lipgloss.NewStyle().Foreground(theme.Accent).Render(" " + gpuLabel)
+		gpuChart := components.NewStreamChart("GPU", gpuVals, innerWidth, chartHeight, theme.Accent)
+		charts = append(charts, theme.RenderPanel(gpuTitle, gpuChart.Render(), chartWidth))
+	}
+
+	if len(charts) == 0 {
 		return ""
 	}
-	return m.GPUs[0].Name
+
+	return lipgloss.JoinHorizontal(lipgloss.Top, charts...)
 }
 
 // renderStackedLayout renders single-column layout for narrow terminals.
 func (d *Dashboard) renderStackedLayout() []string {
 	var sections []string
 
-	if len(d.devices) > 0 {
-		deviceCards := d.renderDeviceCards()
-		sections = append(sections, deviceCards)
-	}
+	for _, device := range d.devices {
+		card := d.renderDeviceCardWithGPU(device, d.width)
+		sections = append(sections, card)
 
-	gpuPanels := d.renderGPUPanels()
-	if gpuPanels != "" {
-		sections = append(sections, gpuPanels)
-	}
-
-	sparklines := d.renderSparklines()
-	if sparklines != "" {
-		sections = append(sections, sparklines)
+		// Stacked sparklines (vertical) for narrow layout
+		sparklines := d.renderDeviceSparklines(device.ID, d.width)
+		if sparklines != "" {
+			sections = append(sections, sparklines)
+		}
 	}
 
 	return sections
@@ -498,150 +455,6 @@ func (d *Dashboard) renderHeader() string {
 		Render(headerText)
 }
 
-func (d *Dashboard) renderDeviceCards() string {
-	if len(d.devices) == 0 {
-		return ""
-	}
-
-	cardWidth := d.width - 4
-	if cardWidth < 20 {
-		cardWidth = 20
-	}
-
-	cards := make([]string, len(d.devices))
-	for i, device := range d.devices {
-		gpuName := d.getGPUNameForDevice(device.ID)
-		if gpuName == "" {
-			gpuName = device.GPUType
-		}
-		card := components.NewDeviceCard(
-			device.Label,
-			device.Host,
-			device.Online,
-			gpuName,
-			device.GPUCount,
-			device.CPUPercent,
-			device.RAMPercent,
-			device.ServiceCount,
-			cardWidth,
-		)
-		cards[i] = card.Render()
-	}
-
-	return lipgloss.JoinVertical(lipgloss.Left, cards...)
-}
-
-func (d *Dashboard) renderGPUPanels() string {
-	return d.renderGPUPanels2(d.width)
-}
-
-func (d *Dashboard) renderGPUPanels2(availableWidth int) string {
-	if len(d.metrics) == 0 {
-		return ""
-	}
-
-	var panels []string
-	panelWidth := availableWidth - 2
-	if panelWidth < 40 {
-		panelWidth = 40
-	}
-
-	chartWidth := panelWidth - 4
-	if chartWidth < 20 {
-		chartWidth = 20
-	}
-
-	for deviceID, metrics := range d.metrics {
-		device := d.findDevice(deviceID)
-		if device == nil {
-			continue
-		}
-
-		for _, gpu := range metrics.GPUs {
-			panel := components.NewGPUPanel(
-				gpu.Index,
-				gpu.Name,
-				gpu.TempC,
-				gpu.UtilPercent,
-				gpu.VRAMUsedMB,
-				gpu.VRAMTotalMB,
-				gpu.PowerDrawW,
-				gpu.PowerLimitW,
-				gpu.FanPercent,
-				panelWidth,
-			)
-			panels = append(panels, panel.Render())
-
-			// GPU utilization history chart
-			historyKey := fmt.Sprintf("%s-%d", deviceID, gpu.Index)
-			if gpuVals, ok := d.gpuHistory[historyKey]; ok && len(gpuVals) > 0 {
-				label := fmt.Sprintf(" GPU %d Util %d%%", gpu.Index, gpu.UtilPercent)
-				gpuTitle := lipgloss.NewStyle().Foreground(theme.Accent).Render(label)
-				gpuChart := components.NewStreamChart("GPU Util", gpuVals, chartWidth, 5, theme.Accent)
-				chartPanel := theme.RenderPanel(gpuTitle, gpuChart.Render(), panelWidth)
-				panels = append(panels, chartPanel)
-			}
-		}
-	}
-
-	if len(panels) == 0 {
-		return ""
-	}
-
-	return lipgloss.JoinVertical(lipgloss.Left, panels...)
-}
-
-func (d *Dashboard) renderSparklines() string {
-	return d.renderSparklines2(d.width)
-}
-
-func (d *Dashboard) renderSparklines2(availableWidth int) string {
-	if len(d.cpuHistory) == 0 && len(d.ramHistory) == 0 {
-		return ""
-	}
-
-	// Panel border + padding takes 4 chars (2 border + 2 padding),
-	// then the chart Y-axis labels take ~6 chars
-	panelWidth := availableWidth - 2
-	chartWidth := panelWidth - 4 // inner content after border+padding
-	if chartWidth < 20 {
-		chartWidth = 20
-	}
-	chartHeight := 5
-
-	var charts []string
-
-	for deviceID := range d.cpuHistory {
-		device := d.findDevice(deviceID)
-		if device == nil {
-			continue
-		}
-
-		// CPU streamline chart
-		if cpuVals, ok := d.cpuHistory[deviceID]; ok && len(cpuVals) > 0 {
-			label := fmt.Sprintf(" %s CPU %.0f%%", device.Label, cpuVals[len(cpuVals)-1])
-			cpuTitle := theme.GoodStyle.Render(label)
-			cpu := components.NewStreamChart("CPU", cpuVals, chartWidth, chartHeight, theme.Good)
-			cpuPanel := theme.RenderPanel(cpuTitle, cpu.Render(), panelWidth)
-			charts = append(charts, cpuPanel)
-		}
-
-		// RAM streamline chart
-		if ramVals, ok := d.ramHistory[deviceID]; ok && len(ramVals) > 0 {
-			label := fmt.Sprintf(" %s RAM %.0f%%", device.Label, ramVals[len(ramVals)-1])
-			ramTitle := theme.WarnStyle.Render(label)
-			ram := components.NewStreamChart("RAM", ramVals, chartWidth, chartHeight, theme.Accent)
-			ramPanel := theme.RenderPanel(ramTitle, ram.Render(), panelWidth)
-			charts = append(charts, ramPanel)
-		}
-	}
-
-	if len(charts) == 0 {
-		return ""
-	}
-
-	return lipgloss.JoinVertical(lipgloss.Left, charts...)
-}
 
 func (d *Dashboard) renderServiceList() string {
 	serviceRows := d.buildServiceRows()
