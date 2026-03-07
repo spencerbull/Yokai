@@ -24,6 +24,7 @@ type Dashboard struct {
 
 	// Service selection
 	selectedService int
+	showDetail      bool
 
 	// Live metrics data
 	metrics   map[string]*DashboardMetrics
@@ -184,13 +185,23 @@ func (d *Dashboard) Update(msg tea.Msg) (View, tea.Cmd) {
 			return d, Navigate(NewAITools(d.cfg, d.version))
 		case "?":
 			return d, Navigate(NewHelp(d.version))
+		case "esc":
+			if d.showDetail {
+				d.showDetail = false
+				return d, nil
+			}
 		case "j", "down":
 			d.moveServiceCursor(1)
+			d.showDetail = false
 		case "k", "up":
 			d.moveServiceCursor(-1)
-		case "enter", "l":
+			d.showDetail = false
+		case "enter":
+			if len(d.serviceContainers) > 0 {
+				d.showDetail = !d.showDetail
+			}
+		case "l":
 			if container := d.getSelectedContainer(); container != nil {
-				// Find device ID for this container
 				deviceID := d.findDeviceIDForContainer(container.ID)
 				return d, Navigate(NewLogViewer(d.cfg, d.version, container.Name, deviceID, container.ID))
 			}
@@ -241,6 +252,13 @@ func (d *Dashboard) View() string {
 	// Service list (always full width, bottom)
 	serviceList := d.renderServiceList()
 	sections = append(sections, serviceList)
+
+	// Service detail panel (expandable)
+	if d.showDetail {
+		if detail := d.renderServiceDetail(); detail != "" {
+			sections = append(sections, detail)
+		}
+	}
 
 	// Use Left alignment so the outer lipgloss.Place() in app.go handles centering.
 	// Wrap at d.width so the assembled block has the correct width for centering.
@@ -553,6 +571,46 @@ func (d *Dashboard) buildServiceRows() []components.ServiceRow {
 	return rows
 }
 
+func (d *Dashboard) renderServiceDetail() string {
+	container := d.getSelectedContainer()
+	if container == nil {
+		return ""
+	}
+
+	displayName := strings.TrimPrefix(container.Name, "yokai-")
+	deviceID := d.findDeviceIDForContainer(container.ID)
+	device := d.findDevice(deviceID)
+	deviceLabel := ""
+	if device != nil {
+		deviceLabel = device.Label
+	}
+
+	// Gather CPU history for this container's device
+	var cpuHistory []float64
+	if vals, ok := d.cpuHistory[deviceID]; ok {
+		cpuHistory = vals
+	}
+
+	data := components.ServiceDetailData{
+		Name:        displayName,
+		Image:       container.Image,
+		Model:       d.getServiceModel(*container),
+		ContainerID: container.ID,
+		Status:      container.Status,
+		Health:      container.Health,
+		Port:        extractExternalPort(container.Ports),
+		Device:      deviceLabel,
+		CPUPercent:  container.CPUPercent,
+		MemUsedMB:   container.MemUsedMB,
+		GPUMemMB:    container.GPUMemMB,
+		Uptime:      formatUptime(container.UptimeSeconds),
+		CPUHistory:  cpuHistory,
+	}
+
+	detail := components.NewServiceDetail(data, d.width)
+	return detail.Render()
+}
+
 func (d *Dashboard) pollMetrics() tea.Cmd {
 	return func() tea.Msg {
 		daemonURL := fmt.Sprintf("http://%s/metrics", d.cfg.Daemon.Listen)
@@ -800,6 +858,7 @@ func (d *Dashboard) InputActive() bool { return false }
 
 func (d *Dashboard) KeyBinds() []KeyBind {
 	return []KeyBind{
+		{Key: "enter", Help: "detail"},
 		{Key: "n", Help: "new"},
 		{Key: "s", Help: "stop"},
 		{Key: "r", Help: "restart"},
