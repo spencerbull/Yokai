@@ -86,6 +86,39 @@ func NewSSHCreds(cfg *config.Config, version string, host, label, connType strin
 	return s
 }
 
+// NewSSHCredsFromConfig creates the SSH credentials view pre-filled with values
+// discovered from ~/.ssh/config. It pre-selects "Key File" auth and focuses the
+// passphrase field since the key is known to be encrypted.
+func NewSSHCredsFromConfig(cfg *config.Config, version string, host, label, connType, user, keyPath string, sshPort int) *SSHCreds {
+	if label == "" {
+		label = host
+	}
+
+	s := &SSHCreds{
+		cfg:            cfg,
+		version:        version,
+		host:           host,
+		label:          label,
+		connectionType: connType,
+		auth:           authKeyFile,
+		activeField:    fieldKeyPassphrase,
+	}
+
+	s.userInput = components.NewTextField("username")
+	s.userInput.SetValue(user)
+
+	s.sshPortInput = components.NewPortField(fmt.Sprintf("%d", sshPort))
+
+	s.keyPathInput = components.NewTextField("~/.ssh/id_ed25519")
+	s.keyPathInput.SetValue(keyPath)
+
+	s.keyPassphraseInput = components.NewPasswordField("key passphrase (required)")
+	s.keyPassphraseInput.Focus()
+	s.passwordInput = components.NewPasswordField("password")
+
+	return s
+}
+
 func (s *SSHCreds) Init() tea.Cmd {
 	return textinput.Blink
 }
