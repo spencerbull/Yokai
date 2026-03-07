@@ -214,16 +214,17 @@ func (d *Dashboard) Update(msg tea.Msg) (View, tea.Cmd) {
 }
 
 func (d *Dashboard) View() string {
-	if d.lastError != nil {
-		return d.renderError()
-	}
-
 	// Guard: if we haven't received a WindowSizeMsg yet, use a sensible default.
 	if d.width == 0 {
 		d.width = theme.MaxContentWidth - 2*theme.ContentPadding
 	}
 
 	var sections []string
+
+	// Error banner when daemon is offline
+	if d.lastError != nil {
+		sections = append(sections, d.renderErrorBanner())
+	}
 
 	// Header
 	header := d.renderHeader()
@@ -301,16 +302,23 @@ func (d *Dashboard) renderStackedLayout() []string {
 	return sections
 }
 
-func (d *Dashboard) renderError() string {
-	errorMsg := "Daemon not running. Start with: yokai daemon"
-	if d.lastError != nil {
-		errorMsg = fmt.Sprintf("Error connecting to daemon: %v", d.lastError)
+func (d *Dashboard) renderErrorBanner() string {
+	bannerWidth := d.width - 4
+	if bannerWidth < 30 {
+		bannerWidth = 30
 	}
 
+	msg := fmt.Sprintf("  Daemon offline: %v", d.lastError)
+	hint := "  Retrying automatically..."
+
+	content := theme.WarnStyle.Render(msg) + "\n" + theme.MutedStyle.Render(hint)
+
 	return lipgloss.NewStyle().
-		Foreground(theme.Crit).
-		Bold(true).
-		Render(errorMsg)
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(theme.Warn).
+		Padding(0, 1).
+		Width(bannerWidth).
+		Render(content)
 }
 
 func (d *Dashboard) renderHeader() string {

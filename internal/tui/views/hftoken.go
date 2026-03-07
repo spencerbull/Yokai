@@ -231,7 +231,7 @@ func (h *HFToken) View() string {
 		if h.err != "" {
 			body += "\n" + theme.CritStyle.Render(h.err)
 		}
-		body += "\n\n" + theme.MutedStyle.Render("Get a token at: https://huggingface.co/settings/tokens\nPress 's' to skip not available in input mode")
+		body += "\n\n" + theme.MutedStyle.Render("Get a token at: https://huggingface.co/settings/tokens")
 
 	case hfValidating:
 		body = theme.StatusLoading() + " " + theme.PrimaryStyle.Render("Validating token...")
