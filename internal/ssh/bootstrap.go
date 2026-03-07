@@ -78,9 +78,25 @@ func Preflight(client *Client) (*PreflightResult, error) {
 	return result, nil
 }
 
+// isSudoError returns true if the error output indicates sudo requires a password or tty.
+func isSudoError(output string) bool {
+	lower := strings.ToLower(output)
+	return strings.Contains(lower, "a password is required") ||
+		strings.Contains(lower, "no tty present") ||
+		strings.Contains(lower, "sudo: a terminal is required")
+}
+
+// isUserWritable returns true if the path is under the user's home directory.
+func isUserWritable(path string) bool {
+	return strings.HasPrefix(path, "$HOME/") ||
+		strings.HasPrefix(path, "~/") ||
+		strings.Contains(path, "/.local/") ||
+		strings.Contains(path, "/.config/")
+}
+
 // UpgradeAgent replaces the agent binary on a remote device and restarts it.
 // Detects the running agent's binary path, uploads the new binary to /tmp,
-// sudo-moves it into place, and restarts via systemd if available.
+// moves it into place (no sudo if user-local), and restarts the service.
 func UpgradeAgent(client *Client, localBinaryPath string, agentPort int) error {
 	// Find the running agent process to determine the remote binary path
 	out, err := client.Exec("pgrep -a -f 'yokai agent'")
@@ -105,34 +121,72 @@ func UpgradeAgent(client *Client, localBinaryPath string, agentPort int) error {
 		return fmt.Errorf("could not determine remote agent binary path")
 	}
 
-	// Upload to user-writable /tmp first, then sudo mv into place
+	// Upload to user-writable /tmp first
 	tmpPath := "/tmp/yokai.new"
 	if err := client.Upload(localBinaryPath, tmpPath); err != nil {
 		return fmt.Errorf("uploading binary: %w", err)
 	}
 
-	cmds := []string{
-		fmt.Sprintf("chmod +x %s", tmpPath),
-		fmt.Sprintf("sudo mv -f %s %s", tmpPath, remoteBinPath),
+	if _, err := client.Exec(fmt.Sprintf("chmod +x %s", tmpPath)); err != nil {
+		return fmt.Errorf("chmod binary: %w", err)
 	}
-	for _, cmd := range cmds {
-		if _, err := client.Exec(cmd); err != nil {
-			return fmt.Errorf("running %q: %w", cmd, err)
+
+	// Determine if we need sudo to replace the binary
+	homeDir := getRemoteHome(client)
+	needsSudo := !strings.HasPrefix(remoteBinPath, homeDir+"/")
+
+	if needsSudo {
+		// System-level install — try sudo, give clear error on failure
+		mvCmd := fmt.Sprintf("sudo mv -f %s %s", tmpPath, remoteBinPath)
+		if mvOut, err := client.Exec(mvCmd); err != nil {
+			if isSudoError(mvOut) {
+				return fmt.Errorf("agent is installed system-wide at %s but sudo requires a password. "+
+					"Run `sudo mv /tmp/yokai.new %s` on the device, or reinstall with user-local mode: %s",
+					remoteBinPath, remoteBinPath, strings.TrimSpace(mvOut))
+			}
+			return fmt.Errorf("running %q: %w — stderr: %s", mvCmd, err, strings.TrimSpace(mvOut))
+		}
+	} else {
+		// User-local install — no sudo needed
+		mvCmd := fmt.Sprintf("mv -f %s %s", tmpPath, remoteBinPath)
+		if mvOut, err := client.Exec(mvCmd); err != nil {
+			return fmt.Errorf("running %q: %w — stderr: %s", mvCmd, err, strings.TrimSpace(mvOut))
 		}
 	}
 
-	// Restart: prefer systemd if the service exists, otherwise manual restart
-	if _, err := client.Exec("systemctl list-unit-files yokai-agent.service 2>/dev/null | grep -q yokai-agent"); err == nil {
-		if _, err := client.Exec("sudo systemctl restart yokai-agent"); err != nil {
-			return fmt.Errorf("restarting agent via systemd: %w", err)
+	// Restart: try user-level systemd first, then system-level, then setsid
+	restarted := false
+
+	// 1. Try user-level systemd
+	if _, err := client.Exec("systemctl --user list-unit-files yokai-agent.service 2>/dev/null | grep -q yokai-agent"); err == nil {
+		if restartOut, err := client.Exec("systemctl --user restart yokai-agent"); err == nil {
+			restarted = true
+		} else {
+			return fmt.Errorf("restarting agent via systemd --user: %w — stderr: %s", err, strings.TrimSpace(restartOut))
 		}
-	} else {
-		// Fallback: manual kill + setsid restart
+	}
+
+	// 2. Try system-level systemd
+	if !restarted {
+		if _, err := client.Exec("systemctl list-unit-files yokai-agent.service 2>/dev/null | grep -q yokai-agent"); err == nil {
+			if restartOut, err := client.Exec("sudo systemctl restart yokai-agent"); err == nil {
+				restarted = true
+			} else if isSudoError(restartOut) {
+				return fmt.Errorf("agent uses system-level systemd but sudo requires a password. "+
+					"Run `sudo systemctl restart yokai-agent` on the device: %s", strings.TrimSpace(restartOut))
+			} else {
+				return fmt.Errorf("restarting agent via systemd: %w — stderr: %s", err, strings.TrimSpace(restartOut))
+			}
+		}
+	}
+
+	// 3. Fallback: manual kill + setsid restart
+	if !restarted {
 		_, _ = client.Exec("pkill -f 'yokai agent'")
 		_, _ = client.Exec("sleep 0.5")
 		startCmd := fmt.Sprintf("setsid %s agent %d > /tmp/yokai-agent.log 2>&1 < /dev/null &", remoteBinPath, agentPort)
-		if _, err := client.Exec(startCmd); err != nil {
-			return fmt.Errorf("restarting agent: %w", err)
+		if startOut, err := client.Exec(startCmd); err != nil {
+			return fmt.Errorf("restarting agent: %w — stderr: %s", err, strings.TrimSpace(startOut))
 		}
 	}
 
@@ -146,76 +200,126 @@ func UpgradeAgent(client *Client, localBinaryPath string, agentPort int) error {
 	return nil
 }
 
-// DeployAgent uploads the yokai binary and installs it as a systemd service.
+// getRemoteHome returns the remote user's home directory.
+func getRemoteHome(client *Client) string {
+	if out, err := client.Exec("echo $HOME"); err == nil {
+		return strings.TrimSpace(out)
+	}
+	return "/home/unknown"
+}
+
+// DeployAgent uploads the yokai binary and installs it as a user-level systemd service.
+// Uses ~/.local/bin for the binary, ~/.config/yokai for config, and systemd --user
+// for service management. No sudo is required.
 func DeployAgent(client *Client, localBinaryPath string, agentToken string) error {
-	remoteBinPath := "/usr/local/bin/yokai"
-	remoteConfigDir := "/etc/yokai"
+	homeDir := getRemoteHome(client)
+	remoteBinDir := homeDir + "/.local/bin"
+	remoteBinPath := remoteBinDir + "/yokai"
+	remoteConfigDir := homeDir + "/.config/yokai"
+	remoteSystemdDir := homeDir + "/.config/systemd/user"
 	tmpUploadPath := "/tmp/yokai.new"
 
-	// Upload binary to a user-writable temp path first, then sudo mv into place.
-	// SCP runs as the SSH user who may not have write access to /usr/local/bin.
+	// Upload binary to /tmp first, then move to user-local dir
 	if err := client.Upload(localBinaryPath, tmpUploadPath); err != nil {
 		return fmt.Errorf("uploading binary: %w", err)
 	}
 
-	// Move into place and make executable
-	moveCmds := []string{
+	// Create ~/.local/bin and install binary
+	installCmds := []string{
+		fmt.Sprintf("mkdir -p %s", remoteBinDir),
 		fmt.Sprintf("chmod +x %s", tmpUploadPath),
-		fmt.Sprintf("sudo mv -f %s %s", tmpUploadPath, remoteBinPath),
+		fmt.Sprintf("mv -f %s %s", tmpUploadPath, remoteBinPath),
 	}
-	for _, cmd := range moveCmds {
-		if _, err := client.Exec(cmd); err != nil {
-			return fmt.Errorf("running %q: %w", cmd, err)
+	for _, cmd := range installCmds {
+		if cmdOut, err := client.Exec(cmd); err != nil {
+			return fmt.Errorf("running %q: %w — stderr: %s", cmd, err, strings.TrimSpace(cmdOut))
 		}
 	}
 
-	// Create config dir and agent config
-	cmds := []string{
-		fmt.Sprintf("sudo mkdir -p %s", remoteConfigDir),
-		fmt.Sprintf(`sudo tee %s/agent.json > /dev/null << 'EOF'
+	// Ensure ~/.local/bin is in PATH (add to .bashrc and .profile if missing)
+	for _, rcFile := range []string{homeDir + "/.bashrc", homeDir + "/.profile"} {
+		checkCmd := fmt.Sprintf("grep -q '%s' %s 2>/dev/null", remoteBinDir, rcFile)
+		if _, err := client.Exec(checkCmd); err != nil {
+			appendCmd := fmt.Sprintf(`echo 'export PATH="%s:$PATH"' >> %s`, remoteBinDir, rcFile)
+			_, _ = client.Exec(appendCmd)
+		}
+	}
+
+	// Create config directory and write agent config
+	configCmds := []string{
+		fmt.Sprintf("mkdir -p %s", remoteConfigDir),
+		fmt.Sprintf(`cat > %s/agent.json << 'EOF'
 {
   "token": "%s"
 }
 EOF`, remoteConfigDir, agentToken),
 	}
-
-	for _, cmd := range cmds {
-		if _, err := client.Exec(cmd); err != nil {
-			return fmt.Errorf("running %q: %w", cmd, err)
+	for _, cmd := range configCmds {
+		if cmdOut, err := client.Exec(cmd); err != nil {
+			return fmt.Errorf("running %q: %w — stderr: %s", cmd, err, strings.TrimSpace(cmdOut))
 		}
 	}
 
-	// Install systemd service
-	serviceUnit := `[Unit]
+	// Check if user-level systemd is available.
+	// systemctl --user status may return non-zero even when working, so we
+	// test with daemon-reload which reliably fails without a user session.
+	_, userSystemdErr := client.Exec("systemctl --user daemon-reload 2>&1")
+
+	if userSystemdErr == nil {
+		// User-level systemd available — install service
+		serviceUnit := fmt.Sprintf(`[Unit]
 Description=yokai agent
 After=network.target docker.service
 Wants=docker.service
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/yokai agent
+ExecStart=%s agent
 Restart=always
 RestartSec=5
 
 [Install]
-WantedBy=multi-user.target
-`
-	writeCmd := fmt.Sprintf("sudo tee /etc/systemd/system/yokai-agent.service > /dev/null << 'EOF'\n%sEOF", serviceUnit)
-	if _, err := client.Exec(writeCmd); err != nil {
-		return fmt.Errorf("writing systemd unit: %w", err)
-	}
+WantedBy=default.target
+`, remoteBinPath)
 
-	// Enable and start
-	startCmds := []string{
-		"sudo systemctl daemon-reload",
-		"sudo systemctl enable yokai-agent",
-		"sudo systemctl restart yokai-agent",
-	}
-	for _, cmd := range startCmds {
-		if _, err := client.Exec(cmd); err != nil {
-			return fmt.Errorf("running %q: %w", cmd, err)
+		setupCmds := []string{
+			fmt.Sprintf("mkdir -p %s", remoteSystemdDir),
+			fmt.Sprintf("cat > %s/yokai-agent.service << 'SERVICEEOF'\n%sSERVICEEOF", remoteSystemdDir, serviceUnit),
+			"systemctl --user daemon-reload",
+			"systemctl --user enable yokai-agent",
+			"systemctl --user restart yokai-agent",
+		}
+		for _, cmd := range setupCmds {
+			if cmdOut, err := client.Exec(cmd); err != nil {
+				return fmt.Errorf("running %q: %w — stderr: %s", cmd, err, strings.TrimSpace(cmdOut))
+			}
+		}
+
+		// Enable lingering so the service runs without an active login session.
+		// This may require sudo on some systems — warn but don't fail.
+		if lingerOut, err := client.Exec("loginctl enable-linger $(whoami) 2>&1"); err != nil {
+			if isSudoError(lingerOut) {
+				fmt.Printf("warning: could not enable lingering (sudo required). The agent service may stop when you log out. Run `sudo loginctl enable-linger %s` on the device.\n", getUserName(client))
+			}
+			// Non-fatal: the service will still work while the user session is active
+		}
+	} else {
+		// No user-level systemd — fall back to setsid background process
+		_, _ = client.Exec("pkill -f 'yokai agent'")
+		_, _ = client.Exec("sleep 0.5")
+		startCmd := fmt.Sprintf("setsid %s agent > /tmp/yokai-agent.log 2>&1 < /dev/null &", remoteBinPath)
+		if startOut, err := client.Exec(startCmd); err != nil {
+			return fmt.Errorf("starting agent: %w — stderr: %s", err, strings.TrimSpace(startOut))
 		}
 	}
 
 	return nil
+}
+
+// getUserName returns the remote username.
+func getUserName(client *Client) string {
+	if out, err := client.Exec("whoami"); err == nil {
+		return strings.TrimSpace(out)
+	}
+	return "$(whoami)"
 }
