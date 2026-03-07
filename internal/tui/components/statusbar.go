@@ -81,11 +81,9 @@ func (sb StatusBar) renderKeybinds(maxWidth int) string {
 	var pairs []string
 	for _, kb := range sb.Keybinds {
 		key := theme.KeybindKeyStyle.
-			Copy().
 			Background(theme.Highlight).
 			Render(kb.Key)
 		help := theme.MutedStyle.
-			Copy().
 			Background(theme.Highlight).
 			Render(kb.Help)
 		pairs = append(pairs, fmt.Sprintf("%s %s", key, help))
@@ -97,7 +95,7 @@ func (sb StatusBar) renderKeybinds(maxWidth int) string {
 	for i := 1; i < len(pairs); i++ {
 		candidate := result + gapStr + pairs[i]
 		if lipgloss.Width(candidate) > maxWidth {
-			ellipsis := theme.MutedStyle.Copy().Background(theme.Highlight).Render("...")
+			ellipsis := theme.MutedStyle.Background(theme.Highlight).Render("...")
 			result = result + gapStr + ellipsis
 			break
 		}
