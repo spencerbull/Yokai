@@ -411,6 +411,8 @@ func boolStatus(ok bool, detail string) string {
 
 func (b *Bootstrap) InputActive() bool { return false }
 
+func (b *Bootstrap) Name() string { return "Bootstrap" }
+
 func (b *Bootstrap) KeyBinds() []KeyBind {
 	switch b.step {
 	case bsFailed:

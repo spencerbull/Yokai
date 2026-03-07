@@ -73,6 +73,7 @@ func (v *ConfirmView) View() string {
 		card)
 }
 
+func (v *ConfirmView) Name() string       { return "Confirm" }
 func (v *ConfirmView) InputActive() bool { return false }
 
 func (v *ConfirmView) KeyBinds() []KeyBind {

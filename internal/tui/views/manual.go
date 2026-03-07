@@ -113,6 +113,8 @@ func (m *Manual) InputActive() bool {
 	return true
 }
 
+func (m *Manual) Name() string { return "Manual Setup" }
+
 func (m *Manual) KeyBinds() []KeyBind {
 	return []KeyBind{
 		{Key: "Enter", Help: "connect"},
