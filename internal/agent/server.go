@@ -205,17 +205,26 @@ func mergeContainerMetrics(metricContainers []ContainerMetrics, dockerContainers
 			metricContainers[idx].Image = container.Image
 			metricContainers[idx].Uptime = container.Uptime
 			metricContainers[idx].Ports = container.Ports
+			if container.VLLMMetrics != nil {
+				metricContainers[idx].GenerationTokPerSec = container.VLLMMetrics.GenerationTokPerSec
+				metricContainers[idx].PromptTokPerSec = container.VLLMMetrics.PromptTokPerSec
+			}
 			continue
 		}
 
-		metricContainers = append(metricContainers, ContainerMetrics{
+		cm := ContainerMetrics{
 			ID:     id,
 			Name:   container.Name,
 			Image:  container.Image,
 			Status: container.Status,
 			Uptime: container.Uptime,
 			Ports:  container.Ports,
-		})
+		}
+		if container.VLLMMetrics != nil {
+			cm.GenerationTokPerSec = container.VLLMMetrics.GenerationTokPerSec
+			cm.PromptTokPerSec = container.VLLMMetrics.PromptTokPerSec
+		}
+		metricContainers = append(metricContainers, cm)
 
 		if id != "" {
 			idIndex[id] = len(metricContainers) - 1
