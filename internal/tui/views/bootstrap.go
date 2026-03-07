@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -201,10 +202,20 @@ EOF`, tmpDir, prometheusYAML)
 			return bootstrapProgressMsg{step: bsFailed, err: fmt.Errorf("creating grafana dirs: %w", err)}
 		}
 
-		// Start monitoring stack
+		// Pull images first (this is the slow part that fails on first attempt)
+		pullCmd := fmt.Sprintf("cd %s && docker compose pull 2>&1", tmpDir)
+		if _, err := client.Exec(pullCmd); err != nil {
+			return bootstrapProgressMsg{step: bsFailed, err: fmt.Errorf("pulling monitoring images: %w", err)}
+		}
+
+		// Start monitoring stack with retry (network creation can race on first deploy)
 		deployCmd := fmt.Sprintf("cd %s && docker compose up -d 2>&1", tmpDir)
-		if _, err := client.Exec(deployCmd); err != nil {
-			return bootstrapProgressMsg{step: bsFailed, err: fmt.Errorf("starting monitoring stack: %w", err)}
+		if out, err := client.Exec(deployCmd); err != nil {
+			// Retry once after a short delay — handles docker network race conditions
+			time.Sleep(3 * time.Second)
+			if out2, err2 := client.Exec(deployCmd); err2 != nil {
+				return bootstrapProgressMsg{step: bsFailed, err: fmt.Errorf("starting monitoring stack: %w\n%s\n%s", err2, out, out2)}
+			}
 		}
 
 		return bootstrapProgressMsg{step: bsDone}
