@@ -219,21 +219,22 @@ func TestPreflightMockData(t *testing.T) {
 func TestDeployAgentStructure(t *testing.T) {
 	t.Parallel()
 
-	// Test the systemd service unit structure that would be deployed
-	expectedServiceContent := `[Unit]
+	// Test the user-level systemd service unit structure that would be deployed
+	homeBinPath := "/home/testuser/.local/bin/yokai"
+	expectedServiceContent := fmt.Sprintf(`[Unit]
 Description=yokai agent
 After=network.target docker.service
 Wants=docker.service
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/yokai agent
+ExecStart=%s agent
 Restart=always
 RestartSec=5
 
 [Install]
-WantedBy=multi-user.target
-`
+WantedBy=default.target
+`, homeBinPath)
 
 	// Verify service unit has required sections
 	requiredSections := []string{"[Unit]", "[Service]", "[Install]"}
@@ -246,15 +247,47 @@ WantedBy=multi-user.target
 	// Verify critical fields
 	requiredFields := []string{
 		"Description=yokai agent",
-		"ExecStart=/usr/local/bin/yokai agent",
+		fmt.Sprintf("ExecStart=%s agent", homeBinPath),
 		"Restart=always",
-		"WantedBy=multi-user.target",
+		"WantedBy=default.target",
 	}
 
 	for _, field := range requiredFields {
 		if !contains(expectedServiceContent, field) {
 			t.Errorf("service unit should contain field: %s", field)
 		}
+	}
+
+	// Verify user-local paths (no /usr/local/bin, no /etc/systemd)
+	if contains(expectedServiceContent, "/usr/local/bin") {
+		t.Error("user-local service unit should not reference /usr/local/bin")
+	}
+	if contains(expectedServiceContent, "multi-user.target") {
+		t.Error("user-level service should use default.target, not multi-user.target")
+	}
+}
+
+func TestDeployAgentPaths(t *testing.T) {
+	t.Parallel()
+
+	// Verify that user-local deploy paths follow XDG conventions
+	homeDir := "/home/testuser"
+	expectedBinDir := homeDir + "/.local/bin"
+	expectedBinPath := expectedBinDir + "/yokai"
+	expectedConfigDir := homeDir + "/.config/yokai"
+	expectedSystemdDir := homeDir + "/.config/systemd/user"
+
+	if !strings.HasPrefix(expectedBinPath, homeDir) {
+		t.Error("binary path should be under home directory")
+	}
+	if !contains(expectedBinDir, ".local/bin") {
+		t.Error("binary should be in ~/.local/bin")
+	}
+	if !contains(expectedConfigDir, ".config/yokai") {
+		t.Error("config should be in ~/.config/yokai")
+	}
+	if !contains(expectedSystemdDir, ".config/systemd/user") {
+		t.Error("systemd unit should be in ~/.config/systemd/user")
 	}
 }
 
@@ -275,6 +308,54 @@ func TestAgentConfigStructure(t *testing.T) {
 
 	if config["token"] != testToken {
 		t.Errorf("expected token %s, got %v", testToken, config["token"])
+	}
+}
+
+func TestIsSudoError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		output   string
+		expected bool
+	}{
+		{"password required", "sudo: a password is required", true},
+		{"no tty", "sudo: no tty present and no askpass program specified", true},
+		{"terminal required", "sudo: a terminal is required to read the password", true},
+		{"normal error", "mv: cannot stat '/tmp/yokai.new': No such file or directory", false},
+		{"empty", "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isSudoError(tt.output); got != tt.expected {
+				t.Errorf("isSudoError(%q) = %v, want %v", tt.output, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestIsUserWritable(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		path     string
+		expected bool
+	}{
+		{"$HOME/.local/bin/yokai", true},
+		{"~/.local/bin/yokai", true},
+		{"/home/user/.local/bin/yokai", true},
+		{"/home/user/.config/yokai/agent.json", true},
+		{"/usr/local/bin/yokai", false},
+		{"/etc/yokai/agent.json", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			if got := isUserWritable(tt.path); got != tt.expected {
+				t.Errorf("isUserWritable(%q) = %v, want %v", tt.path, got, tt.expected)
+			}
+		})
 	}
 }
 
