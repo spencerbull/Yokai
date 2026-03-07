@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
@@ -33,7 +34,7 @@ type Client struct {
 }
 
 // Connect establishes an SSH connection using the provided config.
-// Auth resolution order: explicit key → SSH agent → default keys → password.
+// Auth resolution order: SSH agent → explicit key → default keys → password.
 func Connect(cfg ClientConfig) (*Client, error) {
 	if cfg.Port == "" {
 		cfg.Port = "22"
@@ -169,19 +170,27 @@ func (c *Client) Underlying() *ssh.Client {
 }
 
 // resolveAuth builds auth methods in priority order.
+// SSH agent is tried first because it likely already holds unlocked keys,
+// which avoids passphrase prompts for encrypted private keys.
 func resolveAuth(cfg ClientConfig) ([]ssh.AuthMethod, error) {
 	var methods []ssh.AuthMethod
 
-	// 1. Explicit key path
-	if cfg.KeyPath != "" {
-		if m, err := keyAuth(expandPath(cfg.KeyPath), cfg.KeyPassphrase); err == nil {
-			methods = append(methods, m)
-		}
-	}
-
-	// 2. SSH agent
+	// 1. SSH agent (highest priority — handles passphrase-protected keys transparently)
 	if m, err := agentAuth(); err == nil {
 		methods = append(methods, m)
+	}
+
+	// 2. Explicit key path
+	if cfg.KeyPath != "" {
+		m, err := keyAuth(expandPath(cfg.KeyPath), cfg.KeyPassphrase)
+		if err != nil {
+			var passErr *ssh.PassphraseMissingError
+			if errors.As(err, &passErr) {
+				log.Printf("SSH key %s is encrypted with a passphrase; skipping (add it to ssh-agent with ssh-add)", cfg.KeyPath)
+			}
+		} else {
+			methods = append(methods, m)
+		}
 	}
 
 	// 3. Default key paths
@@ -194,9 +203,15 @@ func resolveAuth(cfg ClientConfig) ([]ssh.AuthMethod, error) {
 		if p == expandPath(cfg.KeyPath) {
 			continue // already tried
 		}
-		if m, err := keyAuth(p, ""); err == nil {
-			methods = append(methods, m)
+		m, err := keyAuth(p, "")
+		if err != nil {
+			var passErr *ssh.PassphraseMissingError
+			if errors.As(err, &passErr) {
+				log.Printf("SSH key %s is encrypted with a passphrase; skipping (add it to ssh-agent with ssh-add)", k)
+			}
+			continue
 		}
+		methods = append(methods, m)
 	}
 
 	// 4. Password
@@ -205,7 +220,7 @@ func resolveAuth(cfg ClientConfig) ([]ssh.AuthMethod, error) {
 	}
 
 	if len(methods) == 0 {
-		return nil, fmt.Errorf("no SSH auth methods available")
+		return nil, fmt.Errorf("no SSH auth methods available (if your key is passphrase-protected, use ssh-agent: eval $(ssh-agent) && ssh-add)")
 	}
 
 	return methods, nil
