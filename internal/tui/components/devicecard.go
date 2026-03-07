@@ -141,15 +141,16 @@ func (d DeviceCard) Render() string {
 	}
 
 	// Truncate and pad lines to content width
+	title = d.truncateAndPad(title, contentWidth)
 	gpuLine = d.truncateAndPad(gpuLine, contentWidth)
 	metricsLine = d.truncateAndPad(metricsLine, contentWidth)
 	servicesLine = d.truncateAndPad(servicesLine, contentWidth)
 
-	// Create panel content
-	content := gpuLine + "\n" + metricsLine + "\n" + servicesLine
+	// Create panel content with title as first line
+	content := title + "\n" + gpuLine + "\n" + metricsLine + "\n" + servicesLine
 
-	// Apply panel styling with title
-	panel := theme.Panel(title).Width(d.Width).Render(content)
+	// Apply panel styling
+	panel := theme.Panel("").Width(d.Width).Render(content)
 
 	return panel
 }
@@ -241,28 +242,42 @@ func (d DeviceCardFull) Render() string {
 
 	var lines []string
 
+	// Title is the first content line
+	lines = append(lines, d.padLine(title, contentWidth))
+
 	if len(d.GPUs) > 0 {
 		gpu := d.GPUs[0]
 		gpuName := strings.TrimPrefix(gpu.Name, "NVIDIA ")
 
-		// Line 2: "GPU: <name>   CPU [bar] X%   RAM [bar] X%"
-		gpuPrefix := fmt.Sprintf("GPU: %s", gpuName)
+		// GPU line
+		gpuLine := fmt.Sprintf("GPU: %s", gpuName)
+		lines = append(lines, d.padLine(gpuLine, contentWidth))
+
+		// CPU and RAM bars — try side-by-side, fall back to stacked
 		cpuSuffix := fmt.Sprintf("%.0f%%", d.CPUPercent)
 		ramSuffix := fmt.Sprintf("%.0f%%", d.RAMPercent)
 
-		// Compute bar widths from remaining space
-		fixedLen := len(gpuPrefix) + 3 + len("CPU ") + 1 + len(cpuSuffix) + 3 + len("RAM ") + 1 + len(ramSuffix)
+		// Side-by-side: "CPU [bar] X%   RAM [bar] X%"
+		fixedLen := len("CPU ") + 1 + len(cpuSuffix) + 3 + len("RAM ") + 1 + len(ramSuffix) + 4
 		barSpace := contentWidth - fixedLen
-		if barSpace < 4 {
-			barSpace = 4
+		if barSpace >= 8 {
+			cpuBarW := barSpace / 2
+			ramBarW := barSpace - cpuBarW
+			cpuBar := theme.ProgressBar(d.CPUPercent, cpuBarW+2)
+			ramBar := theme.ProgressBar(d.RAMPercent, ramBarW+2)
+			metricsLine := fmt.Sprintf("CPU %s %s   RAM %s %s", cpuBar, cpuSuffix, ramBar, ramSuffix)
+			lines = append(lines, d.padLine(metricsLine, contentWidth))
+		} else {
+			// Stacked: one bar per line
+			singleBarW := contentWidth - len("CPU ") - 1 - len(cpuSuffix) - 2
+			if singleBarW < 4 {
+				singleBarW = 4
+			}
+			cpuBar := theme.ProgressBar(d.CPUPercent, singleBarW+2)
+			ramBar := theme.ProgressBar(d.RAMPercent, singleBarW+2)
+			lines = append(lines, d.padLine(fmt.Sprintf("CPU %s %s", cpuBar, cpuSuffix), contentWidth))
+			lines = append(lines, d.padLine(fmt.Sprintf("RAM %s %s", ramBar, ramSuffix), contentWidth))
 		}
-		cpuBarW := barSpace / 2
-		ramBarW := barSpace - cpuBarW
-		cpuBar := theme.ProgressBar(d.CPUPercent, cpuBarW+2)
-		ramBar := theme.ProgressBar(d.RAMPercent, ramBarW+2)
-
-		line2 := fmt.Sprintf("%s   CPU %s %s   RAM %s %s", gpuPrefix, cpuBar, cpuSuffix, ramBar, ramSuffix)
-		lines = append(lines, d.padLine(line2, contentWidth))
 
 		// Line 3: "Services: N   Util [bar] X%   VRAM [bar] X/YG"
 		svcPart := fmt.Sprintf("Services: %d", d.ServiceCount)
@@ -316,21 +331,28 @@ func (d DeviceCardFull) Render() string {
 		lines = append(lines, d.padLine(line4, contentWidth))
 	} else {
 		// No GPU: simpler layout
-		// Line 2: "CPU [bar] X%   RAM [bar] X%"
 		cpuSuffix := fmt.Sprintf("%.0f%%", d.CPUPercent)
 		ramSuffix := fmt.Sprintf("%.0f%%", d.RAMPercent)
-		fixedLen := len("CPU ") + 1 + len(cpuSuffix) + 3 + len("RAM ") + 1 + len(ramSuffix)
-		barSpace := contentWidth - fixedLen
-		if barSpace < 4 {
-			barSpace = 4
-		}
-		cpuBarW := barSpace / 2
-		ramBarW := barSpace - cpuBarW
-		cpuBar := theme.ProgressBar(d.CPUPercent, cpuBarW+2)
-		ramBar := theme.ProgressBar(d.RAMPercent, ramBarW+2)
 
-		line2 := fmt.Sprintf("CPU %s %s   RAM %s %s", cpuBar, cpuSuffix, ramBar, ramSuffix)
-		lines = append(lines, d.padLine(line2, contentWidth))
+		fixedLen := len("CPU ") + 1 + len(cpuSuffix) + 3 + len("RAM ") + 1 + len(ramSuffix) + 4
+		barSpace := contentWidth - fixedLen
+		if barSpace >= 8 {
+			cpuBarW := barSpace / 2
+			ramBarW := barSpace - cpuBarW
+			cpuBar := theme.ProgressBar(d.CPUPercent, cpuBarW+2)
+			ramBar := theme.ProgressBar(d.RAMPercent, ramBarW+2)
+			line2 := fmt.Sprintf("CPU %s %s   RAM %s %s", cpuBar, cpuSuffix, ramBar, ramSuffix)
+			lines = append(lines, d.padLine(line2, contentWidth))
+		} else {
+			singleBarW := contentWidth - len("CPU ") - 1 - len(cpuSuffix) - 2
+			if singleBarW < 4 {
+				singleBarW = 4
+			}
+			cpuBar := theme.ProgressBar(d.CPUPercent, singleBarW+2)
+			ramBar := theme.ProgressBar(d.RAMPercent, singleBarW+2)
+			lines = append(lines, d.padLine(fmt.Sprintf("CPU %s %s", cpuBar, cpuSuffix), contentWidth))
+			lines = append(lines, d.padLine(fmt.Sprintf("RAM %s %s", ramBar, ramSuffix), contentWidth))
+		}
 
 		// Line 3: "Services: N"
 		line3 := fmt.Sprintf("Services: %d", d.ServiceCount)
@@ -338,7 +360,7 @@ func (d DeviceCardFull) Render() string {
 	}
 
 	content := strings.Join(lines, "\n")
-	panel := theme.Panel(title).Width(d.Width).Render(content)
+	panel := theme.Panel("").Width(d.Width).Render(content)
 	return panel
 }
 

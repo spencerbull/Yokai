@@ -93,16 +93,18 @@ type GPUData struct {
 }
 
 type ContainerData struct {
-	ID            string            `json:"id"`
-	Name          string            `json:"name"`
-	Image         string            `json:"image"`
-	Status        string            `json:"status"`
-	CPUPercent    float64           `json:"cpu_percent"`
-	MemUsedMB     int64             `json:"memory_used_mb"`
-	GPUMemMB      int64             `json:"gpu_memory_mb"`
-	UptimeSeconds int64             `json:"uptime_seconds"`
-	Ports         map[string]string `json:"ports"`
-	Health        string            `json:"health"`
+	ID                  string            `json:"id"`
+	Name                string            `json:"name"`
+	Image               string            `json:"image"`
+	Status              string            `json:"status"`
+	CPUPercent          float64           `json:"cpu_percent"`
+	MemUsedMB           int64             `json:"memory_used_mb"`
+	GPUMemMB            int64             `json:"gpu_memory_mb"`
+	UptimeSeconds       int64             `json:"uptime_seconds"`
+	Ports               map[string]string `json:"ports"`
+	Health              string            `json:"health"`
+	GenerationTokPerSec float64           `json:"generation_tok_per_s"`
+	PromptTokPerSec     float64           `json:"prompt_tok_per_s"`
 }
 
 type DashboardDevice struct {
@@ -490,17 +492,19 @@ func (d *Dashboard) buildServiceRows() []components.ServiceRow {
 			displayName := strings.TrimPrefix(container.Name, "yokai-")
 
 			row := components.ServiceRow{
-				Name:       displayName,
-				Type:       serviceType,
-				Model:      d.getServiceModel(container),
-				Status:     container.Status,
-				Health:     container.Health,
-				Device:     deviceLabel,
-				Port:       extractExternalPort(container.Ports),
-				CPUPercent: container.CPUPercent,
-				MemUsedMB:  container.MemUsedMB,
-				GPUMemMB:   container.GPUMemMB,
-				Uptime:     formatUptime(container.UptimeSeconds),
+				Name:                displayName,
+				Type:                serviceType,
+				Model:               d.getServiceModel(container),
+				Status:              container.Status,
+				Health:              container.Health,
+				Device:              deviceLabel,
+				Port:                extractExternalPort(container.Ports),
+				CPUPercent:          container.CPUPercent,
+				MemUsedMB:           container.MemUsedMB,
+				GPUMemMB:            container.GPUMemMB,
+				Uptime:              formatUptime(container.UptimeSeconds),
+				GenerationTokPerSec: container.GenerationTokPerSec,
+				PromptTokPerSec:     container.PromptTokPerSec,
 			}
 			rows = append(rows, row)
 		}
