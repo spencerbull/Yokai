@@ -250,7 +250,7 @@ func (l *LogViewer) startSSE() tea.Cmd {
 		}
 
 		go func() {
-			defer resp.Body.Close()
+			defer func() { _ = resp.Body.Close() }()
 			defer close(l.logCh)
 			defer cancel()
 
