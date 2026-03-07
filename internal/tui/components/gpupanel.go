@@ -68,27 +68,15 @@ func (g GPUPanel) Render() string {
 		title = title[:contentWidth-9] + "..."
 	}
 
-	// Utilization bar with gradient
-	utilPercent := float64(g.UtilPercent)
-	utilBar := NewMetricsBar("Util", utilPercent, contentWidth/2)
-
-	// Temperature with color-coding
-	tColor := tempColor(g.TempC)
-	tempStyle := lipgloss.NewStyle().Foreground(tColor)
-	tempStr := tempStyle.Render(fmt.Sprintf("🌡 %d°C", g.TempC))
-
-	// Calculate spacing for util line using visual width (not byte length)
-	// to account for ANSI escape codes in styled strings
-	utilBarStr := utilBar.Render()
-	utilBarVisualWidth := lipgloss.Width(utilBarStr)
-	tempPlainLen := lipgloss.Width(tempStr)
-	utilLineSpacing := contentWidth - utilBarVisualWidth - tempPlainLen
-	if utilLineSpacing < 1 {
-		utilLineSpacing = 1
+	// Utilization bar — single line
+	utilBarWidth := contentWidth - len("Util ") - 5 // "Util [bar] XX%"
+	if utilBarWidth < 5 {
+		utilBarWidth = 5
 	}
-	utilLine := utilBarStr + strings.Repeat(" ", utilLineSpacing) + tempStr
+	utilBar := GradientProgressBar(float64(g.UtilPercent), utilBarWidth, theme.Accent)
+	utilLine := fmt.Sprintf("Util %s %3d%%", utilBar, g.UtilPercent)
 
-	// VRAM visualization with ntcharts bar chart
+	// VRAM bar — single line
 	vramPercent := float64(0)
 	if g.VRAMTotalMB > 0 {
 		vramPercent = float64(g.VRAMUsedMB) / float64(g.VRAMTotalMB) * 100
@@ -96,7 +84,6 @@ func (g GPUPanel) Render() string {
 	vramUsedGB := float64(g.VRAMUsedMB) / 1024
 	vramTotalGB := float64(g.VRAMTotalMB) / 1024
 
-	// Choose VRAM bar color based on usage
 	vramColor := theme.Good
 	if vramPercent > 80 {
 		vramColor = theme.Crit
@@ -104,7 +91,7 @@ func (g GPUPanel) Render() string {
 		vramColor = theme.Warn
 	}
 
-	vramLabel := fmt.Sprintf("%.0fGB/%.0fGB", vramUsedGB, vramTotalGB)
+	vramLabel := fmt.Sprintf("%.0fG/%.0fG", vramUsedGB, vramTotalGB)
 	vramBarWidth := contentWidth - len("VRAM ") - len(vramLabel) - 1
 	if vramBarWidth < 5 {
 		vramBarWidth = 5
@@ -112,7 +99,11 @@ func (g GPUPanel) Render() string {
 	vramBar := GradientProgressBar(vramPercent, vramBarWidth, vramColor)
 	vramLine := fmt.Sprintf("VRAM %s %s", vramBar, vramLabel)
 
-	// Power and fan line with visual indicators
+	// Temp + Power + Fan — all on one line
+	tColor := tempColor(g.TempC)
+	tempStyle := lipgloss.NewStyle().Foreground(tColor)
+	tempStr := tempStyle.Render(fmt.Sprintf("%d°C", g.TempC))
+
 	powerPercent := float64(0)
 	if g.PowerLimitW > 0 {
 		powerPercent = float64(g.PowerDrawW) / float64(g.PowerLimitW) * 100
@@ -124,20 +115,13 @@ func (g GPUPanel) Render() string {
 		powerColor = theme.Warn
 	}
 	powerStyle := lipgloss.NewStyle().Foreground(powerColor)
-	powerStr := fmt.Sprintf("⚡ %s", powerStyle.Render(fmt.Sprintf("%dW/%dW", g.PowerDrawW, g.PowerLimitW)))
+	powerStr := powerStyle.Render(fmt.Sprintf("%dW/%dW", g.PowerDrawW, g.PowerLimitW))
+	fanStr := fmt.Sprintf("Fan %d%%", g.FanPercent)
 
-	fanStr := fmt.Sprintf("💨 %d%%", g.FanPercent)
-	// Use lipgloss.Width for visual width that handles emojis and ANSI codes
-	powerPlainLen := lipgloss.Width(powerStr)
-	fanPlainLen := lipgloss.Width(fanStr)
-	powerLineSpacing := contentWidth - powerPlainLen - fanPlainLen
-	if powerLineSpacing < 1 {
-		powerLineSpacing = 1
-	}
-	powerLine := powerStr + strings.Repeat(" ", powerLineSpacing) + fanStr
+	infoLine := fmt.Sprintf("Temp %s  Pwr %s  %s", tempStr, powerStr, fanStr)
 
-	// Create panel content
-	content := utilLine + "\n" + vramLine + "\n" + powerLine
+	// Create panel content (3 lines for compact display)
+	content := utilLine + "\n" + vramLine + "\n" + infoLine
 
 	// Apply panel styling with title
 	titleWithDashes := title + " " + strings.Repeat("─", max(0, contentWidth-len(title)-1))
