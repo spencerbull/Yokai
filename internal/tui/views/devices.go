@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -187,10 +188,14 @@ func (dm *DeviceManager) testConnection(device config.Device) tea.Cmd {
 			KeyPath: device.SSHKey,
 		})
 		if err != nil {
+			hint := "SSH connection failed: " + err.Error()
+			if strings.Contains(err.Error(), "no SSH auth methods available") || strings.Contains(err.Error(), "unable to authenticate") {
+				hint += " (hint: if your key is passphrase-protected, make sure ssh-agent is running and your key is loaded via ssh-add)"
+			}
 			return connectionTestResult{
 				deviceID: device.ID,
 				online:   false,
-				err:      fmt.Errorf("SSH connection failed: %w", err),
+				err:      fmt.Errorf("%s", hint),
 			}
 		}
 		defer func() {
