@@ -268,6 +268,8 @@ func (h *HFToken) View() string {
 	return lipgloss.NewStyle().Padding(2, 0).Render(card)
 }
 
+func (h *HFToken) Name() string { return "HF Token" }
+
 func (h *HFToken) KeyBinds() []KeyBind {
 	switch h.state {
 	case hfInput:

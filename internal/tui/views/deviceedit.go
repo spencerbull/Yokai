@@ -396,6 +396,8 @@ func (de *DeviceEdit) fieldLabel(label string, field deviceEditField) string {
 	return style.Render(label)
 }
 
+func (de *DeviceEdit) Name() string { return "Edit Device" }
+
 func (de *DeviceEdit) KeyBinds() []KeyBind {
 	return []KeyBind{
 		{Key: "Tab", Help: "next field"},

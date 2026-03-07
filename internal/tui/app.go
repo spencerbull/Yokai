@@ -208,10 +208,9 @@ func (a *App) View() string {
 	content := a.currentView.View()
 	sections = append(sections, content)
 
-	// Keybind bar at the bottom
-	keybinds := a.currentView.KeyBinds()
-	bar := renderKeybindBar(keybinds, contentWidth)
-	sections = append(sections, bar)
+	// Status bar at the bottom
+	statusBar := a.buildStatusBar(contentWidth)
+	sections = append(sections, statusBar.Render())
 
 	assembled := lipgloss.JoinVertical(lipgloss.Center, sections...)
 	output := lipgloss.Place(a.width, a.height, lipgloss.Center, lipgloss.Top, assembled)
@@ -270,33 +269,26 @@ func (a *App) popView() (tea.Model, tea.Cmd) {
 	return a, a.currentView.Init()
 }
 
-func renderKeybindBar(binds []views.KeyBind, width int) string {
-	if len(binds) == 0 {
-		return ""
+// buildStatusBar constructs a StatusBar from the current view stack.
+func (a *App) buildStatusBar(width int) components.StatusBar {
+	// Build breadcrumbs from the view stack + current view
+	var crumbs []string
+	for _, v := range a.viewStack {
+		crumbs = append(crumbs, v.Name())
+	}
+	crumbs = append(crumbs, a.currentView.Name())
+
+	// Convert keybinds
+	var keybinds []components.StatusBarKeybind
+	for _, kb := range a.currentView.KeyBinds() {
+		keybinds = append(keybinds, components.StatusBarKeybind{Key: kb.Key, Help: kb.Help})
 	}
 
-	var parts []string
-	for _, b := range binds {
-		key := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#7aa2f7")).
-			Bold(true).
-			Render(b.Key)
-		parts = append(parts, fmt.Sprintf("%s %s", key, b.Help))
+	return components.StatusBar{
+		Breadcrumbs: crumbs,
+		Keybinds:    keybinds,
+		Width:       width,
 	}
-
-	line := ""
-	for i, p := range parts {
-		if i > 0 {
-			line += "  "
-		}
-		line += p
-	}
-
-	return lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#565f89")).
-		Padding(0, 1).
-		Width(width).
-		Render(line)
 }
 
 // overlayRight places the overlay string at the right edge of the base string,

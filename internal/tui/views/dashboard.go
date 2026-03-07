@@ -876,6 +876,8 @@ func formatUptime(seconds int64) string {
 
 func (d *Dashboard) InputActive() bool { return false }
 
+func (d *Dashboard) Name() string { return "Dashboard" }
+
 func (d *Dashboard) KeyBinds() []KeyBind {
 	return []KeyBind{
 		{Key: "enter", Help: "detail"},
