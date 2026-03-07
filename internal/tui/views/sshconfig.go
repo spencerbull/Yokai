@@ -182,6 +182,7 @@ func (p *SSHConfigPicker) View() string {
 	return lipgloss.NewStyle().Padding(2, 0).Render(card)
 }
 
+func (p *SSHConfigPicker) Name() string       { return "SSH Config" }
 func (p *SSHConfigPicker) InputActive() bool { return false }
 
 func (p *SSHConfigPicker) KeyBinds() []KeyBind {
