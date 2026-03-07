@@ -28,9 +28,13 @@ func (sb StatusBar) Render() string {
 		return ""
 	}
 
+	separator := lipgloss.NewStyle().
+		Foreground(theme.Border).
+		Width(w).
+		Render(strings.Repeat("─", w))
+
 	barStyle := lipgloss.NewStyle().
 		Width(w).
-		Background(theme.Highlight).
 		Padding(0, 1)
 
 	// Left side: breadcrumbs
@@ -40,7 +44,7 @@ func (sb StatusBar) Render() string {
 	right := sb.renderKeybinds(w - lipgloss.Width(left) - 4) // padding + gap
 
 	if right == "" {
-		return barStyle.Render(left)
+		return separator + "\n" + barStyle.Render(left)
 	}
 
 	// Fill middle space
@@ -52,7 +56,7 @@ func (sb StatusBar) Render() string {
 	}
 
 	line := left + strings.Repeat(" ", gap) + right
-	return barStyle.Render(line)
+	return separator + "\n" + barStyle.Render(line)
 }
 
 func (sb StatusBar) renderBreadcrumbs() string {
@@ -80,12 +84,8 @@ func (sb StatusBar) renderKeybinds(maxWidth int) string {
 
 	var pairs []string
 	for _, kb := range sb.Keybinds {
-		key := theme.KeybindKeyStyle.
-			Background(theme.Highlight).
-			Render(kb.Key)
-		help := theme.MutedStyle.
-			Background(theme.Highlight).
-			Render(kb.Help)
+		key := theme.KeybindKeyStyle.Render(kb.Key)
+		help := theme.MutedStyle.Render(kb.Help)
 		pairs = append(pairs, fmt.Sprintf("%s %s", key, help))
 	}
 
@@ -95,7 +95,7 @@ func (sb StatusBar) renderKeybinds(maxWidth int) string {
 	for i := 1; i < len(pairs); i++ {
 		candidate := result + gapStr + pairs[i]
 		if lipgloss.Width(candidate) > maxWidth {
-			ellipsis := theme.MutedStyle.Background(theme.Highlight).Render("...")
+			ellipsis := theme.MutedStyle.Render("...")
 			result = result + gapStr + ellipsis
 			break
 		}
