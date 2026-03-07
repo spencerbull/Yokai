@@ -11,18 +11,20 @@ import (
 
 // ServiceRow represents a single service in the list.
 type ServiceRow struct {
-	Name       string
-	Type       string // vllm, llamacpp, comfyui
-	Model      string
-	Status     string // running, stopped, error
-	Health     string // healthy, unhealthy, starting, ""
-	Device     string // device label
-	Port       int
-	CPUPercent float64
-	MemUsedMB  int64
-	GPUMemMB   int64
-	Uptime     string
-	Selected   bool
+	Name                string
+	Type                string // vllm, llamacpp, comfyui
+	Model               string
+	Status              string // running, stopped, error
+	Health              string // healthy, unhealthy, starting, ""
+	Device              string // device label
+	Port                int
+	CPUPercent          float64
+	MemUsedMB           int64
+	GPUMemMB            int64
+	Uptime              string
+	Selected            bool
+	GenerationTokPerSec float64
+	PromptTokPerSec     float64
 }
 
 // ServiceList renders a table of services.
@@ -57,6 +59,8 @@ var allColumns = []column{
 	{id: "device", header: "Device", minWidth: 8, flex: 1},
 	{id: "port", header: "Port", minWidth: 5, flex: 0},
 	{id: "gpumem", header: "GPU Mem", minWidth: 7, flex: 0},
+	{id: "toks", header: "Tok/s", minWidth: 6, flex: 0},
+	{id: "prefill", header: "Prefill", minWidth: 7, flex: 0},
 	{id: "uptime", header: "Uptime", minWidth: 6, flex: 0},
 }
 
@@ -64,12 +68,20 @@ var allColumns = []column{
 func (s ServiceList) activeColumns() []column {
 	hasModel := false
 	hasGPUMem := false
+	hasToks := false
+	hasPrefill := false
 	for _, svc := range s.Services {
 		if svc.Model != "" {
 			hasModel = true
 		}
 		if svc.GPUMemMB > 0 {
 			hasGPUMem = true
+		}
+		if svc.GenerationTokPerSec > 0 {
+			hasToks = true
+		}
+		if svc.PromptTokPerSec > 0 {
+			hasPrefill = true
 		}
 	}
 
@@ -79,6 +91,12 @@ func (s ServiceList) activeColumns() []column {
 			continue
 		}
 		if col.id == "gpumem" && !hasGPUMem {
+			continue
+		}
+		if col.id == "toks" && !hasToks {
+			continue
+		}
+		if col.id == "prefill" && !hasPrefill {
 			continue
 		}
 		cols = append(cols, col)
@@ -174,6 +192,16 @@ func (s ServiceList) cellValue(svc ServiceRow, col column, width int) string {
 		return ""
 	case "gpumem":
 		return formatMem(svc.GPUMemMB)
+	case "toks":
+		if svc.GenerationTokPerSec > 0 {
+			return fmt.Sprintf("%.1f", svc.GenerationTokPerSec)
+		}
+		return "-"
+	case "prefill":
+		if svc.PromptTokPerSec > 0 {
+			return fmt.Sprintf("%.1f", svc.PromptTokPerSec)
+		}
+		return "-"
 	case "uptime":
 		return s.statusText(svc)
 	default:
