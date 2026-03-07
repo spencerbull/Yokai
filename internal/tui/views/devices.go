@@ -124,11 +124,17 @@ func (dm *DeviceManager) Update(msg tea.Msg) (View, tea.Cmd) {
 			}
 		case "x":
 			if len(dm.cfg.Devices) > 0 {
-				dm.cfg.RemoveDevice(dm.cfg.Devices[dm.cursor].ID)
-				_ = config.Save(dm.cfg)
-				if dm.cursor >= len(dm.cfg.Devices) && dm.cursor > 0 {
-					dm.cursor--
+				device := dm.cfg.Devices[dm.cursor]
+				onConfirm := func() tea.Msg {
+					dm.cfg.RemoveDevice(device.ID)
+					_ = config.Save(dm.cfg)
+					if dm.cursor >= len(dm.cfg.Devices) && dm.cursor > 0 {
+						dm.cursor--
+					}
+					return nil
 				}
+				msg := fmt.Sprintf("Remove device %q? This cannot be undone.", device.Label)
+				return dm, Navigate(NewConfirmView(msg, onConfirm, nil))
 			}
 		case "esc":
 			return dm, PopView()
