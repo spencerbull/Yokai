@@ -211,8 +211,11 @@ func (d *Deploy) Update(msg tea.Msg) (View, tea.Cmd) {
 			d.history.AddModel(d.modelInput.Value())
 			_ = config.SaveHistory(d.history)
 
-			// Success - pop back to dashboard
-			return d, PopView()
+			// Success - pop back to dashboard with toast
+			return d, tea.Batch(
+				PopView(),
+				ShowToast("Service deployed successfully", ToastSuccess),
+			)
 		}
 		return d, nil
 

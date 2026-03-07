@@ -54,6 +54,14 @@ type DevicesMsg struct {
 
 type tickMsg struct{}
 
+type serviceStopMsg struct {
+	err error
+}
+
+type serviceRestartMsg struct {
+	err error
+}
+
 // DashboardMetrics represents the metrics data from the daemon API
 type DashboardMetrics struct {
 	CPU        CPUData         `json:"cpu"`
@@ -161,6 +169,18 @@ func (d *Dashboard) Update(msg tea.Msg) (View, tea.Cmd) {
 
 	case tickMsg:
 		return d, tea.Batch(d.pollMetrics(), d.pollDevices())
+
+	case serviceStopMsg:
+		if msg.err != nil {
+			return d, ShowToast("Stop failed: "+msg.err.Error(), ToastError)
+		}
+		return d, ShowToast("Service stopped", ToastSuccess)
+
+	case serviceRestartMsg:
+		if msg.err != nil {
+			return d, ShowToast("Restart failed: "+msg.err.Error(), ToastError)
+		}
+		return d, ShowToast("Service restarting...", ToastInfo)
 
 	case tea.MouseMsg:
 		if msg.Action == tea.MouseActionRelease {
@@ -734,15 +754,15 @@ func (d *Dashboard) stopService(containerID string) tea.Cmd {
 	return func() tea.Msg {
 		deviceID := d.findDeviceIDForContainer(containerID)
 		if deviceID == "" {
-			return nil
+			return serviceStopMsg{err: fmt.Errorf("device not found")}
 		}
 		url := fmt.Sprintf("http://%s/containers/%s/%s/stop", d.cfg.Daemon.Listen, deviceID, containerID)
 		resp, err := http.Post(url, "application/json", nil)
 		if err != nil {
-			return nil // Could return error message
+			return serviceStopMsg{err: err}
 		}
-		_ = resp.Body.Close() // Best-effort close of stop response body.
-		return nil
+		_ = resp.Body.Close()
+		return serviceStopMsg{}
 	}
 }
 
@@ -750,15 +770,15 @@ func (d *Dashboard) restartService(containerID string) tea.Cmd {
 	return func() tea.Msg {
 		deviceID := d.findDeviceIDForContainer(containerID)
 		if deviceID == "" {
-			return nil
+			return serviceRestartMsg{err: fmt.Errorf("device not found")}
 		}
 		url := fmt.Sprintf("http://%s/containers/%s/%s/restart", d.cfg.Daemon.Listen, deviceID, containerID)
 		resp, err := http.Post(url, "application/json", nil)
 		if err != nil {
-			return nil // Could return error message
+			return serviceRestartMsg{err: err}
 		}
-		_ = resp.Body.Close() // Best-effort close of restart response body.
-		return nil
+		_ = resp.Body.Close()
+		return serviceRestartMsg{}
 	}
 }
 
