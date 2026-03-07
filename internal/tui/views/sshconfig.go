@@ -84,6 +84,16 @@ func (p *SSHConfigPicker) handleSelect() tea.Cmd {
 			user = "root"
 		}
 
+		// If the key is passphrase-protected, route through the credentials
+		// view so the user can enter the passphrase.
+		if h.IdentityFile != "" && sshpkg.IsKeyEncrypted(h.IdentityFile) {
+			return Navigate(NewSSHCredsFromConfig(
+				p.cfg, p.version,
+				host, h.Alias, "ssh-config",
+				user, h.IdentityFile, sshPort,
+			))
+		}
+
 		return Navigate(NewBootstrap(
 			p.cfg, p.version,
 			host, h.Alias, "ssh-config",

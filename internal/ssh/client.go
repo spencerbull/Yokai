@@ -256,6 +256,22 @@ func agentAuth() (ssh.AuthMethod, error) {
 	return ssh.PublicKeysCallback(agentClient.Signers), nil
 }
 
+// IsKeyEncrypted checks whether an SSH private key file is passphrase-protected.
+// Returns true if the key exists and requires a passphrase to decrypt.
+func IsKeyEncrypted(path string) bool {
+	path = expandPath(path)
+	key, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	_, err = ssh.ParsePrivateKey(key)
+	if err != nil {
+		var passErr *ssh.PassphraseMissingError
+		return errors.As(err, &passErr)
+	}
+	return false
+}
+
 func expandPath(path string) string {
 	if strings.HasPrefix(path, "~/") {
 		home, err := os.UserHomeDir()
