@@ -3,6 +3,7 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -10,19 +11,27 @@ import (
 	"path"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 )
 
+// VLLMMetrics holds vLLM inference throughput metrics.
+type VLLMMetrics struct {
+	GenerationTokPerSec float64 `json:"generation_tok_per_s"`
+	PromptTokPerSec     float64 `json:"prompt_tok_per_s"`
+}
+
 // Container represents a running container.
 type Container struct {
-	ID      string            `json:"id"`
-	Name    string            `json:"name"`
-	Image   string            `json:"image"`
-	Status  string            `json:"status"`
-	Ports   map[string]string `json:"ports"`
-	Created time.Time         `json:"created"`
-	Uptime  int64             `json:"uptime_seconds"`
+	ID          string            `json:"id"`
+	Name        string            `json:"name"`
+	Image       string            `json:"image"`
+	Status      string            `json:"status"`
+	Ports       map[string]string `json:"ports"`
+	Created     time.Time         `json:"created"`
+	Uptime      int64             `json:"uptime_seconds"`
+	VLLMMetrics *VLLMMetrics      `json:"vllm_metrics,omitempty"`
 }
 
 // ContainerRequest represents a container deployment request.
@@ -106,6 +115,18 @@ func listContainers() ([]Container, error) {
 			Ports:   ports,
 			Created: created,
 			Uptime:  uptime,
+		}
+
+		// Scrape vLLM metrics for vLLM containers
+		if isVLLMImage(container.Image) && container.Status == "running" {
+			for _, ext := range container.Ports {
+				if ext != "" {
+					if vm, err := scrapeVLLMMetrics(ext); err == nil {
+						container.VLLMMetrics = vm
+					}
+					break
+				}
+			}
 		}
 
 		containers = append(containers, container)
@@ -487,6 +508,47 @@ func probeContainerHealth(ports map[string]string, image string) string {
 	}
 	_ = conn.Close()
 	return "healthy"
+}
+
+// scrapeVLLMMetrics fetches Prometheus metrics from a vLLM container's /metrics
+// endpoint and parses generation and prompt throughput.
+func scrapeVLLMMetrics(port string) (*VLLMMetrics, error) {
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get("http://127.0.0.1:" + port + "/metrics")
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("vllm metrics returned %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
+	if err != nil {
+		return nil, err
+	}
+
+	m := &VLLMMetrics{}
+	for _, line := range strings.Split(string(body), "\n") {
+		if strings.HasPrefix(line, "#") || line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "vllm:avg_generation_throughput_toks_per_s") {
+			parts := strings.Fields(line)
+			if len(parts) >= 2 {
+				m.GenerationTokPerSec, _ = strconv.ParseFloat(parts[len(parts)-1], 64)
+			}
+		} else if strings.HasPrefix(line, "vllm:avg_prompt_throughput_toks_per_s") {
+			parts := strings.Fields(line)
+			if len(parts) >= 2 {
+				m.PromptTokPerSec, _ = strconv.ParseFloat(parts[len(parts)-1], 64)
+			}
+		}
+	}
+	return m, nil
 }
 
 // normalizeServicePorts remaps user-specified ports so the container-internal
