@@ -338,6 +338,11 @@ func handleContainerDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !containerExists(id) {
+		writeError(w, http.StatusNotFound, "container_not_found", fmt.Sprintf("Container %s not found", id))
+		return
+	}
+
 	// Stop the container first
 	if err := stopContainer(id); err != nil {
 		log.Printf("Warning: failed to stop container %s: %v", id, err)
@@ -358,6 +363,11 @@ func handleContainerRestart(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if id == "" {
 		writeError(w, http.StatusBadRequest, "missing_id", "Container ID is required")
+		return
+	}
+
+	if !containerExists(id) {
+		writeError(w, http.StatusNotFound, "container_not_found", fmt.Sprintf("Container %s not found", id))
 		return
 	}
 
