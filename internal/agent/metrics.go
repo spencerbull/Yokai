@@ -51,6 +51,7 @@ type DiskMetrics struct {
 type GPUMetrics struct {
 	Index       int    `json:"index"`
 	Name        string `json:"name"`
+	MemoryType  string `json:"memory_type,omitempty"` // "dedicated" or "unified"
 	UtilPercent int    `json:"utilization_percent"`
 	VRAMUsedMB  int64  `json:"vram_used_mb"`
 	VRAMTotalMB int64  `json:"vram_total_mb"`
@@ -263,9 +264,22 @@ func collectGPUs() []GPUMetrics {
 		powerLimit, _ := strconv.ParseFloat(fields[7], 64)
 		fan, _ := strconv.Atoi(fields[8])
 
+		memoryType := "dedicated"
+
+		// Detect unified memory GPUs (e.g. NVIDIA GB10 / DGX Spark).
+		// nvidia-smi returns "Not Supported" or "N/A" for memory fields,
+		// which parse as 0. Fall back to system RAM from /proc/meminfo.
+		if vramTotal == 0 {
+			memoryType = "unified"
+			sysTotal, sysUsed := readSystemRAM()
+			vramTotal = sysTotal
+			vramUsed = sysUsed
+		}
+
 		gpus = append(gpus, GPUMetrics{
 			Index:       index,
 			Name:        fields[1],
+			MemoryType:  memoryType,
 			UtilPercent: util,
 			VRAMUsedMB:  vramUsed,
 			VRAMTotalMB: vramTotal,
@@ -277,6 +291,26 @@ func collectGPUs() []GPUMetrics {
 	}
 
 	return gpus
+}
+
+// readSystemRAM reads total and used memory from /proc/meminfo (in MB).
+func readSystemRAM() (totalMB, usedMB int64) {
+	data, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return 0, 0
+	}
+
+	var totalKB, availableKB int64
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "MemTotal:") {
+			_, _ = fmt.Sscanf(line, "MemTotal: %d kB", &totalKB)
+		}
+		if strings.HasPrefix(line, "MemAvailable:") {
+			_, _ = fmt.Sscanf(line, "MemAvailable: %d kB", &availableKB)
+		}
+	}
+
+	return totalKB / 1024, (totalKB - availableKB) / 1024
 }
 
 // collectContainers uses docker stats to gather container metrics.
