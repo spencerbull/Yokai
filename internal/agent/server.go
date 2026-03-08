@@ -45,6 +45,7 @@ func Run(port string, version string) error {
 	mux.HandleFunc("GET /metrics", requireAuth(handleMetrics))
 	mux.HandleFunc("GET /containers", requireAuth(handleContainers))
 	mux.HandleFunc("POST /containers", requireAuth(handleContainerDeploy))
+	mux.HandleFunc("POST /containers/{id}/stop", requireAuth(handleContainerStop))
 	mux.HandleFunc("DELETE /containers/{id}", requireAuth(handleContainerDelete))
 	mux.HandleFunc("POST /containers/{id}/restart", requireAuth(handleContainerRestart))
 	mux.HandleFunc("GET /containers/{id}/logs", requireAuth(handleContainerLogs))
@@ -308,6 +309,23 @@ func handleContainerDeploy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusCreated, resp)
+}
+
+func handleContainerStop(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "missing_id", "Container ID is required")
+		return
+	}
+
+	if err := stopContainer(id); err != nil {
+		writeError(w, http.StatusInternalServerError, "stop_failed", err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status": "stopped",
+	})
 }
 
 func handleContainerDelete(w http.ResponseWriter, r *http.Request) {
