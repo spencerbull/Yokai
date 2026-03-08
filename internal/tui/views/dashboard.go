@@ -325,16 +325,15 @@ func (d *Dashboard) View() string {
 func (d *Dashboard) renderDeviceTabBar() string {
 	var tabs []string
 
-	activeStyle := lipgloss.NewStyle().
-		Foreground(theme.Background).
-		Background(theme.Accent).
-		Bold(true).
-		Padding(0, 1)
+	activeLabelStyle := lipgloss.NewStyle().
+		Foreground(theme.Accent).
+		Bold(true)
+
+	activeBracketStyle := lipgloss.NewStyle().
+		Foreground(theme.Accent)
 
 	inactiveStyle := lipgloss.NewStyle().
 		Foreground(theme.TextMuted).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(theme.Border).
 		Padding(0, 1)
 
 	for i, device := range d.devices {
@@ -351,7 +350,8 @@ func (d *Dashboard) renderDeviceTabBar() string {
 
 		zoneID := fmt.Sprintf("device-tab-%d", i)
 		if i == d.activeDeviceTab {
-			tabs = append(tabs, zone.Mark(zoneID, activeStyle.Render(tabLabel)))
+			rendered := activeBracketStyle.Render("[") + " " + activeLabelStyle.Render(tabLabel) + " " + activeBracketStyle.Render("]")
+			tabs = append(tabs, zone.Mark(zoneID, rendered))
 		} else {
 			tabs = append(tabs, zone.Mark(zoneID, inactiveStyle.Render(tabLabel)))
 		}

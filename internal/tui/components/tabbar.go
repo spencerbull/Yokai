@@ -47,11 +47,12 @@ func (tb TabBar) Render() string {
 		return ""
 	}
 
-	activeStyle := lipgloss.NewStyle().
+	activeLabelStyle := lipgloss.NewStyle().
 		Foreground(theme.Accent).
-		Bold(true).
-		Underline(true).
-		Padding(0, 1)
+		Bold(true)
+
+	activeBracketStyle := lipgloss.NewStyle().
+		Foreground(theme.Accent)
 
 	inactiveStyle := lipgloss.NewStyle().
 		Foreground(theme.TextMuted).
@@ -61,23 +62,17 @@ func (tb TabBar) Render() string {
 		Foreground(theme.TextMuted).
 		Faint(true)
 
-	separatorStyle := lipgloss.NewStyle().
-		Foreground(theme.Border)
-
 	var parts []string
 	for i, tab := range tb.Tabs {
 		keyHint := keyStyle.Render(tab.Key)
 		var tabStr string
 		if i == tb.ActiveIdx {
-			tabStr = keyHint + activeStyle.Render(tab.Label)
+			tabStr = keyHint + activeBracketStyle.Render("[") + " " + activeLabelStyle.Render(tab.Label) + " " + activeBracketStyle.Render("]")
 		} else {
 			tabStr = keyHint + inactiveStyle.Render(tab.Label)
 		}
 		// Wrap in a zone mark so mouse clicks can target this tab
 		parts = append(parts, zone.Mark(tab.Label, tabStr))
-		if i < len(tb.Tabs)-1 {
-			parts = append(parts, separatorStyle.Render("│"))
-		}
 	}
 
 	bar := strings.Join(parts, "")
