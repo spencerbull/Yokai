@@ -55,6 +55,7 @@ func Run(version string) error {
 	mux.HandleFunc("GET /metrics/{deviceID}", d.handleDeviceMetrics)
 	mux.HandleFunc("POST /deploy", d.handleDeploy)
 	mux.HandleFunc("POST /containers/{deviceID}/{containerID}/stop", d.handleStopContainer)
+	mux.HandleFunc("DELETE /containers/{deviceID}/{containerID}/remove", d.handleRemoveContainer)
 	mux.HandleFunc("POST /containers/{deviceID}/{containerID}/restart", d.handleRestartContainer)
 	mux.HandleFunc("GET /logs/{deviceID}/{containerID}", d.handleLogs)
 	mux.HandleFunc("GET /images/tags", d.handleImageTags)
@@ -182,6 +183,22 @@ func (d *Daemon) handleStopContainer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
+}
+
+func (d *Daemon) handleRemoveContainer(w http.ResponseWriter, r *http.Request) {
+	deviceID := r.PathValue("deviceID")
+	containerID := r.PathValue("containerID")
+
+	err := d.aggregator.RemoveContainer(deviceID, containerID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"error":   "remove_failed",
+			"message": err.Error(),
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "removed"})
 }
 
 func (d *Daemon) handleRestartContainer(w http.ResponseWriter, r *http.Request) {
