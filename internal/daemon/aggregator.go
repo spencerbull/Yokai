@@ -300,15 +300,15 @@ func (a *Aggregator) Deploy(req DeployRequest) (*DeployResult, error) {
 	return &result, nil
 }
 
-// StopContainer forwards a stop request to the agent
+// StopContainer forwards a stop request to the agent (stop only, no remove)
 func (a *Aggregator) StopContainer(deviceID, containerID string) error {
 	localPort := a.tunnels.LocalPort(deviceID)
 	if localPort == 0 {
 		return fmt.Errorf("device %s is not connected", deviceID)
 	}
 
-	url := fmt.Sprintf("http://localhost:%d/containers/%s", localPort, containerID)
-	resp, err := a.agentDo("DELETE", url, deviceID, nil)
+	url := fmt.Sprintf("http://localhost:%d/containers/%s/stop", localPort, containerID)
+	resp, err := a.agentDo("POST", url, deviceID, nil)
 	if err != nil {
 		return fmt.Errorf("stop request: %w", err)
 	}
@@ -318,6 +318,29 @@ func (a *Aggregator) StopContainer(deviceID, containerID string) error {
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
 		return fmt.Errorf("stop failed with status %d", resp.StatusCode)
+	}
+
+	return nil
+}
+
+// RemoveContainer forwards a remove request to the agent (stop + remove)
+func (a *Aggregator) RemoveContainer(deviceID, containerID string) error {
+	localPort := a.tunnels.LocalPort(deviceID)
+	if localPort == 0 {
+		return fmt.Errorf("device %s is not connected", deviceID)
+	}
+
+	url := fmt.Sprintf("http://localhost:%d/containers/%s", localPort, containerID)
+	resp, err := a.agentDo("DELETE", url, deviceID, nil)
+	if err != nil {
+		return fmt.Errorf("remove request: %w", err)
+	}
+	defer func() {
+		_ = resp.Body.Close() // Best-effort close of response body.
+	}()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("remove failed with status %d", resp.StatusCode)
 	}
 
 	return nil
