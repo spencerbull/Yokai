@@ -244,6 +244,12 @@ func runContainer(req ContainerRequest) (*ContainerResponse, error) {
 	}, nil
 }
 
+// containerExists checks whether a container with the given ID or name exists.
+func containerExists(idOrName string) bool {
+	cmd := exec.Command("docker", "inspect", "--format={{.State.Status}}", idOrName)
+	return cmd.Run() == nil
+}
+
 // stopContainer stops a container by ID or name.
 func stopContainer(idOrName string) error {
 	cmd := exec.Command("docker", "stop", idOrName)
