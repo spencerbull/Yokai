@@ -87,6 +87,41 @@ func (c *daemonClient) post(path string, body io.Reader) (json.RawMessage, error
 	return json.RawMessage(respBody), nil
 }
 
+func (c *daemonClient) doDelete(path string) (json.RawMessage, error) {
+	req, err := http.NewRequest("DELETE", c.baseURL+path, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("daemon unreachable (is 'yokai daemon' running?): %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
+	if err != nil {
+		return nil, fmt.Errorf("reading response: %w", err)
+	}
+
+	if resp.StatusCode >= 400 {
+		var errResp struct {
+			Error   string `json:"error"`
+			Message string `json:"message"`
+		}
+		if json.Unmarshal(respBody, &errResp) == nil && (errResp.Error != "" || errResp.Message != "") {
+			msg := errResp.Error
+			if errResp.Message != "" {
+				msg = errResp.Message
+			}
+			return nil, fmt.Errorf("%s", msg)
+		}
+		return nil, fmt.Errorf("daemon returned status %d", resp.StatusCode)
+	}
+
+	return json.RawMessage(respBody), nil
+}
+
 // getSSE connects to an SSE endpoint and sends lines to a channel.
 // The caller should close the returned channel by cancelling the request context.
 func (c *daemonClient) getSSE(path string) (<-chan string, error) {

@@ -13,7 +13,7 @@ import (
 // RunServices dispatches services subcommands.
 func RunServices(args []string) {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: yokai services <list|deploy|stop|restart|logs>")
+		fmt.Fprintln(os.Stderr, "Usage: yokai services <list|deploy|stop|remove|restart|logs>")
 		os.Exit(1)
 	}
 
@@ -24,6 +24,8 @@ func RunServices(args []string) {
 		runServicesDeploy(args[1:])
 	case "stop":
 		runServicesStop(args[1:])
+	case "remove":
+		runServicesRemove(args[1:])
 	case "restart":
 		runServicesRestart(args[1:])
 	case "logs":
@@ -182,6 +184,27 @@ func runServicesStop(args []string) {
 	data, err := client.post(fmt.Sprintf("/containers/%s/%s/stop", deviceID, containerID), nil)
 	if err != nil {
 		exitError(fmt.Sprintf("stop failed: %v", err))
+	}
+
+	outputRaw(data)
+}
+
+func runServicesRemove(args []string) {
+	if len(args) < 2 {
+		exitError("Usage: yokai services remove <device-id> <container-id>")
+	}
+	deviceID := args[0]
+	containerID := args[1]
+
+	cfg, err := config.Load()
+	if err != nil {
+		exitError(fmt.Sprintf("loading config: %v", err))
+	}
+
+	client := newDaemonClient(cfg)
+	data, err := client.doDelete(fmt.Sprintf("/containers/%s/%s/remove", deviceID, containerID))
+	if err != nil {
+		exitError(fmt.Sprintf("remove failed: %v", err))
 	}
 
 	outputRaw(data)
