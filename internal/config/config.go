@@ -83,7 +83,7 @@ func DefaultConfig() *Config {
 			Theme:             "tokyonight",
 			DefaultVLLMImage:  "vllm/vllm-openai:latest",
 			DefaultLlamaImage: "ghcr.io/ggml-org/llama.cpp:server-cuda",
-			DefaultComfyImage: "yanwk/comfyui-boot:latest",
+			DefaultComfyImage: "spencerbull/yokai-comfyui:latest",
 		},
 	}
 }
@@ -152,7 +152,7 @@ func Load() (*Config, error) {
 		cfg.Preferences.DefaultLlamaImage = "ghcr.io/ggml-org/llama.cpp:server-cuda"
 	}
 	if cfg.Preferences.DefaultComfyImage == "" {
-		cfg.Preferences.DefaultComfyImage = "yanwk/comfyui-boot:latest"
+		cfg.Preferences.DefaultComfyImage = "spencerbull/yokai-comfyui:latest"
 	}
 	if cfg.Devices == nil {
 		cfg.Devices = []Device{}
