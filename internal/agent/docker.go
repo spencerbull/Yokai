@@ -44,6 +44,7 @@ type ContainerRequest struct {
 	GPUIDs    string            `json:"gpu_ids"`
 	ExtraArgs string            `json:"extra_args"`
 	Volumes   map[string]string `json:"volumes"`
+	SkipPull  bool              `json:"skip_pull,omitempty"`
 }
 
 // ContainerResponse represents a container deployment response.

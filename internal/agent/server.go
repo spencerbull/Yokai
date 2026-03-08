@@ -282,16 +282,19 @@ func handleContainerDeploy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := validateImagePlatform(req.Image); err != nil {
-		writeError(w, http.StatusBadRequest, "unsupported_platform", err.Error())
-		return
-	}
+	if req.SkipPull {
+		log.Printf("Skipping image pull (--skip-pull): %s", req.Image)
+	} else {
+		if err := validateImagePlatform(req.Image); err != nil {
+			writeError(w, http.StatusBadRequest, "unsupported_platform", err.Error())
+			return
+		}
 
-	// Pull image first
-	log.Printf("Pulling image: %s", req.Image)
-	if err := pullImage(req.Image); err != nil {
-		writeError(w, http.StatusInternalServerError, "pull_failed", err.Error())
-		return
+		log.Printf("Pulling image: %s", req.Image)
+		if err := pullImage(req.Image); err != nil {
+			writeError(w, http.StatusInternalServerError, "pull_failed", err.Error())
+			return
+		}
 	}
 
 	if err := validatePulledImageArchitecture(req.Image); err != nil {

@@ -97,6 +97,7 @@ func runServicesDeploy(args []string) {
 	name := fs.String("name", "", "Container name")
 	extraArgs := fs.String("extra-args", "", "Extra docker arguments")
 	gpuIDs := fs.String("gpu-ids", "all", "GPU IDs to use")
+	skipPull := fs.Bool("skip-pull", false, "Skip pulling the image (use local/custom image)")
 	_ = fs.Parse(args)
 
 	if *deviceID == "" {
@@ -154,6 +155,9 @@ func runServicesDeploy(args []string) {
 		"ports":      ports,
 		"gpu_ids":    *gpuIDs,
 		"extra_args": *extraArgs,
+	}
+	if *skipPull {
+		deployReq["skip_pull"] = true
 	}
 
 	body, _ := json.Marshal(deployReq)
