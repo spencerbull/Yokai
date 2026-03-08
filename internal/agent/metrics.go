@@ -303,10 +303,10 @@ func readSystemRAM() (totalMB, usedMB int64) {
 	var totalKB, availableKB int64
 	for _, line := range strings.Split(string(data), "\n") {
 		if strings.HasPrefix(line, "MemTotal:") {
-			fmt.Sscanf(line, "MemTotal: %d kB", &totalKB)
+			_, _ = fmt.Sscanf(line, "MemTotal: %d kB", &totalKB)
 		}
 		if strings.HasPrefix(line, "MemAvailable:") {
-			fmt.Sscanf(line, "MemAvailable: %d kB", &availableKB)
+			_, _ = fmt.Sscanf(line, "MemAvailable: %d kB", &availableKB)
 		}
 	}
 
