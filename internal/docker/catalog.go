@@ -179,6 +179,6 @@ func KnownImages() map[string][]string {
 	return map[string][]string{
 		"vllm":    {"vllm/vllm-openai"},
 		"llamacpp": {"ghcr.io/ggml-org/llama.cpp"},
-		"comfyui": {"yanwk/comfyui-boot"},
+		"comfyui": {"spencerbull/yokai-comfyui"},
 	}
 }

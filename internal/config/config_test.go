@@ -38,8 +38,8 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Preferences.DefaultLlamaImage != "ghcr.io/ggml-org/llama.cpp:server-cuda" {
 		t.Errorf("expected llama image 'ghcr.io/ggml-org/llama.cpp:server-cuda', got '%s'", cfg.Preferences.DefaultLlamaImage)
 	}
-	if cfg.Preferences.DefaultComfyImage != "yanwk/comfyui-boot:latest" {
-		t.Errorf("expected comfy image 'yanwk/comfyui-boot:latest', got '%s'", cfg.Preferences.DefaultComfyImage)
+	if cfg.Preferences.DefaultComfyImage != "spencerbull/yokai-comfyui:latest" {
+		t.Errorf("expected comfy image 'spencerbull/yokai-comfyui:latest', got '%s'", cfg.Preferences.DefaultComfyImage)
 	}
 
 	// Test slices are initialized
