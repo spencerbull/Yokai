@@ -281,10 +281,19 @@ func collectGPUs() []GPUMetrics {
 
 // collectContainers uses docker stats to gather container metrics.
 func collectContainers() []ContainerMetrics {
-	out, err := exec.Command("docker", "stats", "--no-stream",
-		"--format", "{{.ID}}\t{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}",
-		"--filter", "name=yokai-",
-	).Output()
+	// docker stats does not support --filter; list running yokai containers first.
+	namesOut, err := exec.Command("docker", "ps", "--filter", "name=yokai-", "--format", "{{.Names}}").Output()
+	if err != nil {
+		return nil
+	}
+	names := strings.Fields(strings.TrimSpace(string(namesOut)))
+	if len(names) == 0 {
+		return nil
+	}
+
+	args := []string{"stats", "--no-stream", "--format", "{{.ID}}\t{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}"}
+	args = append(args, names...)
+	out, err := exec.Command("docker", args...).Output()
 	if err != nil {
 		return nil
 	}
