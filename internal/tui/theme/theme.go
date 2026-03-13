@@ -38,14 +38,36 @@ func Panel(title string) lipgloss.Style {
 	return PanelStyle()
 }
 
-// RenderPanel renders content inside a bordered panel with a visible title line.
+// RenderPanel renders content inside a bordered panel with a visible title line above.
 func RenderPanel(title string, content string, width int) string {
-	panel := PanelStyle().Width(width - 2).Render(content)
+	panelWidth := width - 2
+	if panelWidth < 1 {
+		panelWidth = 1
+	}
+	panel := PanelStyle().Width(panelWidth).Render(content)
 	if title == "" {
 		return panel
 	}
 	titleLine := title
 	return lipgloss.JoinVertical(lipgloss.Left, titleLine, panel)
+}
+
+// RenderFocusedPanel renders a panel with an accent-colored border (focused).
+func RenderFocusedPanel(title string, content string, width int) string {
+	panelWidth := width - 2
+	if panelWidth < 1 {
+		panelWidth = 1
+	}
+	focusedStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(Accent).
+		Padding(0, 1).
+		Width(panelWidth)
+	panel := focusedStyle.Render(content)
+	if title == "" {
+		return panel
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, title, panel)
 }
 
 // TitleStyle renders panel titles (bold, accent colored).
@@ -113,18 +135,19 @@ var fractionalBlocks = []string{"▏", "▎", "▍", "▌", "▋", "▊", "▉",
 
 // ProgressBar renders a gradient progress bar with sub-character precision.
 // width is the total bar width in characters including brackets.
+// The fill color is value-based: green (<50%), amber (50-80%), red (>80%).
 func ProgressBar(percent float64, width int) string {
 	if width < 2 {
 		width = 2
 	}
 	innerWidth := width - 2 // account for [ ]
 
-	// Pick color based on severity
+	// Pick color based on severity thresholds
 	var color lipgloss.Color
 	switch {
-	case percent > 80:
+	case percent >= 80:
 		color = Crit
-	case percent > 50:
+	case percent >= 50:
 		color = Warn
 	default:
 		color = Good
@@ -159,6 +182,80 @@ func ProgressBar(percent float64, width int) string {
 		}
 		bar += fillStyle.Render(fractionalBlocks[fracIdx-1])
 		fullChars++
+	}
+
+	// Empty space
+	empty := innerWidth - fullChars
+	if empty > 0 {
+		bar += emptyStyle.Render(repeat("░", empty))
+	}
+
+	bar += "]"
+	return bar
+}
+
+// GradientBar renders a multi-segment progress bar where each segment is
+// colored based on its position: first 50% green, 50-80% amber, 80-100% red.
+// This gives a gradient effect within the bar itself.
+func GradientBar(percent float64, width int) string {
+	if width < 2 {
+		width = 2
+	}
+	innerWidth := width - 2
+
+	fillFloat := percent / 100.0 * float64(innerWidth)
+	if fillFloat < 0 {
+		fillFloat = 0
+	}
+	if fillFloat > float64(innerWidth) {
+		fillFloat = float64(innerWidth)
+	}
+
+	fullChars := int(fillFloat)
+	remainder := fillFloat - float64(fullChars)
+
+	// Segment thresholds in character positions
+	greenEnd := int(0.50 * float64(innerWidth))
+	warnEnd := int(0.80 * float64(innerWidth))
+
+	greenStyle := lipgloss.NewStyle().Foreground(Good)
+	warnStyle := lipgloss.NewStyle().Foreground(Warn)
+	critStyle := lipgloss.NewStyle().Foreground(Crit)
+	emptyStyle := lipgloss.NewStyle().Foreground(TextMuted)
+
+	var bar string
+	bar += "["
+
+	for i := 0; i < fullChars; i++ {
+		switch {
+		case i < greenEnd:
+			bar += greenStyle.Render("█")
+		case i < warnEnd:
+			bar += warnStyle.Render("█")
+		default:
+			bar += critStyle.Render("█")
+		}
+	}
+
+	// Fractional character
+	if fullChars < innerWidth && remainder > 0 {
+		fracIdx := int(remainder * 8)
+		if fracIdx > 7 {
+			fracIdx = 7
+		}
+		if fracIdx > 0 {
+			var fracStyle lipgloss.Style
+			switch {
+			case fullChars < greenEnd:
+				fracStyle = greenStyle
+			case fullChars < warnEnd:
+				fracStyle = warnStyle
+			default:
+				fracStyle = critStyle
+			}
+			bar += fracStyle.Render(fractionalBlocks[fracIdx-1])
+			fullChars++
+		}
 	}
 
 	// Empty space

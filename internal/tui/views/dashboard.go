@@ -278,35 +278,30 @@ func (d *Dashboard) View() string {
 		sections = append(sections, d.renderErrorBanner())
 	}
 
-	// Header
-	header := d.renderHeader()
-	sections = append(sections, header)
-
-	// Device tabs — show only the active device
+	// Device tabs / header
 	if len(d.devices) > 0 {
 		// Clamp active tab
 		if d.activeDeviceTab >= len(d.devices) {
 			d.activeDeviceTab = len(d.devices) - 1
 		}
-
-		// Render device tab bar
 		sections = append(sections, d.renderDeviceTabBar())
-
-		device := d.devices[d.activeDeviceTab]
-
-		// Device card + sparklines for the active device only
-		card := d.renderDeviceCardWithGPU(device, d.width)
-		sections = append(sections, card)
-
-		sparklines := d.renderDeviceSparklines(device.ID, d.width)
-		if sparklines != "" {
-			sections = append(sections, sparklines)
-		}
+	} else {
+		sections = append(sections, d.renderHeader())
 	}
 
-	// Service list (filtered to active device)
-	serviceList := d.renderServiceList()
-	sections = append(sections, serviceList)
+	// Responsive layout based on terminal width
+	// Wide (≥140): 3 cols; Medium (100-139): 2 cols; Narrow (<100): single stack
+	switch {
+	case d.width >= 140:
+		sections = append(sections, d.renderWideLayout())
+	case d.width >= 100:
+		sections = append(sections, d.renderMediumLayout())
+	default:
+		sections = append(sections, d.renderNarrowLayout())
+	}
+
+	// Service list (full width, filtered to active device)
+	sections = append(sections, d.renderServiceList())
 
 	// Service detail panel (expandable)
 	if d.showDetail {
@@ -315,22 +310,265 @@ func (d *Dashboard) View() string {
 		}
 	}
 
-	// Use Left alignment so the outer lipgloss.Place() in app.go handles centering.
-	// Wrap at d.width so the assembled block has the correct width for centering.
 	content := lipgloss.JoinVertical(lipgloss.Left, sections...)
 	return lipgloss.NewStyle().Width(d.width).Render(content)
 }
 
-// renderDeviceTabBar renders the device tab selector (e.g. [ finn ] [ darkporgs ] [ kyber ]).
+// renderWideLayout renders the 3-column btop-style grid (≥140 cols).
+// Row 1: Device cards side-by-side (up to 3)
+// Row 2: CPU | RAM | GPU charts side-by-side
+func (d *Dashboard) renderWideLayout() string {
+	var rows []string
+
+	// Row 1: Device cards
+	if len(d.devices) > 0 {
+		row1 := d.renderDeviceCardsRow(3)
+		if row1 != "" {
+			rows = append(rows, row1)
+		}
+	}
+
+	// Row 2: Sparkline charts (CPU, RAM, GPU) side-by-side
+	if len(d.devices) > 0 {
+		device := d.devices[d.activeDeviceTab]
+		row2 := d.renderChartsRow(device.ID, 3)
+		if row2 != "" {
+			rows = append(rows, row2)
+		}
+	}
+
+	if len(rows) == 0 {
+		return ""
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, rows...)
+}
+
+// renderMediumLayout renders the 2-column grid (100–139 cols).
+// Row 1: 2 device cards per row
+// Row 2: CPU + RAM charts side-by-side; GPU chart below if present
+func (d *Dashboard) renderMediumLayout() string {
+	var rows []string
+
+	if len(d.devices) > 0 {
+		row1 := d.renderDeviceCardsRow(2)
+		if row1 != "" {
+			rows = append(rows, row1)
+		}
+
+		device := d.devices[d.activeDeviceTab]
+		row2 := d.renderChartsRow(device.ID, 2)
+		if row2 != "" {
+			rows = append(rows, row2)
+		}
+	}
+
+	if len(rows) == 0 {
+		return ""
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, rows...)
+}
+
+// renderNarrowLayout renders the single-column stack (<100 cols).
+func (d *Dashboard) renderNarrowLayout() string {
+	var rows []string
+
+	if len(d.devices) > 0 {
+		if d.activeDeviceTab >= len(d.devices) {
+			d.activeDeviceTab = len(d.devices) - 1
+		}
+		device := d.devices[d.activeDeviceTab]
+
+		card := d.renderDeviceCardWithGPU(device, d.width)
+		rows = append(rows, card)
+
+		sparklines := d.renderDeviceSparklines(device.ID, d.width)
+		if sparklines != "" {
+			rows = append(rows, sparklines)
+		}
+	}
+
+	if len(rows) == 0 {
+		return ""
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, rows...)
+}
+
+// renderDeviceCardsRow renders device cards side-by-side (up to maxCols).
+// All visible devices are shown; the active device tab is highlighted.
+func (d *Dashboard) renderDeviceCardsRow(maxCols int) string {
+	if len(d.devices) == 0 {
+		return ""
+	}
+
+	// Show all devices (wrap to next row if more than maxCols)
+	numCols := len(d.devices)
+	if numCols > maxCols {
+		numCols = maxCols
+	}
+
+	gap := numCols - 1
+	if gap < 0 {
+		gap = 0
+	}
+	cardWidth := (d.width - gap) / numCols
+	if cardWidth < 24 {
+		cardWidth = 24
+	}
+
+	var cards []string
+	for i, device := range d.devices {
+		if i >= maxCols {
+			break
+		}
+		w := cardWidth
+		// Last card may be slightly wider to fill remaining space
+		if i == numCols-1 {
+			w = d.width - (cardWidth+1)*(numCols-1)
+			if w < cardWidth {
+				w = cardWidth
+			}
+		}
+
+		// Highlight active device with focused border
+		focused := (i == d.activeDeviceTab)
+		card := d.renderDeviceCardCompact(device, w, focused)
+		cards = append(cards, card)
+	}
+
+	if len(cards) == 0 {
+		return ""
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Top, cards...)
+}
+
+// renderDeviceCardCompact renders a compact device card, optionally with a focus border.
+func (d *Dashboard) renderDeviceCardCompact(device DashboardDevice, width int, focused bool) string {
+	var gpus []components.GPUMetrics
+	if m, ok := d.metrics[device.ID]; ok {
+		for _, gpu := range m.GPUs {
+			gpus = append(gpus, components.GPUMetrics{
+				Name:        gpu.Name,
+				UtilPercent: gpu.UtilPercent,
+				VRAMUsedMB:  gpu.VRAMUsedMB,
+				VRAMTotalMB: gpu.VRAMTotalMB,
+				TempC:       gpu.TempC,
+				PowerDrawW:  float64(gpu.PowerDrawW),
+				PowerLimitW: float64(gpu.PowerLimitW),
+				FanPercent:  gpu.FanPercent,
+			})
+		}
+	}
+
+	card := components.NewDeviceCardFull(
+		device.Label,
+		device.Host,
+		device.Online,
+		device.CPUPercent,
+		device.RAMPercent,
+		device.ServiceCount,
+		gpus,
+		width,
+	)
+	card.Focused = focused
+	return card.Render()
+}
+
+// renderChartsRow renders CPU/RAM/GPU stream charts side-by-side.
+// numCols determines how many charts to show per row.
+func (d *Dashboard) renderChartsRow(deviceID string, numCols int) string {
+	cpuVals := d.cpuHistory[deviceID]
+	ramVals := d.ramHistory[deviceID]
+
+	// Get GPU history
+	var gpuVals []float64
+	var gpuLabel string
+	if m, ok := d.metrics[deviceID]; ok {
+		for _, gpu := range m.GPUs {
+			historyKey := fmt.Sprintf("%s-%d", deviceID, gpu.Index)
+			if vals, ok := d.gpuHistory[historyKey]; ok && len(vals) > 0 {
+				gpuVals = vals
+				gpuLabel = fmt.Sprintf("GPU %d%%", gpu.UtilPercent)
+				break
+			}
+		}
+	}
+
+	// Collect charts that have data
+	type chartSpec struct {
+		label  string
+		values []float64
+		color  lipgloss.Color
+	}
+	var chartSpecs []chartSpec
+
+	if len(cpuVals) > 0 {
+		label := fmt.Sprintf(" CPU %.0f%%", cpuVals[len(cpuVals)-1])
+		chartSpecs = append(chartSpecs, chartSpec{label, cpuVals, theme.Good})
+	}
+	if len(ramVals) > 0 {
+		label := fmt.Sprintf(" RAM %.0f%%", ramVals[len(ramVals)-1])
+		chartSpecs = append(chartSpecs, chartSpec{label, ramVals, theme.Accent})
+	}
+	if len(gpuVals) > 0 {
+		chartSpecs = append(chartSpecs, chartSpec{" " + gpuLabel, gpuVals, theme.Warn})
+	}
+
+	if len(chartSpecs) == 0 {
+		return ""
+	}
+
+	// If more charts than columns, truncate to numCols (GPU may wrap in medium layout)
+	if len(chartSpecs) > numCols {
+		chartSpecs = chartSpecs[:numCols]
+	}
+
+	n := len(chartSpecs)
+	gap := n - 1
+	if gap < 0 {
+		gap = 0
+	}
+	chartWidth := (d.width - gap) / n
+	if chartWidth < 20 {
+		chartWidth = 20
+	}
+	chartHeight := 6
+	innerWidth := chartWidth - 4
+	if innerWidth < 10 {
+		innerWidth = 10
+	}
+
+	var charts []string
+	for i, spec := range chartSpecs {
+		val := spec.values[len(spec.values)-1]
+		titleStyle := utilColorStyle(val)
+		chartTitle := titleStyle.Render(spec.label)
+		w := chartWidth
+		if i == n-1 {
+			w = d.width - (chartWidth+1)*(n-1)
+			if w < chartWidth {
+				w = chartWidth
+			}
+		}
+		iw := w - 4
+		if iw < 10 {
+			iw = 10
+		}
+		sc := components.NewStreamChartGradient(spec.label, spec.values, iw, chartHeight, spec.color)
+		charts = append(charts, theme.RenderPanel(chartTitle, sc.Render(), w))
+	}
+
+	return lipgloss.JoinHorizontal(lipgloss.Top, charts...)
+}
+
+// renderDeviceTabBar renders the device tab selector in btop style.
 func (d *Dashboard) renderDeviceTabBar() string {
 	var tabs []string
 
 	activeLabelStyle := lipgloss.NewStyle().
-		Foreground(theme.Accent).
-		Bold(true)
-
-	activeBracketStyle := lipgloss.NewStyle().
-		Foreground(theme.Accent)
+		Foreground(theme.Background).
+		Background(theme.Accent).
+		Bold(true).
+		Padding(0, 1)
 
 	inactiveStyle := lipgloss.NewStyle().
 		Foreground(theme.TextMuted).
@@ -350,7 +588,7 @@ func (d *Dashboard) renderDeviceTabBar() string {
 
 		zoneID := fmt.Sprintf("device-tab-%d", i)
 		if i == d.activeDeviceTab {
-			rendered := activeBracketStyle.Render("[") + " " + activeLabelStyle.Render(tabLabel) + " " + activeBracketStyle.Render("]")
+			rendered := activeLabelStyle.Render(tabLabel)
 			tabs = append(tabs, zone.Mark(zoneID, rendered))
 		} else {
 			tabs = append(tabs, zone.Mark(zoneID, inactiveStyle.Render(tabLabel)))
@@ -358,9 +596,26 @@ func (d *Dashboard) renderDeviceTabBar() string {
 	}
 
 	tabRow := lipgloss.JoinHorizontal(lipgloss.Center, tabs...)
-	hint := theme.MutedStyle.Render("  h/l: switch device")
+	hint := theme.MutedStyle.Render("  h/l: switch")
 
-	return tabRow + hint
+	// Separator line below tabs
+	sepLine := lipgloss.NewStyle().
+		Foreground(theme.Border).
+		Render(strings.Repeat("─", d.width))
+
+	return tabRow + hint + "\n" + sepLine
+}
+
+// utilColorStyle returns a lipgloss style colored by utilization threshold.
+func utilColorStyle(val float64) lipgloss.Style {
+	switch {
+	case val >= 80:
+		return lipgloss.NewStyle().Foreground(theme.Crit).Bold(true)
+	case val >= 50:
+		return lipgloss.NewStyle().Foreground(theme.Warn).Bold(true)
+	default:
+		return lipgloss.NewStyle().Foreground(theme.Good).Bold(true)
+	}
 }
 
 // moveDeviceTab changes the active device tab by delta, wrapping around.

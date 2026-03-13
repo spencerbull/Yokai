@@ -54,7 +54,7 @@ func (m MetricsBar) Render() string {
 		barWidth = 1
 	}
 
-	progressBar := theme.ProgressBar(m.Percent, barWidth+2) // +2 for brackets
+	progressBar := theme.GradientBar(m.Percent, barWidth+2) // +2 for brackets, gradient coloring
 
 	return fmt.Sprintf("%s %s %s", m.Label, progressBar, percentStr)
 }
