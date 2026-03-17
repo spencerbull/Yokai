@@ -34,7 +34,8 @@ type Client struct {
 }
 
 // Connect establishes an SSH connection using the provided config.
-// Auth resolution order: SSH agent → explicit key → default keys → password.
+// When KeyPath is set, only that key is used (IdentitiesOnly behavior).
+// Otherwise: SSH agent → default keys → password.
 func Connect(cfg ClientConfig) (*Client, error) {
 	if cfg.Port == "" {
 		cfg.Port = "22"
@@ -170,18 +171,14 @@ func (c *Client) Underlying() *ssh.Client {
 }
 
 // resolveAuth builds auth methods in priority order.
-// SSH agent is tried first because it likely already holds unlocked keys,
-// which avoids passphrase prompts for encrypted private keys.
+// When an explicit KeyPath is provided (e.g. from ~/.ssh/config IdentityFile),
+// only that key is used -- mimicking OpenSSH IdentitiesOnly behavior and
+// avoiding "too many authentication failures" from a loaded SSH agent.
 func resolveAuth(cfg ClientConfig) ([]ssh.AuthMethod, error) {
 	var methods []ssh.AuthMethod
 
-	// 1. SSH agent (highest priority — handles passphrase-protected keys transparently)
-	if m, err := agentAuth(); err == nil {
-		methods = append(methods, m)
-	}
-
-	// 2. Explicit key path
 	if cfg.KeyPath != "" {
+		// Explicit key takes sole priority to avoid agent key exhaustion.
 		m, err := keyAuth(expandPath(cfg.KeyPath), cfg.KeyPassphrase)
 		if err != nil {
 			var passErr *ssh.PassphraseMissingError
@@ -191,30 +188,26 @@ func resolveAuth(cfg ClientConfig) ([]ssh.AuthMethod, error) {
 		} else {
 			methods = append(methods, m)
 		}
-	}
-
-	// 3. Default key paths
-	defaultKeys := []string{
-		"~/.ssh/id_ed25519",
-		"~/.ssh/id_rsa",
-	}
-	for _, k := range defaultKeys {
-		p := expandPath(k)
-		if p == expandPath(cfg.KeyPath) {
-			continue // already tried
+	} else {
+		// No explicit key -- try agent, then default key paths.
+		if m, err := agentAuth(); err == nil {
+			methods = append(methods, m)
 		}
-		m, err := keyAuth(p, "")
-		if err != nil {
-			var passErr *ssh.PassphraseMissingError
-			if errors.As(err, &passErr) {
-				log.Printf("SSH key %s is encrypted with a passphrase; skipping (add it to ssh-agent with ssh-add)", k)
+
+		for _, k := range []string{"~/.ssh/id_ed25519", "~/.ssh/id_rsa"} {
+			m, err := keyAuth(expandPath(k), "")
+			if err != nil {
+				var passErr *ssh.PassphraseMissingError
+				if errors.As(err, &passErr) {
+					log.Printf("SSH key %s is encrypted with a passphrase; skipping (add it to ssh-agent with ssh-add)", k)
+				}
+				continue
 			}
-			continue
+			methods = append(methods, m)
 		}
-		methods = append(methods, m)
 	}
 
-	// 4. Password
+	// Password as final fallback regardless of key path.
 	if cfg.Password != "" {
 		methods = append(methods, ssh.Password(cfg.Password))
 	}
