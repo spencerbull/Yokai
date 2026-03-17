@@ -14,6 +14,7 @@ type connectionChoice int
 const (
 	choiceLocal connectionChoice = iota
 	choiceTailscale
+	choiceSSHConfig
 	choiceManual
 )
 
@@ -23,6 +24,7 @@ var choices = []struct {
 }{
 	{"Local network (LAN)", "Connect to devices on your local network"},
 	{"Tailscale VPN", "Connect via Tailscale mesh network"},
+	{"SSH Config", "Import hosts from ~/.ssh/config"},
 	{"Manual (enter IP/host)", "Specify device addresses manually"},
 }
 
@@ -82,6 +84,8 @@ func (w *Welcome) handleSelect() tea.Cmd {
 		return Navigate(NewLocalNet(w.cfg, w.version))
 	case choiceTailscale:
 		return Navigate(NewTailscaleView(w.cfg, w.version))
+	case choiceSSHConfig:
+		return Navigate(NewSSHConfigPicker(w.cfg, w.version))
 	case choiceManual:
 		return Navigate(NewManual(w.cfg, w.version))
 	}
