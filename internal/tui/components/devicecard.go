@@ -286,7 +286,7 @@ func (d DeviceCardFull) Render() string {
 		vramTotalGB := float64(gpu.VRAMTotalMB) / 1024
 		vramSuffix := fmt.Sprintf("%.0f/%.0fG", vramUsedGB, vramTotalGB)
 
-		fixedLen2 := len(svcPart) + 3 + len("Util ") + 1 + len(utilSuffix) + 3 + len("VRAM ") + 1 + len(vramSuffix)
+		fixedLen2 := len(svcPart) + 3 + len("Util ") + 1 + len(utilSuffix) + 3 + len("VRAM ") + 1 + len(vramSuffix) + 4 // +4 for bar brackets
 		barSpace2 := contentWidth - fixedLen2
 		if barSpace2 < 4 {
 			barSpace2 = 4
