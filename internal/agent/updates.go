@@ -121,7 +121,7 @@ func handleDriversUpgrade(w http.ResponseWriter, r *http.Request) {
 	// Get current driver major version
 	out, _ := exec.Command("nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader").Output()
 	major := majorVersion(strings.TrimSpace(string(out)))
-	streamCommand(w, r, "sudo", "apt", "install", "-y", "nvidia-driver-"+major)
+	streamCommandThenReboot(w, r, "sudo", "apt", "install", "-y", "nvidia-driver-"+major)
 }
 
 // FirmwareUpdate represents a single firmware update.
@@ -224,11 +224,11 @@ func handleFirmwareUpgrade(w http.ResponseWriter, r *http.Request) {
 	manufacturer := strings.ToLower(dmidecodeField("system-manufacturer"))
 
 	if strings.Contains(manufacturer, "dell") {
-		streamCommand(w, r, "sudo", "dsu", "--non-interactive", "--apply-upgrades")
+		streamCommandThenReboot(w, r, "sudo", "dsu", "--non-interactive", "--apply-upgrades")
 		return
 	}
 
-	streamCommand(w, r, "sudo", "fwupdmgr", "update", "-y")
+	streamCommandThenReboot(w, r, "sudo", "fwupdmgr", "update", "-y")
 }
 
 // streamCommand runs a command and streams output as SSE.
@@ -270,4 +270,57 @@ func streamCommand(w http.ResponseWriter, r *http.Request, name string, args ...
 		fmt.Fprintf(w, "event: done\ndata: completed\n\n")
 	}
 	flusher.Flush()
+}
+
+// streamCommandThenReboot runs a command, streams output, and reboots on success.
+func streamCommandThenReboot(w http.ResponseWriter, r *http.Request, name string, args ...string) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	cmd := exec.CommandContext(r.Context(), name, args...)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		fmt.Fprintf(w, "data: error: %s\n\n", err.Error())
+		flusher.Flush()
+		return
+	}
+	cmd.Stderr = cmd.Stdout
+
+	if err := cmd.Start(); err != nil {
+		fmt.Fprintf(w, "data: error: %s\n\n", err.Error())
+		flusher.Flush()
+		return
+	}
+
+	scanner := bufio.NewScanner(stdout)
+	for scanner.Scan() {
+		fmt.Fprintf(w, "data: %s\n\n", scanner.Text())
+		flusher.Flush()
+	}
+
+	if err := cmd.Wait(); err != nil {
+		fmt.Fprintf(w, "event: error\ndata: %s\n\n", err.Error())
+		flusher.Flush()
+		return
+	}
+
+	// Update succeeded — reboot
+	fmt.Fprintf(w, "data: Update complete. Rebooting in 5 seconds...\n\n")
+	flusher.Flush()
+
+	fmt.Fprintf(w, "event: done\ndata: rebooting\n\n")
+	flusher.Flush()
+
+	// Schedule reboot in 5 seconds so the SSE response finishes first
+	go func() {
+		exec.Command("sleep", "5").Run()
+		exec.Command("sudo", "reboot").Run()
+	}()
 }
