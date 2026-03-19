@@ -260,6 +260,22 @@ EOF`, remoteConfigDir, agentToken),
 		}
 	}
 
+	// Configure passwordless sudo for device management (hardware info, updates, etc.)
+	// This is best-effort — if sudo isn't available, the agent will still work
+	// but hardware info and update features will be limited.
+	userName := getUserName(client)
+	sudoersLine := fmt.Sprintf("%s ALL=(ALL) NOPASSWD: ALL", userName)
+	sudoersFile := "/etc/sudoers.d/yokai-agent"
+
+	// Check if sudo is already configured
+	if _, err := client.Exec("sudo -n true 2>/dev/null"); err != nil {
+		// Try to configure it — requires the user to have some sudo access initially
+		sudoCmd := fmt.Sprintf(`sudo bash -c 'echo "%s" > %s && chmod 440 %s' 2>/dev/null`, sudoersLine, sudoersFile, sudoersFile)
+		if _, err := client.Exec(sudoCmd); err != nil {
+			fmt.Printf("warning: could not configure passwordless sudo for %s. Hardware info and update features will be limited.\n", userName)
+		}
+	}
+
 	// Check if user-level systemd is available.
 	// systemctl --user status may return non-zero even when working, so we
 	// test with daemon-reload which reliably fails without a user session.
