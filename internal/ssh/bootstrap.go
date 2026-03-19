@@ -260,62 +260,57 @@ EOF`, remoteConfigDir, agentToken),
 		}
 	}
 
-	// Configure passwordless sudo for device management (hardware info, updates, etc.)
-	userName := getUserName(client)
-	sudoersLine := fmt.Sprintf("%s ALL=(ALL) NOPASSWD: ALL", userName)
-	sudoersFile := "/etc/sudoers.d/yokai-agent"
+	// Install as a system-level service running as root.
+	// This gives the agent full access for hardware info, updates, drivers, firmware.
+	// Falls back to user-level service if sudo is not available.
+	systemServiceUnit := fmt.Sprintf(`[Unit]
+Description=Yokai GPU Agent
+After=network-online.target docker.service
+Wants=network-online.target docker.service
 
-	// Check if sudo is already configured
-	if _, err := client.Exec("sudo -n true 2>/dev/null"); err != nil {
-		configured := false
+[Service]
+Type=simple
+ExecStart=%s agent
+Restart=always
+RestartSec=5
 
-		// Approach 1: If we're root, write directly
-		if userName == "root" {
-			writeCmd := fmt.Sprintf(`echo "%s" > %s && chmod 440 %s`, sudoersLine, sudoersFile, sudoersFile)
-			if _, err := client.Exec(writeCmd); err == nil {
-				configured = true
-			}
-		}
+[Install]
+WantedBy=multi-user.target
+`, remoteBinPath)
 
-		// Approach 2: Try sudo (user may have password-based sudo from the session)
-		if !configured {
-			sudoCmd := fmt.Sprintf(`sudo -n bash -c 'echo "%s" > %s && chmod 440 %s' 2>/dev/null`, sudoersLine, sudoersFile, sudoersFile)
-			if _, err := client.Exec(sudoCmd); err == nil {
-				configured = true
-			}
-		}
+	installedSystem := false
 
-		// Approach 3: Try pkexec as fallback
-		if !configured {
-			pkexecCmd := fmt.Sprintf(`pkexec bash -c 'echo "%s" > %s && chmod 440 %s' 2>/dev/null`, sudoersLine, sudoersFile, sudoersFile)
-			if _, err := client.Exec(pkexecCmd); err == nil {
-				configured = true
-			}
-		}
+	// Try system-level install (requires sudo)
+	systemCmds := []string{
+		// Stop any existing user-level service first
+		"systemctl --user stop yokai-agent 2>/dev/null; systemctl --user disable yokai-agent 2>/dev/null; true",
+		// Stop any existing system-level service
+		"sudo systemctl stop yokai-agent 2>/dev/null; true",
+		// Write system service file
+		fmt.Sprintf("sudo bash -c 'cat > /etc/systemd/system/yokai-agent.service << SERVICEEOF\n%sSERVICEEOF'", systemServiceUnit),
+		"sudo systemctl daemon-reload",
+		"sudo systemctl enable yokai-agent",
+		"sudo systemctl restart yokai-agent",
+	}
 
-		// Approach 4: Try tee with sudo (some systems allow this)
-		if !configured {
-			teeCmd := fmt.Sprintf(`echo '%s' | sudo -n tee %s > /dev/null 2>&1 && sudo -n chmod 440 %s 2>/dev/null`, sudoersLine, sudoersFile, sudoersFile)
-			if _, err := client.Exec(teeCmd); err == nil {
-				configured = true
-			}
-		}
-
-		if !configured {
-			fmt.Printf("warning: could not configure passwordless sudo for %s.\n", userName)
-			fmt.Printf("  Run this on the device manually:\n")
-			fmt.Printf("  sudo bash -c 'echo \"%s\" > %s && chmod 440 %s'\n", sudoersLine, sudoersFile, sudoersFile)
+	allOk := true
+	for _, cmd := range systemCmds {
+		if _, err := client.Exec(cmd); err != nil {
+			allOk = false
+			break
 		}
 	}
 
-	// Check if user-level systemd is available.
-	// systemctl --user status may return non-zero even when working, so we
-	// test with daemon-reload which reliably fails without a user session.
-	_, userSystemdErr := client.Exec("systemctl --user daemon-reload 2>&1")
+	if allOk {
+		installedSystem = true
+	}
 
-	if userSystemdErr == nil {
-		// User-level systemd available — install service
-		serviceUnit := fmt.Sprintf(`[Unit]
+	if !installedSystem {
+		// Fallback: user-level systemd service
+		_, userSystemdErr := client.Exec("systemctl --user daemon-reload 2>&1")
+
+		if userSystemdErr == nil {
+			userServiceUnit := fmt.Sprintf(`[Unit]
 Description=yokai agent
 After=network.target docker.service
 Wants=docker.service
@@ -330,34 +325,35 @@ RestartSec=5
 WantedBy=default.target
 `, remoteBinPath)
 
-		setupCmds := []string{
-			fmt.Sprintf("mkdir -p %s", remoteSystemdDir),
-			fmt.Sprintf("cat > %s/yokai-agent.service << 'SERVICEEOF'\n%sSERVICEEOF", remoteSystemdDir, serviceUnit),
-			"systemctl --user daemon-reload",
-			"systemctl --user enable yokai-agent",
-			"systemctl --user restart yokai-agent",
-		}
-		for _, cmd := range setupCmds {
-			if cmdOut, err := client.Exec(cmd); err != nil {
-				return fmt.Errorf("running %q: %w — stderr: %s", cmd, err, strings.TrimSpace(cmdOut))
+			setupCmds := []string{
+				fmt.Sprintf("mkdir -p %s", remoteSystemdDir),
+				fmt.Sprintf("cat > %s/yokai-agent.service << 'SERVICEEOF'\n%sSERVICEEOF", remoteSystemdDir, userServiceUnit),
+				"systemctl --user daemon-reload",
+				"systemctl --user enable yokai-agent",
+				"systemctl --user restart yokai-agent",
 			}
-		}
+			for _, cmd := range setupCmds {
+				if cmdOut, err := client.Exec(cmd); err != nil {
+					return fmt.Errorf("running %q: %w — stderr: %s", cmd, err, strings.TrimSpace(cmdOut))
+				}
+			}
 
-		// Enable lingering so the service runs without an active login session.
-		// This may require sudo on some systems — warn but don't fail.
-		if lingerOut, err := client.Exec("loginctl enable-linger $(whoami) 2>&1"); err != nil {
-			if isSudoError(lingerOut) {
-				fmt.Printf("warning: could not enable lingering (sudo required). The agent service may stop when you log out. Run `sudo loginctl enable-linger %s` on the device.\n", getUserName(client))
+			// Enable lingering so the service runs without an active login session
+			if lingerOut, err := client.Exec("loginctl enable-linger $(whoami) 2>&1"); err != nil {
+				if isSudoError(lingerOut) {
+					fmt.Printf("warning: could not enable lingering (sudo required). The agent service may stop when you log out.\n")
+				}
 			}
-			// Non-fatal: the service will still work while the user session is active
-		}
-	} else {
-		// No user-level systemd — fall back to setsid background process
-		_, _ = client.Exec("pkill -f 'yokai agent'")
-		_, _ = client.Exec("sleep 0.5")
-		startCmd := fmt.Sprintf("setsid %s agent > /tmp/yokai-agent.log 2>&1 < /dev/null &", remoteBinPath)
-		if startOut, err := client.Exec(startCmd); err != nil {
-			return fmt.Errorf("starting agent: %w — stderr: %s", err, strings.TrimSpace(startOut))
+
+			fmt.Printf("note: installed as user-level service (no root access). Hardware info and updates may be limited.\n")
+		} else {
+			// No systemd at all — fall back to background process
+			_, _ = client.Exec("pkill -f 'yokai agent'")
+			_, _ = client.Exec("sleep 0.5")
+			startCmd := fmt.Sprintf("setsid %s agent > /tmp/yokai-agent.log 2>&1 < /dev/null &", remoteBinPath)
+			if startOut, err := client.Exec(startCmd); err != nil {
+				return fmt.Errorf("starting agent: %w — stderr: %s", err, strings.TrimSpace(startOut))
+			}
 		}
 	}
 
