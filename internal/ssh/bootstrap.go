@@ -261,18 +261,50 @@ EOF`, remoteConfigDir, agentToken),
 	}
 
 	// Configure passwordless sudo for device management (hardware info, updates, etc.)
-	// This is best-effort — if sudo isn't available, the agent will still work
-	// but hardware info and update features will be limited.
 	userName := getUserName(client)
 	sudoersLine := fmt.Sprintf("%s ALL=(ALL) NOPASSWD: ALL", userName)
 	sudoersFile := "/etc/sudoers.d/yokai-agent"
 
 	// Check if sudo is already configured
 	if _, err := client.Exec("sudo -n true 2>/dev/null"); err != nil {
-		// Try to configure it — requires the user to have some sudo access initially
-		sudoCmd := fmt.Sprintf(`sudo bash -c 'echo "%s" > %s && chmod 440 %s' 2>/dev/null`, sudoersLine, sudoersFile, sudoersFile)
-		if _, err := client.Exec(sudoCmd); err != nil {
-			fmt.Printf("warning: could not configure passwordless sudo for %s. Hardware info and update features will be limited.\n", userName)
+		configured := false
+
+		// Approach 1: If we're root, write directly
+		if userName == "root" {
+			writeCmd := fmt.Sprintf(`echo "%s" > %s && chmod 440 %s`, sudoersLine, sudoersFile, sudoersFile)
+			if _, err := client.Exec(writeCmd); err == nil {
+				configured = true
+			}
+		}
+
+		// Approach 2: Try sudo (user may have password-based sudo from the session)
+		if !configured {
+			sudoCmd := fmt.Sprintf(`sudo -n bash -c 'echo "%s" > %s && chmod 440 %s' 2>/dev/null`, sudoersLine, sudoersFile, sudoersFile)
+			if _, err := client.Exec(sudoCmd); err == nil {
+				configured = true
+			}
+		}
+
+		// Approach 3: Try pkexec as fallback
+		if !configured {
+			pkexecCmd := fmt.Sprintf(`pkexec bash -c 'echo "%s" > %s && chmod 440 %s' 2>/dev/null`, sudoersLine, sudoersFile, sudoersFile)
+			if _, err := client.Exec(pkexecCmd); err == nil {
+				configured = true
+			}
+		}
+
+		// Approach 4: Try tee with sudo (some systems allow this)
+		if !configured {
+			teeCmd := fmt.Sprintf(`echo '%s' | sudo -n tee %s > /dev/null 2>&1 && sudo -n chmod 440 %s 2>/dev/null`, sudoersLine, sudoersFile, sudoersFile)
+			if _, err := client.Exec(teeCmd); err == nil {
+				configured = true
+			}
+		}
+
+		if !configured {
+			fmt.Printf("warning: could not configure passwordless sudo for %s.\n", userName)
+			fmt.Printf("  Run this on the device manually:\n")
+			fmt.Printf("  sudo bash -c 'echo \"%s\" > %s && chmod 440 %s'\n", sudoersLine, sudoersFile, sudoersFile)
 		}
 	}
 
