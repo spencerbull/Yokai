@@ -18,6 +18,12 @@ type Client struct {
 	httpClient *http.Client
 }
 
+// SearchOptions controls HuggingFace model search behavior.
+type SearchOptions struct {
+	Limit  int
+	Filter string
+}
+
 // Model represents a HuggingFace model.
 type Model struct {
 	ID        string   `json:"id"`
@@ -46,15 +52,25 @@ func NewClient(token string) *Client {
 
 // SearchModels searches for text-generation models.
 func (c *Client) SearchModels(query string, limit int) ([]Model, error) {
-	if limit <= 0 {
-		limit = 20
+	return c.SearchModelsWithOptions(query, SearchOptions{
+		Limit:  limit,
+		Filter: "text-generation",
+	})
+}
+
+// SearchModelsWithOptions searches model repos with optional API filters.
+func (c *Client) SearchModelsWithOptions(query string, opts SearchOptions) ([]Model, error) {
+	if opts.Limit <= 0 {
+		opts.Limit = 20
 	}
 
 	params := url.Values{
 		"search": {query},
-		"filter": {"text-generation"},
 		"sort":   {"likes"},
-		"limit":  {fmt.Sprintf("%d", limit)},
+		"limit":  {fmt.Sprintf("%d", opts.Limit)},
+	}
+	if opts.Filter != "" {
+		params.Set("filter", opts.Filter)
 	}
 
 	reqURL := fmt.Sprintf("%s/models?%s", baseURL, params.Encode())

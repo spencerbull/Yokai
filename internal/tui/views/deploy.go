@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spencerbull/yokai/internal/config"
+	"github.com/spencerbull/yokai/internal/hf"
 	"github.com/spencerbull/yokai/internal/tui/components"
 	"github.com/spencerbull/yokai/internal/tui/theme"
 )
@@ -43,6 +45,13 @@ var workloadLabels = []string{"vLLM", "llama.cpp", "ComfyUI"}
 type deployResultMsg struct {
 	ContainerID string
 	Error       error
+}
+
+type hfSearchResultMsg struct {
+	requestID int
+	query     string
+	results   []hf.Model
+	err       error
 }
 
 // deployRequest represents the API request payload.
@@ -81,9 +90,16 @@ type Deploy struct {
 	modelTyping bool // true = free-text input mode, false = picking from history
 
 	// Step 5: config
-	portInput         textinput.Model
-	extraArgsInput    textinput.Model
-	activeConfigField int
+	portInput          textinput.Model
+	extraArgsInput     textinput.Model
+	activeConfigField  int
+	showArgsHelp       bool
+	modelSearchResults []hf.Model
+	modelSearchCursor  int
+	modelSearchLoading bool
+	modelSearchErr     string
+	modelSearchQuery   string
+	modelSearchRequest int
 
 	// History (loaded from ~/.config/yokai/history.json)
 	history *config.History
@@ -219,6 +235,28 @@ func (d *Deploy) Update(msg tea.Msg) (View, tea.Cmd) {
 		}
 		return d, nil
 
+	case hfSearchResultMsg:
+		if msg.requestID != d.modelSearchRequest {
+			return d, nil
+		}
+		d.modelSearchLoading = false
+		if strings.TrimSpace(d.modelInput.Value()) != msg.query {
+			return d, nil
+		}
+		if msg.err != nil {
+			d.modelSearchErr = msg.err.Error()
+			d.modelSearchResults = nil
+			d.modelSearchCursor = 0
+			return d, nil
+		}
+		d.modelSearchErr = ""
+		d.modelSearchQuery = msg.query
+		d.modelSearchResults = d.rankModelSearchResults(msg.results, msg.query)
+		if d.modelSearchCursor >= len(d.modelSearchResults) {
+			d.modelSearchCursor = 0
+		}
+		return d, nil
+
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "esc":
@@ -231,6 +269,7 @@ func (d *Deploy) Update(msg tea.Msg) (View, tea.Cmd) {
 				d.imageInput.Blur()
 			} else if d.currentStep == stepModel && d.modelTyping {
 				d.modelTyping = false
+				d.clearModelSearch()
 				d.modelInput.Blur()
 			} else {
 				d.currentStep--
@@ -427,6 +466,7 @@ func (d *Deploy) updateModel(msg tea.KeyMsg) (*Deploy, tea.Cmd) {
 	if d.workload == wtComfyUI {
 		if msg.String() == "enter" {
 			d.modelInput.SetValue("")
+			d.clearModelSearch()
 			d.currentStep = stepConfig
 			d.activeConfigField = 0
 			d.portInput.Focus()
@@ -444,7 +484,37 @@ func (d *Deploy) updateModel(msg tea.KeyMsg) (*Deploy, tea.Cmd) {
 
 	if d.modelTyping {
 		switch msg.String() {
+		case "up", "k":
+			if len(d.modelSearchResults) > 0 && d.modelSearchCursor > 0 {
+				d.modelSearchCursor--
+				return d, nil
+			}
+		case "down", "j":
+			if len(d.modelSearchResults) > 0 && d.modelSearchCursor < len(d.modelSearchResults)-1 {
+				d.modelSearchCursor++
+				return d, nil
+			}
+		case "pgdown":
+			if len(d.modelSearchResults) > 0 {
+				d.modelSearchCursor += 6
+				if d.modelSearchCursor >= len(d.modelSearchResults) {
+					d.modelSearchCursor = len(d.modelSearchResults) - 1
+				}
+				return d, nil
+			}
+		case "pgup":
+			if len(d.modelSearchResults) > 0 {
+				d.modelSearchCursor -= 6
+				if d.modelSearchCursor < 0 {
+					d.modelSearchCursor = 0
+				}
+				return d, nil
+			}
 		case "enter":
+			if len(d.modelSearchResults) > 0 && d.modelSearchCursor < len(d.modelSearchResults) {
+				d.modelInput.SetValue(d.modelSearchResults[d.modelSearchCursor].ID)
+			}
+			d.clearModelSearch()
 			d.currentStep = stepConfig
 			d.cursor = 0
 			d.modelTyping = false
@@ -456,18 +526,19 @@ func (d *Deploy) updateModel(msg tea.KeyMsg) (*Deploy, tea.Cmd) {
 			// Check if input is empty before forwarding to textinput
 			if d.modelInput.Value() == "" && len(models) > 0 {
 				d.modelTyping = false
+				d.clearModelSearch()
 				d.modelInput.Blur()
 				return d, nil
 			}
 			// Forward to textinput
 			var cmd tea.Cmd
 			d.modelInput, cmd = d.modelInput.Update(msg)
-			return d, cmd
+			return d, tea.Batch(cmd, d.triggerModelSearch())
 		default:
 			// Forward to textinput
 			var cmd tea.Cmd
 			d.modelInput, cmd = d.modelInput.Update(msg)
-			return d, cmd
+			return d, tea.Batch(cmd, d.triggerModelSearch())
 		}
 	}
 
@@ -486,10 +557,12 @@ func (d *Deploy) updateModel(msg tea.KeyMsg) (*Deploy, tea.Cmd) {
 			// "Type custom" option selected
 			d.modelTyping = true
 			d.modelInput.SetValue("")
+			d.clearModelSearch()
 			d.modelInput.Focus()
 			return d, nil
 		}
 		d.modelInput.SetValue(models[d.cursor])
+		d.clearModelSearch()
 		d.currentStep = stepConfig
 		d.cursor = 0
 		d.activeConfigField = 0
@@ -497,9 +570,184 @@ func (d *Deploy) updateModel(msg tea.KeyMsg) (*Deploy, tea.Cmd) {
 	case "/":
 		d.modelTyping = true
 		d.modelInput.SetValue("")
+		d.clearModelSearch()
 		d.modelInput.Focus()
 	}
 	return d, nil
+}
+
+func (d *Deploy) clearModelSearch() {
+	d.modelSearchResults = nil
+	d.modelSearchCursor = 0
+	d.modelSearchLoading = false
+	d.modelSearchErr = ""
+	d.modelSearchQuery = ""
+}
+
+func (d *Deploy) triggerModelSearch() tea.Cmd {
+	query := strings.TrimSpace(d.modelInput.Value())
+	d.modelSearchErr = ""
+
+	if d.cfg.HFToken == "" || query == "" || len(query) < 2 {
+		d.modelSearchResults = nil
+		d.modelSearchCursor = 0
+		d.modelSearchLoading = false
+		d.modelSearchQuery = query
+		return nil
+	}
+
+	d.modelSearchRequest++
+	requestID := d.modelSearchRequest
+	d.modelSearchLoading = true
+	d.modelSearchQuery = query
+	workload := d.workload
+	token := d.cfg.HFToken
+
+	return func() tea.Msg {
+		client := hf.NewClient(token)
+		opts := hf.SearchOptions{Limit: 30}
+		if workload == wtVLLM {
+			opts.Filter = "text-generation"
+		}
+		results, err := client.SearchModelsWithOptions(query, opts)
+		return hfSearchResultMsg{
+			requestID: requestID,
+			query:     query,
+			results:   results,
+			err:       err,
+		}
+	}
+}
+
+func (d *Deploy) rankModelSearchResults(results []hf.Model, query string) []hf.Model {
+	ranked := append([]hf.Model(nil), results...)
+	query = strings.ToLower(strings.TrimSpace(query))
+
+	sort.SliceStable(ranked, func(i, j int) bool {
+		left := d.modelSearchScore(ranked[i], query)
+		right := d.modelSearchScore(ranked[j], query)
+		if left != right {
+			return left > right
+		}
+		if ranked[i].Downloads != ranked[j].Downloads {
+			return ranked[i].Downloads > ranked[j].Downloads
+		}
+		return ranked[i].Likes > ranked[j].Likes
+	})
+
+	return ranked
+}
+
+func (d *Deploy) modelSearchScore(model hf.Model, query string) int {
+	id := strings.ToLower(model.ID)
+	score := 0
+
+	if strings.HasPrefix(id, query) {
+		score += 100
+	}
+	if strings.Contains(id, query) {
+		score += 40
+	}
+	if strings.Contains(strings.ToLower(model.Author), query) {
+		score += 15
+	}
+
+	hasGGUF := false
+	for _, tag := range model.Tags {
+		if strings.Contains(strings.ToLower(tag), "gguf") {
+			hasGGUF = true
+			break
+		}
+	}
+
+	switch d.workload {
+	case wtLlamaCpp:
+		if hasGGUF || strings.Contains(id, "gguf") {
+			score += 80
+		}
+		if model.Pipeline == "text-generation" {
+			score += 15
+		}
+	case wtVLLM:
+		if model.Pipeline == "text-generation" {
+			score += 50
+		}
+		if hasGGUF || strings.Contains(id, "gguf") {
+			score -= 20
+		}
+	}
+
+	return score
+}
+
+func (d *Deploy) renderModelSearchResults() string {
+	if d.cfg.HFToken == "" {
+		return theme.MutedStyle.Render("Add your HuggingFace token to enable live model search.")
+	}
+
+	query := strings.TrimSpace(d.modelInput.Value())
+	if query == "" {
+		return theme.MutedStyle.Render("Type to search HuggingFace repos.")
+	}
+	if len(query) < 2 {
+		return theme.MutedStyle.Render("Type at least 2 characters to search HuggingFace.")
+	}
+	if d.modelSearchLoading {
+		return theme.MutedStyle.Render("Searching HuggingFace...")
+	}
+	if d.modelSearchErr != "" {
+		return theme.WarnStyle.Render("HF search failed: " + d.modelSearchErr)
+	}
+	if len(d.modelSearchResults) == 0 {
+		return theme.MutedStyle.Render("No HuggingFace matches yet. Press Enter to use the typed model ID.")
+	}
+
+	start := 0
+	if d.modelSearchCursor > 3 {
+		start = d.modelSearchCursor - 3
+	}
+	end := start + 6
+	if end > len(d.modelSearchResults) {
+		end = len(d.modelSearchResults)
+	}
+	if end-start < 6 && start > 0 {
+		start = end - 6
+		if start < 0 {
+			start = 0
+		}
+	}
+
+	body := theme.MutedStyle.Render(fmt.Sprintf("HuggingFace results %d-%d of %d", start+1, end, len(d.modelSearchResults))) + "\n\n"
+	for i := start; i < end; i++ {
+		model := d.modelSearchResults[i]
+		cursor := "  "
+		style := theme.PrimaryStyle
+		metaStyle := theme.MutedStyle
+		if i == d.modelSearchCursor {
+			cursor = "> "
+			style = lipgloss.NewStyle().Foreground(theme.Accent).Bold(true)
+			metaStyle = lipgloss.NewStyle().Foreground(theme.Accent)
+		}
+
+		meta := []string{}
+		if model.Pipeline != "" {
+			meta = append(meta, model.Pipeline)
+		}
+		if model.Downloads > 0 {
+			meta = append(meta, fmt.Sprintf("%d dl", model.Downloads))
+		}
+		if model.Likes > 0 {
+			meta = append(meta, fmt.Sprintf("%d likes", model.Likes))
+		}
+
+		body += cursor + style.Render(model.ID) + "\n"
+		if len(meta) > 0 {
+			body += "  " + metaStyle.Render(strings.Join(meta, " • ")) + "\n"
+		}
+	}
+
+	body += "\n" + theme.MutedStyle.Render("Type to refine • ↑/↓ to browse • Enter to select")
+	return body
 }
 
 func (d *Deploy) updateConfig(msg tea.KeyMsg) (*Deploy, tea.Cmd) {
@@ -561,6 +809,9 @@ func (d *Deploy) updateConfig(msg tea.KeyMsg) (*Deploy, tea.Cmd) {
 		d.extraArgsInput.Blur()
 
 		return d, tea.Batch(d.deployToAPI(svc), d.spinner.Init())
+	case "?":
+		d.showArgsHelp = !d.showArgsHelp
+		return d, nil
 	default:
 		// Forward to the active textinput
 		var cmd tea.Cmd
@@ -580,6 +831,40 @@ func (d *Deploy) updateDeploying(msg tea.KeyMsg) (View, tea.Cmd) {
 		return d, PopView()
 	}
 	return d, nil
+}
+
+func (d *Deploy) renderArgsHelp() string {
+	label := "[+] Show extra arg help"
+	if d.showArgsHelp {
+		label = "[-] Hide extra arg help"
+	}
+
+	body := theme.MutedStyle.Render(label) + "\n\n"
+	if !d.showArgsHelp {
+		return body
+	}
+
+	switch d.workload {
+	case wtVLLM:
+		body += theme.MutedStyle.Render("How it works:") + "\n"
+		body += "  Extra args are appended to the vLLM command after the image.\n"
+		body += "  Use them for runtime flags like sequence length or tensor parallelism.\n\n"
+		body += theme.MutedStyle.Render("Defaults added automatically:") + "\n"
+		body += "  --model <selected model>\n"
+		body += "  --host 0.0.0.0\n"
+		body += "  --enable-auto-tool-choice\n"
+		body += "  --tool-call-parser <inferred from model>\n\n"
+		body += theme.MutedStyle.Render("Example:") + "\n"
+		body += "  --tensor-parallel-size 2 --max-model-len 32768 --gpu-memory-utilization 0.95\n\n"
+		body += theme.MutedStyle.Render("Note:") + "\n"
+		body += "  Quote handling is limited, so enter plain space-separated flags.\n\n"
+	default:
+		body += theme.MutedStyle.Render("How it works:") + "\n"
+		body += "  Extra args are appended to the container command after the image.\n"
+		body += "  Use plain space-separated flags that your service understands.\n\n"
+	}
+
+	return body
 }
 
 // deployToAPI makes an HTTP POST to the daemon to deploy the service.
@@ -763,6 +1048,7 @@ func (d *Deploy) View() string {
 				// Free-text input mode
 				body += theme.MutedStyle.Render("e.g. meta-llama/Llama-3.1-8B-Instruct") + "\n\n"
 				body += d.modelInput.View()
+				body += "\n\n" + d.renderModelSearchResults()
 				if len(models) > 0 {
 					body += "\n\n" + theme.MutedStyle.Render("Backspace to return to history")
 				}
@@ -796,7 +1082,8 @@ func (d *Deploy) View() string {
 		body += d.portInput.View() + "\n\n"
 		body += theme.MutedStyle.Render("Extra args:") + "\n"
 		body += d.extraArgsInput.View() + "\n\n"
-		body += theme.MutedStyle.Render("Tab to switch fields") + "\n\n"
+		body += theme.MutedStyle.Render("Tab to switch fields • ? to toggle arg help") + "\n\n"
+		body += d.renderArgsHelp()
 
 		// Show deployment error if any
 		if d.deployError != "" {
