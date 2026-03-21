@@ -225,11 +225,17 @@ func (s ServiceList) renderRow(svc ServiceRow, widths []int, cols []column, rowI
 	zoneID := ServiceRowZoneID(rowIdx)
 
 	if svc.Selected {
-		return zone.Mark(zoneID, lipgloss.NewStyle().
+		bar := lipgloss.NewStyle().
+			Foreground(theme.Accent).
+			Bold(true).
+			Render("▌")
+		content := lipgloss.NewStyle().
 			Background(theme.Highlight).
 			Foreground(theme.TextPrimary).
-			Width(s.Width).
-			Render(row))
+			Bold(true).
+			Width(max(0, s.Width-1)).
+			Render(row)
+		return zone.Mark(zoneID, bar+content)
 	}
 
 	// Alternating row backgrounds for readability
@@ -254,9 +260,13 @@ func (s ServiceList) statusText(svc ServiceRow) string {
 		return svc.Uptime
 	case "starting":
 		return "starting"
+	case "created":
+		return "created"
+	case "restarting":
+		return "restarting"
 	case "unhealthy", "error":
 		return "error"
-	case "stopped":
+	case "stopped", "dead", "exited":
 		return "stopped"
 	default:
 		return svc.Uptime
@@ -275,12 +285,14 @@ func (s ServiceList) healthIndicator(svc ServiceRow) string {
 		return lipgloss.NewStyle().Foreground(theme.Good).Render("●")
 	case "starting":
 		return lipgloss.NewStyle().Foreground(theme.Warn).Render("◐")
+	case "created", "restarting":
+		return lipgloss.NewStyle().Foreground(theme.Warn).Render("◌")
 	case "unhealthy", "error":
 		return lipgloss.NewStyle().Foreground(theme.Crit).Render("●")
-	case "stopped":
+	case "stopped", "dead", "exited":
 		return lipgloss.NewStyle().Foreground(theme.TextMuted).Render("○")
 	default:
-		return lipgloss.NewStyle().Foreground(theme.TextMuted).Render("?")
+		return lipgloss.NewStyle().Foreground(theme.Warn).Render("!")
 	}
 }
 

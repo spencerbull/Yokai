@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -142,7 +143,6 @@ func TestParseStatus(t *testing.T) {
 func TestContainerRequestValidation(t *testing.T) {
 	t.Parallel()
 
-	// Test that ContainerRequest struct has expected fields
 	req := ContainerRequest{
 		Image:     "nginx:latest",
 		Name:      "test-nginx",
@@ -154,7 +154,6 @@ func TestContainerRequestValidation(t *testing.T) {
 		Volumes:   map[string]string{"/host": "/container"},
 	}
 
-	// Verify all fields are accessible
 	if req.Image != "nginx:latest" {
 		t.Errorf("expected image 'nginx:latest', got %s", req.Image)
 	}
@@ -184,7 +183,6 @@ func TestContainerRequestValidation(t *testing.T) {
 func TestContainerStructure(t *testing.T) {
 	t.Parallel()
 
-	// Test that Container struct has expected fields and JSON tags
 	container := Container{
 		ID:     "abc123",
 		Name:   "test-container",
@@ -232,6 +230,27 @@ func TestImagePullRequestStructure(t *testing.T) {
 	}
 }
 
+func TestDefaultArgsRespectUserOverrides(t *testing.T) {
+	tests := []struct {
+		name  string
+		got   string
+		wants []string
+	}{
+		{name: "vllm model equals form", got: withVLLMModelArg("--model=custom/repo", "default/repo"), wants: []string{"--model=custom/repo"}},
+		{name: "llama model equals form", got: withLlamaModelArg("--model=/tmp/model.gguf", "foo/bar.gguf"), wants: []string{"--model=/tmp/model.gguf"}},
+		{name: "host equals form", got: withHostArg("--host=127.0.0.1", "--host", "0.0.0.0"), wants: []string{"--host=127.0.0.1"}},
+		{name: "tool parser equals form", got: withVLLMToolCallArgs("--tool-call-parser=hermes", "meta-llama/Llama-3.1-8B-Instruct"), wants: []string{"--enable-auto-tool-choice", "--tool-call-parser=hermes"}},
+	}
+
+	for _, tt := range tests {
+		for _, want := range tt.wants {
+			if !strings.Contains(tt.got, want) {
+				t.Fatalf("%s: expected %q in %q", tt.name, want, tt.got)
+			}
+		}
+	}
+}
+
 // Integration tests that require Docker - skip in short mode
 func TestListContainersIntegration(t *testing.T) {
 	if testing.Short() {
@@ -240,24 +259,18 @@ func TestListContainersIntegration(t *testing.T) {
 
 	t.Parallel()
 
-	// This function calls 'docker ps' which may fail if Docker is not installed
 	containers, err := listContainers()
-
-	// On systems without Docker, this will return an error, which is fine
 	if err != nil {
 		t.Logf("listContainers failed (expected if Docker not available): %v", err)
 		return
 	}
 
-	// If Docker is available, containers should be a slice (possibly empty)
-	// Note: On systems without Docker or without yokai containers, this can be nil
 	if containers == nil {
 		t.Log("containers is nil (expected if Docker unavailable or no yokai containers)")
 	}
 
 	t.Logf("Found %d containers", len(containers))
 
-	// Verify structure of any returned containers
 	for i, container := range containers {
 		if container.ID == "" {
 			t.Errorf("container %d has empty ID", i)
@@ -281,10 +294,7 @@ func TestPullImageIntegration(t *testing.T) {
 
 	t.Parallel()
 
-	// Test pulling a small, commonly available image
 	err := pullImage("hello-world:latest")
-
-	// On systems without Docker, this will fail, which is acceptable
 	if err != nil {
 		t.Logf("pullImage failed (expected if Docker not available): %v", err)
 	} else {
@@ -301,20 +311,16 @@ func TestContainerOperationsIntegration(t *testing.T) {
 
 	testContainerID := "nonexistent-container-id"
 
-	// Test stop on non-existent container (should return error)
 	err := stopContainer(testContainerID)
 	if err == nil {
 		t.Log("stopContainer on non-existent container unexpectedly succeeded")
 	}
 
-	// Test restart on non-existent container (should return error)
 	err = restartContainer(testContainerID)
 	if err == nil {
 		t.Log("restartContainer on non-existent container unexpectedly succeeded")
 	}
 
-	// Test remove on non-existent container with force flag
-	// This might succeed or fail depending on Docker version
 	err = removeContainer(testContainerID)
 	t.Logf("removeContainer on non-existent container: %v", err)
 }
