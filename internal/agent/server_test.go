@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -583,5 +585,66 @@ func TestShortContainerID(t *testing.T) {
 
 	if got := shortContainerID("abc"); got != "abc" {
 		t.Errorf("expected short ID to remain unchanged, got %q", got)
+	}
+}
+
+func TestLoadAuthTokenPrefersEnvPath(t *testing.T) {
+	base := t.TempDir()
+	envPath := filepath.Join(base, "env-agent.json")
+	homeDir := filepath.Join(base, "home")
+	homeConfig := filepath.Join(homeDir, ".config", "yokai")
+
+	if err := os.MkdirAll(homeConfig, 0700); err != nil {
+		t.Fatalf("mkdir home config: %v", err)
+	}
+	if err := os.WriteFile(envPath, []byte(`{"token":"env-token"}`), 0600); err != nil {
+		t.Fatalf("write env token: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(homeConfig, "agent.json"), []byte(`{"token":"home-token"}`), 0600); err != nil {
+		t.Fatalf("write home token: %v", err)
+	}
+
+	t.Setenv("HOME", homeDir)
+	t.Setenv("YOKAI_AGENT_CONFIG", envPath)
+
+	authToken = ""
+	loadAuthToken()
+
+	if authToken != "env-token" {
+		t.Fatalf("expected env token, got %q", authToken)
+	}
+}
+
+func TestLoadAuthTokenFallsBackToHome(t *testing.T) {
+	base := t.TempDir()
+	homeDir := filepath.Join(base, "home")
+	homeConfig := filepath.Join(homeDir, ".config", "yokai")
+
+	if err := os.MkdirAll(homeConfig, 0700); err != nil {
+		t.Fatalf("mkdir home config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(homeConfig, "agent.json"), []byte(`{"token":"home-token"}`), 0600); err != nil {
+		t.Fatalf("write home token: %v", err)
+	}
+
+	t.Setenv("HOME", homeDir)
+	t.Setenv("YOKAI_AGENT_CONFIG", "")
+
+	authToken = ""
+	loadAuthToken()
+
+	if authToken != "home-token" {
+		t.Fatalf("expected home token, got %q", authToken)
+	}
+}
+
+func TestLoadAuthTokenMissingClearsValue(t *testing.T) {
+	t.Setenv("YOKAI_AGENT_CONFIG", filepath.Join(t.TempDir(), "missing.json"))
+
+	authToken = "stale"
+	loadAuthToken()
+
+	if authToken != "" {
+		t.Fatalf("expected empty token when no config exists, got %q", authToken)
 	}
 }

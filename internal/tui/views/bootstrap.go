@@ -265,7 +265,7 @@ func (b *Bootstrap) Update(msg tea.Msg) (View, tea.Cmd) {
 			if b.preflight != nil && b.preflight.GPUDetected {
 				device.GPUType = "nvidia"
 			}
-			b.cfg.AddDevice(device)
+			b.cfg.UpsertDevice(device)
 			_ = config.Save(b.cfg)
 
 			// Tell the daemon to hot-reload config so it picks up the new device

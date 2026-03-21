@@ -221,6 +221,30 @@ func (c *Config) AddDevice(d Device) {
 	c.Devices = append(c.Devices, d)
 }
 
+// UpsertDevice inserts or replaces a device by ID.
+// If duplicate IDs exist, only one entry is kept.
+func (c *Config) UpsertDevice(d Device) {
+	filtered := c.Devices[:0]
+	replaced := false
+
+	for _, existing := range c.Devices {
+		if existing.ID == d.ID {
+			if !replaced {
+				filtered = append(filtered, d)
+				replaced = true
+			}
+			continue
+		}
+		filtered = append(filtered, existing)
+	}
+
+	if !replaced {
+		filtered = append(filtered, d)
+	}
+
+	c.Devices = filtered
+}
+
 // RemoveDevice removes a device by ID.
 func (c *Config) RemoveDevice(id string) {
 	filtered := c.Devices[:0]
@@ -230,4 +254,50 @@ func (c *Config) RemoveDevice(id string) {
 		}
 	}
 	c.Devices = filtered
+}
+
+// RemoveServicesByDevice removes all services for a device and returns count.
+func (c *Config) RemoveServicesByDevice(deviceID string) int {
+	filtered := c.Services[:0]
+	removed := 0
+	for _, s := range c.Services {
+		if s.DeviceID == deviceID {
+			removed++
+			continue
+		}
+		filtered = append(filtered, s)
+	}
+	c.Services = filtered
+	return removed
+}
+
+// RemoveServiceByContainerID removes services with the given container ID.
+// Returns the number of removed services.
+func (c *Config) RemoveServiceByContainerID(containerID string) int {
+	filtered := c.Services[:0]
+	removed := 0
+	for _, s := range c.Services {
+		if s.ContainerID == containerID {
+			removed++
+			continue
+		}
+		filtered = append(filtered, s)
+	}
+	c.Services = filtered
+	return removed
+}
+
+// RemoveServiceByID removes services with the given ID and returns count.
+func (c *Config) RemoveServiceByID(serviceID string) int {
+	filtered := c.Services[:0]
+	removed := 0
+	for _, s := range c.Services {
+		if s.ID == serviceID {
+			removed++
+			continue
+		}
+		filtered = append(filtered, s)
+	}
+	c.Services = filtered
+	return removed
 }

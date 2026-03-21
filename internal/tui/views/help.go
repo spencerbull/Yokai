@@ -51,6 +51,7 @@ func (h *Help) View() string {
 				{"n", "Deploy new service"},
 				{"s", "Stop selected service"},
 				{"r", "Restart selected service"},
+				{"x", "Delete selected service"},
 				{"l", "View logs"},
 				{"d", "Device manager"},
 				{"c", "AI tools config"},

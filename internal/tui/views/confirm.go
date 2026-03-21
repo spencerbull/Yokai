@@ -53,8 +53,10 @@ func (v *ConfirmView) Update(msg tea.Msg) (View, tea.Cmd) {
 				return v, tea.Batch(PopView(), v.onConfirm)
 			}
 			return v, tea.Batch(PopView(), v.onCancel)
-		case "n", "esc":
+		case "n":
 			return v, tea.Batch(PopView(), v.onCancel)
+		case "esc":
+			return v, PopView()
 		}
 	}
 	return v, nil
@@ -73,14 +75,15 @@ func (v *ConfirmView) View() string {
 		card)
 }
 
-func (v *ConfirmView) Name() string       { return "Confirm" }
+func (v *ConfirmView) Name() string      { return "Confirm" }
 func (v *ConfirmView) InputActive() bool { return false }
 
 func (v *ConfirmView) KeyBinds() []KeyBind {
 	return []KeyBind{
 		{Key: "←/→", Help: "select"},
 		{Key: "y", Help: "yes"},
-		{Key: "n/Esc", Help: "no"},
+		{Key: "n", Help: "no"},
+		{Key: "Esc", Help: "cancel"},
 		{Key: "Enter", Help: "confirm"},
 	}
 }
