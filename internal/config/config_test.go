@@ -262,6 +262,59 @@ func TestAddDevice(t *testing.T) {
 	}
 }
 
+func TestUpsertDeviceAddsWhenMissing(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{Devices: []Device{}}
+	dev := Device{ID: "device1", Label: "Device 1", AgentToken: "token-a"}
+
+	cfg.UpsertDevice(dev)
+
+	if len(cfg.Devices) != 1 {
+		t.Fatalf("expected 1 device, got %d", len(cfg.Devices))
+	}
+	if cfg.Devices[0].ID != "device1" {
+		t.Fatalf("expected ID device1, got %s", cfg.Devices[0].ID)
+	}
+	if cfg.Devices[0].AgentToken != "token-a" {
+		t.Fatalf("expected token token-a, got %s", cfg.Devices[0].AgentToken)
+	}
+}
+
+func TestUpsertDeviceReplacesAndDedupesByID(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		Devices: []Device{
+			{ID: "device1", Label: "Old", AgentToken: "old-token"},
+			{ID: "device2", Label: "Two", AgentToken: "token-2"},
+			{ID: "device1", Label: "Old Duplicate", AgentToken: "stale-token"},
+		},
+	}
+
+	cfg.UpsertDevice(Device{ID: "device1", Label: "New", AgentToken: "new-token"})
+
+	if len(cfg.Devices) != 2 {
+		t.Fatalf("expected duplicates to be removed, got %d devices", len(cfg.Devices))
+	}
+
+	dev1 := cfg.FindDevice("device1")
+	if dev1 == nil {
+		t.Fatal("expected device1 to exist")
+	}
+	if dev1.Label != "New" {
+		t.Fatalf("expected updated label New, got %s", dev1.Label)
+	}
+	if dev1.AgentToken != "new-token" {
+		t.Fatalf("expected updated token new-token, got %s", dev1.AgentToken)
+	}
+
+	dev2 := cfg.FindDevice("device2")
+	if dev2 == nil {
+		t.Fatal("expected device2 to remain")
+	}
+}
+
 func TestRemoveDevice(t *testing.T) {
 	t.Parallel()
 
@@ -305,6 +358,75 @@ func TestRemoveDevice(t *testing.T) {
 	}
 	if cfg.Devices[0].ID != "device3" {
 		t.Errorf("expected remaining device to be device3, got %s", cfg.Devices[0].ID)
+	}
+}
+
+func TestRemoveServicesByDevice(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		Services: []Service{
+			{ID: "svc-a", DeviceID: "dev-1"},
+			{ID: "svc-b", DeviceID: "dev-2"},
+			{ID: "svc-c", DeviceID: "dev-1"},
+		},
+	}
+
+	removed := cfg.RemoveServicesByDevice("dev-1")
+	if removed != 2 {
+		t.Fatalf("expected 2 services removed, got %d", removed)
+	}
+	if len(cfg.Services) != 1 {
+		t.Fatalf("expected 1 service remaining, got %d", len(cfg.Services))
+	}
+	if cfg.Services[0].ID != "svc-b" {
+		t.Fatalf("expected svc-b to remain, got %s", cfg.Services[0].ID)
+	}
+}
+
+func TestRemoveServiceByContainerID(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		Services: []Service{
+			{ID: "svc-a", ContainerID: "cont-1"},
+			{ID: "svc-b", ContainerID: "cont-2"},
+			{ID: "svc-c", ContainerID: "cont-1"},
+		},
+	}
+
+	removed := cfg.RemoveServiceByContainerID("cont-1")
+	if removed != 2 {
+		t.Fatalf("expected 2 services removed, got %d", removed)
+	}
+	if len(cfg.Services) != 1 {
+		t.Fatalf("expected 1 service remaining, got %d", len(cfg.Services))
+	}
+	if cfg.Services[0].ID != "svc-b" {
+		t.Fatalf("expected svc-b to remain, got %s", cfg.Services[0].ID)
+	}
+}
+
+func TestRemoveServiceByID(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{
+		Services: []Service{
+			{ID: "svc-a"},
+			{ID: "svc-b"},
+			{ID: "svc-a"},
+		},
+	}
+
+	removed := cfg.RemoveServiceByID("svc-a")
+	if removed != 2 {
+		t.Fatalf("expected 2 services removed, got %d", removed)
+	}
+	if len(cfg.Services) != 1 {
+		t.Fatalf("expected 1 service remaining, got %d", len(cfg.Services))
+	}
+	if cfg.Services[0].ID != "svc-b" {
+		t.Fatalf("expected svc-b to remain, got %s", cfg.Services[0].ID)
 	}
 }
 

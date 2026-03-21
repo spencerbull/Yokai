@@ -9,7 +9,7 @@ AGENTS ?= finn
 AGENT_PORT ?= 7474
 AGENT_PATH ?= /usr/local/bin/yokai
 
-.PHONY: build run clean test lint agent daemon
+.PHONY: build run clean uninstall test lint agent daemon
 .PHONY: dev dev-restart dev-daemon dev-agents dev-tui dev-push
 
 build:
@@ -24,8 +24,19 @@ agent: build
 daemon: build
 	./bin/$(BINARY_NAME) daemon
 
-clean:
+clean: uninstall
 	rm -rf bin/
+
+uninstall:
+	@echo "removing installed $(BINARY_NAME) binaries (if present)..."
+	@rm -f "$$HOME/.local/bin/$(BINARY_NAME)"
+	@if [ -w /usr/local/bin ]; then \
+		rm -f /usr/local/bin/$(BINARY_NAME); \
+	elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then \
+		sudo rm -f /usr/local/bin/$(BINARY_NAME); \
+	elif [ -e /usr/local/bin/$(BINARY_NAME) ]; then \
+		echo "  WARNING: /usr/local/bin/$(BINARY_NAME) exists but needs sudo to remove"; \
+	fi
 
 test:
 	go test ./...
