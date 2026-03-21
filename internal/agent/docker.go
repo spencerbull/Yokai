@@ -337,7 +337,7 @@ func withVLLMModelArg(extraArgs, model string) string {
 
 	tokens := strings.Fields(extraArgs)
 	for i := range tokens {
-		if tokens[i] == "--model" {
+		if hasFlag(tokens[i], "--model") {
 			return extraArgs
 		}
 	}
@@ -356,7 +356,7 @@ func withLlamaModelArg(extraArgs, model string) string {
 
 	tokens := strings.Fields(extraArgs)
 	for i := range tokens {
-		if tokens[i] == "-m" || tokens[i] == "--model" {
+		if hasFlag(tokens[i], "-m") || hasFlag(tokens[i], "--model") {
 			return extraArgs
 		}
 	}
@@ -597,10 +597,10 @@ func withVLLMToolCallArgs(extraArgs, model string) string {
 	hasAutoTool := false
 	hasParser := false
 	for _, t := range tokens {
-		if t == "--enable-auto-tool-choice" {
+		if hasFlag(t, "--enable-auto-tool-choice") {
 			hasAutoTool = true
 		}
-		if t == "--tool-call-parser" {
+		if hasFlag(t, "--tool-call-parser") {
 			hasParser = true
 		}
 	}
@@ -652,7 +652,7 @@ func appendArg(extraArgs, arg string) string {
 func withHostArg(extraArgs, flag, value string) string {
 	tokens := strings.Fields(extraArgs)
 	for _, t := range tokens {
-		if t == flag {
+		if hasFlag(t, flag) {
 			return extraArgs // already present
 		}
 	}
@@ -662,6 +662,10 @@ func withHostArg(extraArgs, flag, value string) string {
 		return hostArg
 	}
 	return fmt.Sprintf("%s %s", extraArgs, hostArg)
+}
+
+func hasFlag(token, flag string) bool {
+	return token == flag || strings.HasPrefix(token, flag+"=")
 }
 
 // isComfyUIImage checks if the image is a ComfyUI image.
