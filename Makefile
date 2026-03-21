@@ -54,12 +54,14 @@ cross:
 
 # ---------- Local dev workflow ----------
 
-# Full rebuild + restart everything (daemon + all agents + TUI)
-dev: build dev-daemon dev-agents dev-tui
+# Full local dev loop: rebuild, restart daemon, then launch TUI
+dev: build dev-daemon dev-tui
+	@echo "skipped remote agent deploy; run 'make dev-agents' when you want to push to $(AGENTS)"
 
-# Rebuild, restart daemon + agents, but don't launch TUI
-dev-restart: build dev-daemon dev-agents
-	@echo "daemon and agents restarted — run 'make dev-tui' or './bin/$(BINARY_NAME)' when ready"
+# Rebuild and restart the local daemon, but don't launch TUI
+dev-restart: build dev-daemon
+	@echo "daemon restarted locally — run 'make dev-tui' when ready"
+	@echo "skipped remote agent deploy; run 'make dev-agents' when you want to push to $(AGENTS)"
 
 # Kill old daemon and start a new one (backgrounded)
 dev-daemon: build
