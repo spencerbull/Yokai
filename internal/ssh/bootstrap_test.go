@@ -2,6 +2,7 @@ package ssh
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -356,6 +357,137 @@ func TestIsUserWritable(t *testing.T) {
 				t.Errorf("isUserWritable(%q) = %v, want %v", tt.path, got, tt.expected)
 			}
 		})
+	}
+}
+
+type fakeExecRule struct {
+	contains string
+	out      string
+	err      error
+}
+
+type fakeRemoteClient struct {
+	rules   []fakeExecRule
+	cmds    []string
+	uploads [][2]string
+}
+
+func (f *fakeRemoteClient) Exec(cmd string) (string, error) {
+	f.cmds = append(f.cmds, cmd)
+	for _, rule := range f.rules {
+		if strings.Contains(cmd, rule.contains) {
+			return rule.out, rule.err
+		}
+	}
+	return "", nil
+}
+
+func (f *fakeRemoteClient) Upload(localPath, remotePath string) error {
+	f.uploads = append(f.uploads, [2]string{localPath, remotePath})
+	return nil
+}
+
+func hasExecuted(cmds []string, wantContains string) bool {
+	for _, cmd := range cmds {
+		if strings.Contains(cmd, wantContains) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestParseSystemExecBinaryPath(t *testing.T) {
+	t.Parallel()
+
+	input := `{ path=/usr/local/bin/yokai ; argv[]=/usr/local/bin/yokai agent ; ignore_errors=no }`
+	got := parseSystemExecBinaryPath(input)
+	if got != "/usr/local/bin/yokai" {
+		t.Fatalf("expected /usr/local/bin/yokai, got %q", got)
+	}
+}
+
+func TestDeployAgentSystemServiceRequiresSudo(t *testing.T) {
+	t.Parallel()
+
+	fake := &fakeRemoteClient{rules: []fakeExecRule{
+		{contains: "systemctl is-active --quiet yokai-agent", out: "", err: nil},
+		{contains: "id -u", out: "1000\n", err: nil},
+		{contains: "sudo -n true", out: "sudo: a password is required", err: errors.New("exit status 1")},
+	}}
+
+	err := deployAgent(fake, "/tmp/local-yokai", "token-123")
+	if err == nil {
+		t.Fatal("expected error when sudo is unavailable")
+	}
+	if !strings.Contains(err.Error(), "sudo is required") {
+		t.Fatalf("expected sudo guidance error, got: %v", err)
+	}
+	if hasExecuted(fake.cmds, "install -m 0755 /tmp/yokai.new") {
+		t.Fatal("should not attempt system install when sudo check fails")
+	}
+}
+
+func TestDeployAgentSystemServiceUpdatesEtcToken(t *testing.T) {
+	t.Parallel()
+
+	fake := &fakeRemoteClient{rules: []fakeExecRule{
+		{contains: "systemctl is-active --quiet yokai-agent", out: "", err: nil},
+		{contains: "id -u", out: "1000\n", err: nil},
+		{contains: "sudo -n true", out: "", err: nil},
+		{contains: "systemctl show -p ExecStart --value yokai-agent", out: `{ path=/usr/local/bin/yokai ; argv[]=/usr/local/bin/yokai agent ; }`, err: nil},
+		{contains: "curl -sf -H 'Authorization: Bearer token-abc'", out: "", err: nil},
+	}}
+
+	err := deployAgent(fake, "/tmp/local-yokai", "token-abc")
+	if err != nil {
+		t.Fatalf("deployAgent returned error: %v", err)
+	}
+
+	if len(fake.uploads) != 1 {
+		t.Fatalf("expected one upload, got %d", len(fake.uploads))
+	}
+	if fake.uploads[0][1] != "/tmp/yokai.new" {
+		t.Fatalf("expected upload target /tmp/yokai.new, got %s", fake.uploads[0][1])
+	}
+
+	if !hasExecuted(fake.cmds, "systemctl --user disable --now yokai-agent") {
+		t.Fatal("expected user service disable command to avoid port conflicts")
+	}
+	if !hasExecuted(fake.cmds, "sudo -n install -m 0755 /tmp/yokai.new /usr/local/bin/yokai") {
+		t.Fatal("expected system binary install command")
+	}
+	if !hasExecuted(fake.cmds, "cat > /etc/yokai/agent.json") {
+		t.Fatal("expected /etc token file write command")
+	}
+	if !hasExecuted(fake.cmds, "\"token\": \"token-abc\"") {
+		t.Fatal("expected token content in /etc token write command")
+	}
+	if !hasExecuted(fake.cmds, "sudo -n systemctl restart yokai-agent") {
+		t.Fatal("expected system service restart command")
+	}
+}
+
+func TestDeployAgentUserServiceSetsExplicitConfigPath(t *testing.T) {
+	t.Parallel()
+
+	fake := &fakeRemoteClient{rules: []fakeExecRule{
+		{contains: "systemctl is-active --quiet yokai-agent", out: "", err: errors.New("inactive")},
+		{contains: "systemctl list-unit-files yokai-agent.service", out: "", err: errors.New("not found")},
+		{contains: "echo $HOME", out: "/home/testuser\n", err: nil},
+		{contains: "systemctl --user daemon-reload 2>&1", out: "", err: nil},
+		{contains: "curl -sf -H 'Authorization: Bearer token-user'", out: "", err: nil},
+	}}
+
+	err := deployAgent(fake, "/tmp/local-yokai", "token-user")
+	if err != nil {
+		t.Fatalf("deployAgent returned error: %v", err)
+	}
+
+	if !hasExecuted(fake.cmds, "Environment=YOKAI_AGENT_CONFIG=/home/testuser/.config/yokai/agent.json") {
+		t.Fatal("expected user systemd unit to include YOKAI_AGENT_CONFIG")
+	}
+	if !hasExecuted(fake.cmds, "systemctl --user restart yokai-agent") {
+		t.Fatal("expected user service restart")
 	}
 }
 

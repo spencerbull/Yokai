@@ -10,19 +10,19 @@ import (
 
 // ServiceDetailData holds all the info needed for the detail panel.
 type ServiceDetailData struct {
-	Name          string
-	Image         string
-	Model         string
-	ContainerID   string
-	Status        string
-	Health        string
-	Port          int
-	Device        string
-	CPUPercent    float64
-	MemUsedMB     int64
-	GPUMemMB      int64
-	Uptime        string
-	CPUHistory    []float64
+	Name        string
+	Image       string
+	Model       string
+	ContainerID string
+	Status      string
+	Health      string
+	Port        int
+	Device      string
+	CPUPercent  float64
+	MemUsedMB   int64
+	GPUMemMB    int64
+	Uptime      string
+	CPUHistory  []float64
 }
 
 // ServiceDetail renders an expanded detail card for a selected service.
@@ -117,6 +117,7 @@ func (s ServiceDetail) Render() string {
 	hints := theme.MutedStyle.Render("l") + theme.PrimaryStyle.Render(":logs") + "  " +
 		theme.MutedStyle.Render("s") + theme.PrimaryStyle.Render(":stop") + "  " +
 		theme.MutedStyle.Render("r") + theme.PrimaryStyle.Render(":restart") + "  " +
+		theme.MutedStyle.Render("x") + theme.PrimaryStyle.Render(":delete") + "  " +
 		theme.MutedStyle.Render("Esc") + theme.PrimaryStyle.Render(":collapse")
 	body += "\n\n" + hints
 

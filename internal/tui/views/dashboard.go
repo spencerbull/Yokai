@@ -65,6 +65,12 @@ type serviceRestartMsg struct {
 	err error
 }
 
+type serviceDeleteMsg struct {
+	containerID string
+	serviceID   string
+	err         error
+}
+
 // DashboardMetrics represents the metrics data from the daemon API
 type DashboardMetrics struct {
 	CPU        CPUData         `json:"cpu"`
@@ -187,6 +193,23 @@ func (d *Dashboard) Update(msg tea.Msg) (View, tea.Cmd) {
 		}
 		return d, ShowToast("Service restarting...", ToastInfo)
 
+	case serviceDeleteMsg:
+		if msg.err != nil {
+			return d, ShowToast("Delete failed: "+msg.err.Error(), ToastError)
+		}
+
+		removed := d.cfg.RemoveServiceByContainerID(msg.containerID)
+		if removed == 0 && msg.serviceID != "" {
+			removed = d.cfg.RemoveServiceByID(msg.serviceID)
+		}
+		if removed > 0 {
+			if err := config.Save(d.cfg); err != nil {
+				return d, ShowToast("Deleted container, but failed to save config: "+err.Error(), ToastError)
+			}
+		}
+
+		return d, ShowToast("Service deleted", ToastSuccess)
+
 	case tea.MouseMsg:
 		if msg.Action == tea.MouseActionRelease {
 			// Check if a device tab was clicked
@@ -256,6 +279,13 @@ func (d *Dashboard) Update(msg tea.Msg) (View, tea.Cmd) {
 		case "r":
 			if container := d.getSelectedContainer(); container != nil {
 				return d, d.restartService(container.ID)
+			}
+		case "x":
+			if container := d.getSelectedContainer(); container != nil {
+				containerID := container.ID
+				serviceID := strings.TrimPrefix(container.Name, "yokai-")
+				msg := fmt.Sprintf("Delete service %q? This stops and removes the container.", container.Name)
+				return d, Navigate(NewConfirmView(msg, d.deleteService(containerID, serviceID), nil))
 			}
 		case "g":
 			// Open Grafana - could implement later
@@ -738,7 +768,6 @@ func (d *Dashboard) renderDeviceSparklines(deviceID string, availableWidth int) 
 	return lipgloss.JoinHorizontal(lipgloss.Top, charts...)
 }
 
-
 func (d *Dashboard) renderErrorBanner() string {
 	bannerWidth := d.width - 4
 	if bannerWidth < 30 {
@@ -773,7 +802,6 @@ func (d *Dashboard) renderHeader() string {
 		Bold(true).
 		Render(headerText)
 }
-
 
 func (d *Dashboard) renderServiceList() string {
 	serviceRows := d.buildServiceRows()
@@ -1034,6 +1062,36 @@ func (d *Dashboard) restartService(containerID string) tea.Cmd {
 	}
 }
 
+func (d *Dashboard) deleteService(containerID, serviceID string) tea.Cmd {
+	return func() tea.Msg {
+		deviceID := d.findDeviceIDForContainer(containerID)
+		if deviceID == "" {
+			return serviceDeleteMsg{containerID: containerID, serviceID: serviceID, err: fmt.Errorf("device not found")}
+		}
+
+		url := fmt.Sprintf("http://%s/containers/%s/%s/remove", d.cfg.Daemon.Listen, deviceID, containerID)
+		req, err := http.NewRequest(http.MethodDelete, url, nil)
+		if err != nil {
+			return serviceDeleteMsg{containerID: containerID, serviceID: serviceID, err: err}
+		}
+
+		httpClient := &http.Client{Timeout: 30 * time.Second}
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			return serviceDeleteMsg{containerID: containerID, serviceID: serviceID, err: err}
+		}
+		defer func() {
+			_ = resp.Body.Close()
+		}()
+
+		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+			return serviceDeleteMsg{containerID: containerID, serviceID: serviceID, err: fmt.Errorf("daemon returned status %d", resp.StatusCode)}
+		}
+
+		return serviceDeleteMsg{containerID: containerID, serviceID: serviceID}
+	}
+}
+
 func (d *Dashboard) findDevice(deviceID string) *DashboardDevice {
 	for i := range d.devices {
 		if d.devices[i].ID == deviceID {
@@ -1138,6 +1196,7 @@ func (d *Dashboard) KeyBinds() []KeyBind {
 		{Key: "n", Help: "new"},
 		{Key: "s", Help: "stop"},
 		{Key: "r", Help: "restart"},
+		{Key: "x", Help: "delete"},
 		{Key: "L", Help: "logs"},
 		{Key: "d", Help: "devices"},
 		{Key: "c", Help: "ai tools"},
