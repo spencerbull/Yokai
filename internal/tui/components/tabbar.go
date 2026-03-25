@@ -47,19 +47,20 @@ func (tb TabBar) Render() string {
 		return ""
 	}
 
+	// Active tab: filled background (btop style)
 	activeLabelStyle := lipgloss.NewStyle().
-		Foreground(theme.Accent).
-		Bold(true)
+		Foreground(theme.Background).
+		Background(theme.Accent).
+		Bold(true).
+		Padding(0, 1)
 
-	activeBracketStyle := lipgloss.NewStyle().
-		Foreground(theme.Accent)
-
+	// Inactive tabs: dim text, no background
 	inactiveStyle := lipgloss.NewStyle().
 		Foreground(theme.TextMuted).
 		Padding(0, 1)
 
 	keyStyle := lipgloss.NewStyle().
-		Foreground(theme.TextMuted).
+		Foreground(theme.Border).
 		Faint(true)
 
 	var parts []string
@@ -67,7 +68,7 @@ func (tb TabBar) Render() string {
 		keyHint := keyStyle.Render(tab.Key)
 		var tabStr string
 		if i == tb.ActiveIdx {
-			tabStr = keyHint + activeBracketStyle.Render("[") + " " + activeLabelStyle.Render(tab.Label) + " " + activeBracketStyle.Render("]")
+			tabStr = keyHint + activeLabelStyle.Render(tab.Label)
 		} else {
 			tabStr = keyHint + inactiveStyle.Render(tab.Label)
 		}
@@ -77,7 +78,7 @@ func (tb TabBar) Render() string {
 
 	bar := strings.Join(parts, "")
 
-	// Bottom border line
+	// Bottom border line with accent color under active tab position
 	borderLine := lipgloss.NewStyle().
 		Foreground(theme.Border).
 		Render(strings.Repeat("─", tb.Width))

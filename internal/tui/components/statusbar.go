@@ -28,10 +28,15 @@ func (sb StatusBar) Render() string {
 		return ""
 	}
 
-	separator := lipgloss.NewStyle().
-		Foreground(theme.Border).
-		Width(w).
-		Render(strings.Repeat("─", w))
+	// Gradient-style separator: accent color fading to border color
+	// Achieved by using a mix of accent and border colored dashes
+	accentLen := w / 6
+	if accentLen < 4 {
+		accentLen = 4
+	}
+	accentSep := lipgloss.NewStyle().Foreground(theme.Accent).Render(strings.Repeat("─", accentLen))
+	borderSep := lipgloss.NewStyle().Foreground(theme.Border).Render(strings.Repeat("─", w-accentLen))
+	separator := accentSep + borderSep
 
 	barStyle := lipgloss.NewStyle().
 		Width(w).
