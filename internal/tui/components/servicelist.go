@@ -194,14 +194,15 @@ func (s ServiceList) cellValue(svc ServiceRow, col column, width int) string {
 		return formatMem(svc.GPUMemMB)
 	case "toks":
 		if svc.GenerationTokPerSec > 0 {
-			return fmt.Sprintf("%.1f", svc.GenerationTokPerSec)
+			arrow := lipgloss.NewStyle().Foreground(theme.Good).Render("↑")
+			return fmt.Sprintf("%.1f%s", svc.GenerationTokPerSec, arrow)
 		}
-		return "-"
+		return lipgloss.NewStyle().Foreground(theme.TextMuted).Render("-")
 	case "prefill":
 		if svc.PromptTokPerSec > 0 {
 			return fmt.Sprintf("%.1f", svc.PromptTokPerSec)
 		}
-		return "-"
+		return lipgloss.NewStyle().Foreground(theme.TextMuted).Render("-")
 	case "uptime":
 		return s.statusText(svc)
 	default:
@@ -225,9 +226,11 @@ func (s ServiceList) renderRow(svc ServiceRow, widths []int, cols []column, rowI
 	zoneID := ServiceRowZoneID(rowIdx)
 
 	if svc.Selected {
+		// Selected row: bright highlight with accent left border indicator
 		return zone.Mark(zoneID, lipgloss.NewStyle().
 			Background(theme.Highlight).
 			Foreground(theme.TextPrimary).
+			Bold(true).
 			Width(s.Width).
 			Render(row))
 	}
@@ -235,12 +238,15 @@ func (s ServiceList) renderRow(svc ServiceRow, widths []int, cols []column, rowI
 	// Alternating row backgrounds for readability
 	if rowIdx%2 == 1 {
 		return zone.Mark(zoneID, lipgloss.NewStyle().
-			Background(lipgloss.Color("#1e1f2b")).
+			Background(lipgloss.Color("#1e2030")).
 			Foreground(theme.TextPrimary).
 			Width(s.Width).
 			Render(row))
 	}
-	return zone.Mark(zoneID, theme.PrimaryStyle.Render(row))
+	return zone.Mark(zoneID, lipgloss.NewStyle().
+		Foreground(theme.TextPrimary).
+		Width(s.Width).
+		Render(row))
 }
 
 // statusText returns a short, color-coded status string.
@@ -251,15 +257,15 @@ func (s ServiceList) statusText(svc ServiceRow) string {
 	}
 	switch h {
 	case "healthy", "running":
-		return svc.Uptime
+		return lipgloss.NewStyle().Foreground(theme.Good).Render(svc.Uptime)
 	case "starting":
-		return "starting"
+		return lipgloss.NewStyle().Foreground(theme.Warn).Render("starting")
 	case "unhealthy", "error":
-		return "error"
+		return lipgloss.NewStyle().Foreground(theme.Crit).Render("error")
 	case "stopped":
-		return "stopped"
+		return lipgloss.NewStyle().Foreground(theme.TextMuted).Render("stopped")
 	default:
-		return svc.Uptime
+		return lipgloss.NewStyle().Foreground(theme.TextMuted).Render(svc.Uptime)
 	}
 }
 
