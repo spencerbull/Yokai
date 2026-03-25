@@ -22,6 +22,9 @@ type Dashboard struct {
 	width   int
 	height  int
 
+	// Device tab selection
+	activeDeviceTab int
+
 	// Service selection
 	selectedService int
 	showDetail      bool
@@ -186,6 +189,18 @@ func (d *Dashboard) Update(msg tea.Msg) (View, tea.Cmd) {
 
 	case tea.MouseMsg:
 		if msg.Action == tea.MouseActionRelease {
+			// Check if a device tab was clicked
+			for i := range d.devices {
+				if zone.Get(fmt.Sprintf("device-tab-%d", i)).InBounds(msg) {
+					if i != d.activeDeviceTab {
+						d.activeDeviceTab = i
+						d.selectedService = 0
+						d.showDetail = false
+						d.updateServiceContainers()
+					}
+					break
+				}
+			}
 			// Check if a service row was clicked
 			for i := range d.serviceContainers {
 				if zone.Get(components.ServiceRowZoneID(i)).InBounds(msg) {
@@ -222,7 +237,11 @@ func (d *Dashboard) Update(msg tea.Msg) (View, tea.Cmd) {
 			if len(d.serviceContainers) > 0 {
 				d.showDetail = !d.showDetail
 			}
-		case "l":
+		case "h", "left":
+			d.moveDeviceTab(-1)
+		case "l", "right":
+			d.moveDeviceTab(1)
+		case "L":
 			if container := d.getSelectedContainer(); container != nil {
 				deviceID := d.findDeviceIDForContainer(container.ID)
 				return d, Navigate(NewLogViewer(d.cfg, d.version, container.Name, deviceID, container.ID))
@@ -263,15 +282,29 @@ func (d *Dashboard) View() string {
 	header := d.renderHeader()
 	sections = append(sections, header)
 
-	// Wide layout (>= 100 chars): btop-inspired grid
-	// Narrow layout (< 100 chars): single column stack
-	if d.width >= 100 {
-		sections = append(sections, d.renderGridLayout()...)
-	} else {
-		sections = append(sections, d.renderStackedLayout()...)
+	// Device tabs — show only the active device
+	if len(d.devices) > 0 {
+		// Clamp active tab
+		if d.activeDeviceTab >= len(d.devices) {
+			d.activeDeviceTab = len(d.devices) - 1
+		}
+
+		// Render device tab bar
+		sections = append(sections, d.renderDeviceTabBar())
+
+		device := d.devices[d.activeDeviceTab]
+
+		// Device card + sparklines for the active device only
+		card := d.renderDeviceCardWithGPU(device, d.width)
+		sections = append(sections, card)
+
+		sparklines := d.renderDeviceSparklines(device.ID, d.width)
+		if sparklines != "" {
+			sections = append(sections, sparklines)
+		}
 	}
 
-	// Service list (always full width, bottom)
+	// Service list (filtered to active device)
 	serviceList := d.renderServiceList()
 	sections = append(sections, serviceList)
 
@@ -288,23 +321,69 @@ func (d *Dashboard) View() string {
 	return lipgloss.NewStyle().Width(d.width).Render(content)
 }
 
-// renderGridLayout renders per-device sections: card + side-by-side sparklines.
-func (d *Dashboard) renderGridLayout() []string {
-	var sections []string
+// renderDeviceTabBar renders the device tab selector (e.g. [ finn ] [ darkporgs ] [ kyber ]).
+func (d *Dashboard) renderDeviceTabBar() string {
+	var tabs []string
 
-	for _, device := range d.devices {
-		// Render device card (full width) with GPU info inline
-		card := d.renderDeviceCardWithGPU(device, d.width)
-		sections = append(sections, card)
+	activeLabelStyle := lipgloss.NewStyle().
+		Foreground(theme.Accent).
+		Bold(true)
 
-		// Render sparklines for this device horizontally (CPU | RAM | GPU side by side)
-		sparklines := d.renderDeviceSparklines(device.ID, d.width)
-		if sparklines != "" {
-			sections = append(sections, sparklines)
+	activeBracketStyle := lipgloss.NewStyle().
+		Foreground(theme.Accent)
+
+	inactiveStyle := lipgloss.NewStyle().
+		Foreground(theme.TextMuted).
+		Padding(0, 1)
+
+	for i, device := range d.devices {
+		label := device.Label
+		if label == "" {
+			label = device.ID
+		}
+		// Add status dot
+		dot := theme.StatusOffline()
+		if device.Online {
+			dot = theme.StatusOnline()
+		}
+		tabLabel := dot + " " + label
+
+		zoneID := fmt.Sprintf("device-tab-%d", i)
+		if i == d.activeDeviceTab {
+			rendered := activeBracketStyle.Render("[") + " " + activeLabelStyle.Render(tabLabel) + " " + activeBracketStyle.Render("]")
+			tabs = append(tabs, zone.Mark(zoneID, rendered))
+		} else {
+			tabs = append(tabs, zone.Mark(zoneID, inactiveStyle.Render(tabLabel)))
 		}
 	}
 
-	return sections
+	tabRow := lipgloss.JoinHorizontal(lipgloss.Center, tabs...)
+	hint := theme.MutedStyle.Render("  h/l: switch device")
+
+	return tabRow + hint
+}
+
+// moveDeviceTab changes the active device tab by delta, wrapping around.
+func (d *Dashboard) moveDeviceTab(delta int) {
+	if len(d.devices) == 0 {
+		return
+	}
+	d.activeDeviceTab = (d.activeDeviceTab + delta + len(d.devices)) % len(d.devices)
+	// Reset service selection when switching devices
+	d.selectedService = 0
+	d.showDetail = false
+	d.updateServiceContainers()
+}
+
+// activeDeviceID returns the device ID for the currently selected tab.
+func (d *Dashboard) activeDeviceID() string {
+	if len(d.devices) == 0 {
+		return ""
+	}
+	if d.activeDeviceTab >= len(d.devices) {
+		d.activeDeviceTab = len(d.devices) - 1
+	}
+	return d.devices[d.activeDeviceTab].ID
 }
 
 // renderDeviceCardWithGPU renders a full-width device card with GPU metrics inline.
@@ -404,23 +483,6 @@ func (d *Dashboard) renderDeviceSparklines(deviceID string, availableWidth int) 
 	return lipgloss.JoinHorizontal(lipgloss.Top, charts...)
 }
 
-// renderStackedLayout renders single-column layout for narrow terminals.
-func (d *Dashboard) renderStackedLayout() []string {
-	var sections []string
-
-	for _, device := range d.devices {
-		card := d.renderDeviceCardWithGPU(device, d.width)
-		sections = append(sections, card)
-
-		// Stacked sparklines (vertical) for narrow layout
-		sparklines := d.renderDeviceSparklines(device.ID, d.width)
-		if sparklines != "" {
-			sections = append(sections, sparklines)
-		}
-	}
-
-	return sections
-}
 
 func (d *Dashboard) renderErrorBanner() string {
 	bannerWidth := d.width - 4
@@ -473,8 +535,13 @@ func (d *Dashboard) renderServiceList() string {
 func (d *Dashboard) buildServiceRows() []components.ServiceRow {
 	var rows []components.ServiceRow
 
-	// Build from container data in metrics
+	activeID := d.activeDeviceID()
+
+	// Build from container data in metrics (filtered to active device)
 	for deviceID, metrics := range d.metrics {
+		if activeID != "" && deviceID != activeID {
+			continue
+		}
 		device := d.findDevice(deviceID)
 		if device == nil {
 			continue
@@ -667,8 +734,16 @@ func (d *Dashboard) enrichDevices() {
 
 func (d *Dashboard) updateServiceContainers() {
 	d.serviceContainers = nil
-	for _, metrics := range d.metrics {
-		d.serviceContainers = append(d.serviceContainers, metrics.Containers...)
+	activeID := d.activeDeviceID()
+	if activeID == "" {
+		// No active device — show all containers
+		for _, metrics := range d.metrics {
+			d.serviceContainers = append(d.serviceContainers, metrics.Containers...)
+		}
+		return
+	}
+	if m, ok := d.metrics[activeID]; ok {
+		d.serviceContainers = append(d.serviceContainers, m.Containers...)
 	}
 }
 
@@ -802,15 +877,15 @@ func (d *Dashboard) Name() string { return "Dashboard" }
 
 func (d *Dashboard) KeyBinds() []KeyBind {
 	return []KeyBind{
+		{Key: "h/l", Help: "device"},
+		{Key: "j/k", Help: "service"},
 		{Key: "enter", Help: "detail"},
 		{Key: "n", Help: "new"},
 		{Key: "s", Help: "stop"},
 		{Key: "r", Help: "restart"},
-		{Key: "l", Help: "logs"},
+		{Key: "L", Help: "logs"},
 		{Key: "d", Help: "devices"},
-		{Key: "g", Help: "grafana"},
 		{Key: "c", Help: "ai tools"},
-		{Key: "j/k", Help: "navigate"},
 		{Key: "?", Help: "help"},
 		{Key: "q", Help: "quit"},
 	}
