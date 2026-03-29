@@ -4,18 +4,20 @@ import (
 	"github.com/NimbleMarkets/ntcharts/canvas/runes"
 	slc "github.com/NimbleMarkets/ntcharts/linechart/streamlinechart"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/spencerbull/yokai/internal/tui/theme"
 )
 
 // StreamChart wraps ntcharts StreamLineChart for live monitoring.
 // It provides braille-resolution streaming charts with labeled Y-axis.
 type StreamChart struct {
-	Title  string
-	Values []float64
-	Width  int
-	Height int
-	Color  lipgloss.Color
-	YMin   float64
-	YMax   float64
+	Title    string
+	Values   []float64
+	Width    int
+	Height   int
+	Color    lipgloss.Color
+	YMin     float64
+	YMax     float64
+	Gradient bool // If true, color is chosen per-value based on thresholds
 }
 
 // NewStreamChart creates a streaming chart with the given parameters.
@@ -28,6 +30,34 @@ func NewStreamChart(title string, values []float64, width, height int, color lip
 		Color:  color,
 		YMin:   0,
 		YMax:   100,
+	}
+}
+
+// NewStreamChartGradient creates a streaming chart that colors based on utilization thresholds.
+// The latest value determines the chart color: green (<50%), amber (50-80%), red (>80%).
+func NewStreamChartGradient(title string, values []float64, width, height int, _ lipgloss.Color) StreamChart {
+	// Pick color from the most recent value
+	color := theme.Good
+	if len(values) > 0 {
+		latest := values[len(values)-1]
+		switch {
+		case latest >= 80:
+			color = theme.Crit
+		case latest >= 50:
+			color = theme.Warn
+		default:
+			color = theme.Good
+		}
+	}
+	return StreamChart{
+		Title:    title,
+		Values:   values,
+		Width:    width,
+		Height:   height,
+		Color:    color,
+		YMin:     0,
+		YMax:     100,
+		Gradient: true,
 	}
 }
 
