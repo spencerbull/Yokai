@@ -19,6 +19,7 @@ import (
 )
 
 var startTime = time.Now()
+var systemAgentConfigPath = "/etc/yokai/agent.json"
 
 // authConfig holds the bearer token for API authentication.
 type authConfig struct {
@@ -66,10 +67,10 @@ func loadAuthToken() {
 	if p := os.Getenv("YOKAI_AGENT_CONFIG"); p != "" {
 		configPaths = append(configPaths, p)
 	}
+	configPaths = append(configPaths, systemAgentConfigPath)
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
 		configPaths = append(configPaths, filepath.Join(home, ".config", "yokai", "agent.json"))
 	}
-	configPaths = append(configPaths, "/etc/yokai/agent.json")
 
 	for _, configPath := range configPaths {
 		data, err := os.ReadFile(configPath)
