@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -18,6 +19,7 @@ import (
 )
 
 var startTime = time.Now()
+var systemAgentConfigPath = "/etc/yokai/agent.json"
 
 // authConfig holds the bearer token for API authentication.
 type authConfig struct {
@@ -57,23 +59,37 @@ func Run(port string, version string) error {
 	return http.ListenAndServe(addr, mux)
 }
 
-// loadAuthToken loads the bearer token from /etc/yokai/agent.json.
+// loadAuthToken loads the bearer token from agent config paths.
 func loadAuthToken() {
-	configPath := "/etc/yokai/agent.json"
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		log.Printf("No auth config found at %s, running without authentication", configPath)
+	authToken = ""
+
+	var configPaths []string
+	if p := os.Getenv("YOKAI_AGENT_CONFIG"); p != "" {
+		configPaths = append(configPaths, p)
+	}
+	configPaths = append(configPaths, systemAgentConfigPath)
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		configPaths = append(configPaths, filepath.Join(home, ".config", "yokai", "agent.json"))
+	}
+
+	for _, configPath := range configPaths {
+		data, err := os.ReadFile(configPath)
+		if err != nil {
+			continue
+		}
+
+		var config authConfig
+		if err := json.Unmarshal(data, &config); err != nil {
+			log.Printf("Invalid auth config at %s: %v", configPath, err)
+			continue
+		}
+
+		authToken = config.Token
+		log.Printf("Loaded auth token from %s", configPath)
 		return
 	}
 
-	var config authConfig
-	if err := json.Unmarshal(data, &config); err != nil {
-		log.Printf("Invalid auth config at %s: %v", configPath, err)
-		return
-	}
-
-	authToken = config.Token
-	log.Printf("Loaded auth token from %s", configPath)
+	log.Printf("No auth config found, running without authentication")
 }
 
 // requireAuth wraps a handler to require bearer token authentication.

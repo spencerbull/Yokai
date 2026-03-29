@@ -2,6 +2,7 @@ package views
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -12,7 +13,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spencerbull/yokai/internal/config"
 	sshpkg "github.com/spencerbull/yokai/internal/ssh"
-	"github.com/spencerbull/yokai/internal/tui/components"
 	"github.com/spencerbull/yokai/internal/tui/theme"
 )
 
@@ -31,6 +31,12 @@ type connectionTestResult struct {
 type upgradeResultMsg struct {
 	deviceID string
 	err      error
+}
+
+type deviceDeleteResultMsg struct {
+	deviceID         string
+	cleanupRequested bool
+	err              error
 }
 
 // DeviceManager shows all registered devices with management options.
@@ -89,6 +95,31 @@ func (dm *DeviceManager) Update(msg tea.Msg) (View, tea.Cmd) {
 			return dm, ShowToast("Upgrade failed: "+msg.err.Error(), ToastError)
 		}
 		return dm, ShowToast("Agent upgraded successfully", ToastSuccess)
+
+	case deviceDeleteResultMsg:
+		if msg.err != nil {
+			return dm, ShowToast("Remote cleanup failed; local device kept: "+msg.err.Error(), ToastError)
+		}
+
+		removedServices := dm.cfg.RemoveServicesByDevice(msg.deviceID)
+		dm.cfg.RemoveDevice(msg.deviceID)
+		if err := config.Save(dm.cfg); err != nil {
+			return dm, ShowToast("Failed to save config: "+err.Error(), ToastError)
+		}
+
+		if dm.cursor >= len(dm.cfg.Devices) && dm.cursor > 0 {
+			dm.cursor--
+		}
+
+		toast := "Device removed"
+		if msg.cleanupRequested {
+			toast = "Device removed and remote Yokai cleaned"
+		}
+		if removedServices > 0 {
+			toast = fmt.Sprintf("%s (%d service entries removed)", toast, removedServices)
+		}
+
+		return dm, tea.Batch(dm.reloadDaemon(), ShowToast(toast, ToastSuccess))
 
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -156,20 +187,25 @@ func (dm *DeviceManager) Update(msg tea.Msg) (View, tea.Cmd) {
 		case "x":
 			if len(dm.cfg.Devices) > 0 {
 				device := dm.cfg.Devices[dm.cursor]
-				onConfirm := func() tea.Msg {
-					dm.cfg.RemoveDevice(device.ID)
-					_ = config.Save(dm.cfg)
-					if dm.cursor >= len(dm.cfg.Devices) && dm.cursor > 0 {
-						dm.cursor--
+				label := device.Label
+				if label == "" {
+					label = device.ID
+				}
+
+				confirmLocalMsg := fmt.Sprintf("Remove device %q from local config?", label)
+				confirmCleanupMsg := fmt.Sprintf("Also clean up Yokai on %q first? This stops/removes yokai-* containers and attempts to delete their images.", label)
+
+				askCleanup := func() tea.Msg {
+					return NavigateMsg{
+						Target: NewConfirmView(
+							confirmCleanupMsg,
+							dm.deleteDevice(device, true),
+							dm.deleteDevice(device, false),
+						),
 					}
-					return nil
 				}
-				msg := fmt.Sprintf("Remove device %q? This cannot be undone.", device.Label)
-				onConfirmWithToast := func() tea.Msg {
-					onConfirm()
-					return components.ShowToastMsg{Message: "Device removed", Level: ToastSuccess}
-				}
-				return dm, Navigate(NewConfirmView(msg, onConfirmWithToast, nil))
+
+				return dm, Navigate(NewConfirmView(confirmLocalMsg, askCleanup, nil))
 			}
 		case "esc":
 			return dm, PopView()
@@ -266,6 +302,51 @@ func (dm *DeviceManager) upgradeDevice(device config.Device) tea.Cmd {
 		}
 
 		return upgradeResultMsg{deviceID: device.ID}
+	}
+}
+
+func (dm *DeviceManager) deleteDevice(device config.Device, cleanupRemote bool) tea.Cmd {
+	return func() tea.Msg {
+		if !cleanupRemote {
+			return deviceDeleteResultMsg{deviceID: device.ID, cleanupRequested: false}
+		}
+
+		client, err := sshpkg.Connect(sshpkg.ClientConfig{
+			Host:    device.Host,
+			Port:    fmt.Sprintf("%d", device.SSHPortOrDefault()),
+			User:    device.SSHUser,
+			KeyPath: device.SSHKey,
+		})
+		if err != nil {
+			return deviceDeleteResultMsg{deviceID: device.ID, cleanupRequested: true, err: fmt.Errorf("SSH: %w", err)}
+		}
+		defer func() {
+			_ = client.Close()
+		}()
+
+		err = sshpkg.CleanupDevice(client, sshpkg.CleanupOptions{RemoveDockerImages: true})
+		if err != nil {
+			return deviceDeleteResultMsg{deviceID: device.ID, cleanupRequested: true, err: err}
+		}
+
+		return deviceDeleteResultMsg{deviceID: device.ID, cleanupRequested: true}
+	}
+}
+
+func (dm *DeviceManager) reloadDaemon() tea.Cmd {
+	return func() tea.Msg {
+		daemonAddr := dm.cfg.Daemon.Listen
+		if daemonAddr == "" {
+			daemonAddr = "127.0.0.1:7473"
+		}
+
+		resp, err := http.Post("http://"+daemonAddr+"/reload", "application/json", nil)
+		if err != nil {
+			log.Printf("daemon reload failed: %v", err)
+			return nil
+		}
+		_ = resp.Body.Close()
+		return nil
 	}
 }
 
@@ -410,7 +491,7 @@ func (dm *DeviceManager) KeyBinds() []KeyBind {
 		{Key: "T", Help: "test all"},
 		{Key: "u", Help: "upgrade agent"},
 		{Key: "U", Help: "upgrade all"},
-		{Key: "x", Help: "remove"},
+		{Key: "x", Help: "remove/cleanup"},
 		{Key: "Esc", Help: "back"},
 	}
 }

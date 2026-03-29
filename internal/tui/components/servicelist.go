@@ -226,13 +226,17 @@ func (s ServiceList) renderRow(svc ServiceRow, widths []int, cols []column, rowI
 	zoneID := ServiceRowZoneID(rowIdx)
 
 	if svc.Selected {
-		// Selected row: bright highlight with accent left border indicator
-		return zone.Mark(zoneID, lipgloss.NewStyle().
+		bar := lipgloss.NewStyle().
+			Foreground(theme.Accent).
+			Bold(true).
+			Render("▌")
+		content := lipgloss.NewStyle().
 			Background(theme.Highlight).
 			Foreground(theme.TextPrimary).
 			Bold(true).
-			Width(s.Width).
-			Render(row))
+			Width(max(0, s.Width-1)).
+			Render(row)
+		return zone.Mark(zoneID, bar+content)
 	}
 
 	// Alternating row backgrounds for readability
@@ -260,9 +264,13 @@ func (s ServiceList) statusText(svc ServiceRow) string {
 		return lipgloss.NewStyle().Foreground(theme.Good).Render(svc.Uptime)
 	case "starting":
 		return lipgloss.NewStyle().Foreground(theme.Warn).Render("starting")
+	case "created":
+		return lipgloss.NewStyle().Foreground(theme.Warn).Render("created")
+	case "restarting":
+		return lipgloss.NewStyle().Foreground(theme.Warn).Render("restarting")
 	case "unhealthy", "error":
 		return lipgloss.NewStyle().Foreground(theme.Crit).Render("error")
-	case "stopped":
+	case "stopped", "dead", "exited":
 		return lipgloss.NewStyle().Foreground(theme.TextMuted).Render("stopped")
 	default:
 		return lipgloss.NewStyle().Foreground(theme.TextMuted).Render(svc.Uptime)
@@ -281,12 +289,14 @@ func (s ServiceList) healthIndicator(svc ServiceRow) string {
 		return lipgloss.NewStyle().Foreground(theme.Good).Render("●")
 	case "starting":
 		return lipgloss.NewStyle().Foreground(theme.Warn).Render("◐")
+	case "created", "restarting":
+		return lipgloss.NewStyle().Foreground(theme.Warn).Render("◌")
 	case "unhealthy", "error":
 		return lipgloss.NewStyle().Foreground(theme.Crit).Render("●")
-	case "stopped":
+	case "stopped", "dead", "exited":
 		return lipgloss.NewStyle().Foreground(theme.TextMuted).Render("○")
 	default:
-		return lipgloss.NewStyle().Foreground(theme.TextMuted).Render("?")
+		return lipgloss.NewStyle().Foreground(theme.Warn).Render("!")
 	}
 }
 

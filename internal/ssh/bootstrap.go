@@ -5,6 +5,11 @@ import (
 	"strings"
 )
 
+type remoteRunner interface {
+	Exec(cmd string) (string, error)
+	Upload(localPath, remotePath string) error
+}
+
 // PreflightResult holds the results of remote pre-flight checks.
 type PreflightResult struct {
 	OS                     string
@@ -201,28 +206,163 @@ func UpgradeAgent(client *Client, localBinaryPath string, agentPort int) error {
 }
 
 // getRemoteHome returns the remote user's home directory.
-func getRemoteHome(client *Client) string {
+func getRemoteHome(client remoteRunner) string {
 	if out, err := client.Exec("echo $HOME"); err == nil {
 		return strings.TrimSpace(out)
 	}
 	return "/home/unknown"
 }
 
-// DeployAgent uploads the yokai binary and installs it as a user-level systemd service.
-// Uses ~/.local/bin for the binary, ~/.config/yokai for config, and systemd --user
-// for service management. No sudo is required.
-func DeployAgent(client *Client, localBinaryPath string, agentToken string) error {
+func hasSystemService(client remoteRunner) bool {
+	if _, err := client.Exec("systemctl is-active --quiet yokai-agent 2>/dev/null"); err == nil {
+		return true
+	}
+	if _, err := client.Exec("systemctl list-unit-files yokai-agent.service 2>/dev/null | grep -q yokai-agent"); err == nil {
+		return true
+	}
+	return false
+}
+
+func remoteIsRoot(client remoteRunner) bool {
+	out, err := client.Exec("id -u 2>/dev/null")
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(out) == "0"
+}
+
+func ensureSudoNonInteractive(client remoteRunner) error {
+	out, err := client.Exec("sudo -n true 2>&1")
+	if err == nil {
+		return nil
+	}
+
+	trimmed := strings.TrimSpace(out)
+	if isSudoError(trimmed) {
+		return fmt.Errorf("existing system-level yokai-agent detected, but sudo is required to update /etc/yokai/agent.json and restart the service: %s", trimmed)
+	}
+	return fmt.Errorf("checking sudo access: %w — stderr: %s", err, trimmed)
+}
+
+func parseSystemExecBinaryPath(output string) string {
+	for _, field := range strings.Fields(output) {
+		field = strings.Trim(field, "{};,")
+		field = strings.TrimPrefix(field, "path=")
+		if strings.HasPrefix(field, "/") && strings.HasSuffix(field, "/yokai") {
+			return field
+		}
+	}
+	return ""
+}
+
+func parseSystemExecPort(output string) int {
+	fields := strings.Fields(output)
+	for i, field := range fields {
+		field = strings.Trim(field, "{};,")
+		field = strings.TrimPrefix(field, "argv[]=")
+
+		if strings.HasPrefix(field, "--port=") {
+			var port int
+			if _, err := fmt.Sscanf(strings.TrimPrefix(field, "--port="), "%d", &port); err == nil && port > 0 {
+				return port
+			}
+		}
+
+		if field == "--port" && i+1 < len(fields) {
+			next := strings.Trim(fields[i+1], "{};,")
+			var port int
+			if _, err := fmt.Sscanf(next, "%d", &port); err == nil && port > 0 {
+				return port
+			}
+		}
+	}
+
+	return 7474
+}
+
+func systemAgentBinaryPath(client remoteRunner) string {
+	out, err := client.Exec("systemctl show -p ExecStart --value yokai-agent")
+	if err == nil {
+		if parsed := parseSystemExecBinaryPath(out); parsed != "" {
+			return parsed
+		}
+	}
+	return "/usr/local/bin/yokai"
+}
+
+func systemAgentPort(client remoteRunner) int {
+	out, err := client.Exec("systemctl show -p ExecStart --value yokai-agent")
+	if err == nil {
+		return parseSystemExecPort(out)
+	}
+	return 7474
+}
+
+func verifyAgentAuth(client remoteRunner, port int, agentToken string) error {
+	verifyCmd := fmt.Sprintf("curl -sf -H 'Authorization: Bearer %s' http://127.0.0.1:%d/system/info >/dev/null", agentToken, port)
+	if out, err := client.Exec(verifyCmd); err != nil {
+		return fmt.Errorf("agent auth verification failed (token mismatch or agent unavailable): %w — stderr: %s", err, strings.TrimSpace(out))
+	}
+	return nil
+}
+
+func sudoPrefix(useSudo bool) string {
+	if useSudo {
+		return "sudo -n "
+	}
+	return ""
+}
+
+func deploySystemService(client remoteRunner, tmpUploadPath, agentToken string) error {
+	// Avoid conflicts on :7474 if a stale user-level service exists.
+	_, _ = client.Exec("systemctl --user disable --now yokai-agent 2>/dev/null || true")
+
+	useSudo := !remoteIsRoot(client)
+	if useSudo {
+		if err := ensureSudoNonInteractive(client); err != nil {
+			return err
+		}
+	}
+
+	binaryPath := systemAgentBinaryPath(client)
+	installCmd := fmt.Sprintf("%sinstall -m 0755 %s %s", sudoPrefix(useSudo), tmpUploadPath, binaryPath)
+	if installOut, err := client.Exec(installCmd); err != nil {
+		return fmt.Errorf("running %q: %w — stderr: %s", installCmd, err, strings.TrimSpace(installOut))
+	}
+
+	writeTokenCmd := fmt.Sprintf(`%ssh -c 'mkdir -p /etc/yokai && cat > /etc/yokai/agent.json << "EOF"
+{
+  "token": "%s"
+}
+EOF'`, sudoPrefix(useSudo), agentToken)
+	if tokenOut, err := client.Exec(writeTokenCmd); err != nil {
+		return fmt.Errorf("writing /etc/yokai/agent.json: %w — stderr: %s", err, strings.TrimSpace(tokenOut))
+	}
+
+	for _, cmd := range []string{
+		fmt.Sprintf("%ssystemctl daemon-reload", sudoPrefix(useSudo)),
+		fmt.Sprintf("%ssystemctl enable yokai-agent", sudoPrefix(useSudo)),
+		fmt.Sprintf("%ssystemctl restart yokai-agent", sudoPrefix(useSudo)),
+	} {
+		if cmdOut, err := client.Exec(cmd); err != nil {
+			return fmt.Errorf("running %q: %w — stderr: %s", cmd, err, strings.TrimSpace(cmdOut))
+		}
+	}
+
+	_, _ = client.Exec("sleep 1.5")
+	if err := verifyAgentAuth(client, systemAgentPort(client), agentToken); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func deployUserService(client remoteRunner, tmpUploadPath, agentToken string) error {
 	homeDir := getRemoteHome(client)
 	remoteBinDir := homeDir + "/.local/bin"
 	remoteBinPath := remoteBinDir + "/yokai"
 	remoteConfigDir := homeDir + "/.config/yokai"
 	remoteSystemdDir := homeDir + "/.config/systemd/user"
-	tmpUploadPath := "/tmp/yokai.new"
-
-	// Upload binary to /tmp first, then move to user-local dir
-	if err := client.Upload(localBinaryPath, tmpUploadPath); err != nil {
-		return fmt.Errorf("uploading binary: %w", err)
-	}
 
 	// Create ~/.local/bin and install binary
 	installCmds := []string{
@@ -275,12 +415,13 @@ Wants=docker.service
 [Service]
 Type=simple
 ExecStart=%s agent
+Environment=YOKAI_AGENT_CONFIG=%s/agent.json
 Restart=always
 RestartSec=5
 
 [Install]
 WantedBy=default.target
-`, remoteBinPath)
+`, remoteBinPath, remoteConfigDir)
 
 		setupCmds := []string{
 			fmt.Sprintf("mkdir -p %s", remoteSystemdDir),
@@ -313,11 +454,37 @@ WantedBy=default.target
 		}
 	}
 
+	_, _ = client.Exec("sleep 1.5")
+	if err := verifyAgentAuth(client, 7474, agentToken); err != nil {
+		return err
+	}
+
 	return nil
 }
 
+func deployAgent(client remoteRunner, localBinaryPath string, agentToken string) error {
+	tmpUploadPath := "/tmp/yokai.new"
+
+	// Upload binary to /tmp first, then install according to service mode.
+	if err := client.Upload(localBinaryPath, tmpUploadPath); err != nil {
+		return fmt.Errorf("uploading binary: %w", err)
+	}
+
+	if hasSystemService(client) {
+		return deploySystemService(client, tmpUploadPath, agentToken)
+	}
+
+	return deployUserService(client, tmpUploadPath, agentToken)
+}
+
+// DeployAgent uploads the yokai binary and installs it as a user-level or
+// existing system-level service depending on what is already present.
+func DeployAgent(client *Client, localBinaryPath string, agentToken string) error {
+	return deployAgent(client, localBinaryPath, agentToken)
+}
+
 // getUserName returns the remote username.
-func getUserName(client *Client) string {
+func getUserName(client remoteRunner) string {
 	if out, err := client.Exec("whoami"); err == nil {
 		return strings.TrimSpace(out)
 	}
