@@ -42,7 +42,7 @@ test:
 	go test ./...
 
 lint:
-	golangci-lint run
+	go tool golangci-lint run
 
 tidy:
 	go mod tidy

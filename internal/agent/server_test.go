@@ -638,6 +638,39 @@ func TestLoadAuthTokenFallsBackToHome(t *testing.T) {
 	}
 }
 
+func TestLoadAuthTokenPrefersSystemPathBeforeHome(t *testing.T) {
+	base := t.TempDir()
+	homeDir := filepath.Join(base, "home")
+	homeConfig := filepath.Join(homeDir, ".config", "yokai")
+	systemPath := filepath.Join(base, "etc-agent.json")
+
+	if err := os.MkdirAll(homeConfig, 0700); err != nil {
+		t.Fatalf("mkdir home config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(homeConfig, "agent.json"), []byte(`{"token":"home-token"}`), 0600); err != nil {
+		t.Fatalf("write home token: %v", err)
+	}
+	if err := os.WriteFile(systemPath, []byte(`{"token":"system-token"}`), 0600); err != nil {
+		t.Fatalf("write system token: %v", err)
+	}
+
+	oldSystemPath := systemAgentConfigPath
+	systemAgentConfigPath = systemPath
+	defer func() {
+		systemAgentConfigPath = oldSystemPath
+	}()
+
+	t.Setenv("HOME", homeDir)
+	t.Setenv("YOKAI_AGENT_CONFIG", "")
+
+	authToken = ""
+	loadAuthToken()
+
+	if authToken != "system-token" {
+		t.Fatalf("expected system token, got %q", authToken)
+	}
+}
+
 func TestLoadAuthTokenMissingClearsValue(t *testing.T) {
 	t.Setenv("YOKAI_AGENT_CONFIG", filepath.Join(t.TempDir(), "missing.json"))
 

@@ -562,10 +562,6 @@ func (d *Dashboard) renderChartsRow(deviceID string, numCols int) string {
 		chartWidth = 20
 	}
 	chartHeight := 6
-	innerWidth := chartWidth - 4
-	if innerWidth < 10 {
-		innerWidth = 10
-	}
 
 	var charts []string
 	for i, spec := range chartSpecs {

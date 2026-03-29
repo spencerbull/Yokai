@@ -1400,7 +1400,6 @@ func (d *Deploy) updateConfig(msg tea.KeyMsg) (*Deploy, tea.Cmd) {
 		}
 		return d, cmd
 	}
-	return d, nil
 }
 
 func (d *Deploy) syncConfigFocus() {

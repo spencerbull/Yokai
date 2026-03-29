@@ -406,6 +406,36 @@ func TestParseSystemExecBinaryPath(t *testing.T) {
 	}
 }
 
+func TestParseSystemExecPortDefaultsTo7474(t *testing.T) {
+	t.Parallel()
+
+	input := `{ path=/usr/local/bin/yokai ; argv[]=/usr/local/bin/yokai agent ; ignore_errors=no }`
+	if got := parseSystemExecPort(input); got != 7474 {
+		t.Fatalf("expected default port 7474, got %d", got)
+	}
+}
+
+func TestParseSystemExecPortReadsFlagForms(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input string
+		want  int
+	}{
+		{name: "equals form", input: `{ path=/usr/local/bin/yokai ; argv[]=/usr/local/bin/yokai agent --port=8181 ; }`, want: 8181},
+		{name: "separate arg form", input: `{ path=/usr/local/bin/yokai ; argv[]=/usr/local/bin/yokai agent --port 9191 ; }`, want: 9191},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := parseSystemExecPort(tt.input); got != tt.want {
+				t.Fatalf("expected port %d, got %d", tt.want, got)
+			}
+		})
+	}
+}
+
 func TestDeployAgentSystemServiceRequiresSudo(t *testing.T) {
 	t.Parallel()
 
@@ -464,6 +494,29 @@ func TestDeployAgentSystemServiceUpdatesEtcToken(t *testing.T) {
 	}
 	if !hasExecuted(fake.cmds, "sudo -n systemctl restart yokai-agent") {
 		t.Fatal("expected system service restart command")
+	}
+}
+
+func TestDeployAgentSystemServiceVerifiesConfiguredPort(t *testing.T) {
+	t.Parallel()
+
+	fake := &fakeRemoteClient{rules: []fakeExecRule{
+		{contains: "systemctl is-active --quiet yokai-agent", out: "", err: nil},
+		{contains: "id -u", out: "1000\n", err: nil},
+		{contains: "sudo -n true", out: "", err: nil},
+		{contains: "systemctl show -p ExecStart --value yokai-agent", out: `{ path=/usr/local/bin/yokai ; argv[]=/usr/local/bin/yokai agent --port=9191 ; }`, err: nil},
+		{contains: "curl -sf -H 'Authorization: Bearer token-port' http://127.0.0.1:9191/system/info >/dev/null", out: "", err: nil},
+	}}
+
+	if err := deployAgent(fake, "/tmp/local-yokai", "token-port"); err != nil {
+		t.Fatalf("deployAgent returned error: %v", err)
+	}
+
+	if !hasExecuted(fake.cmds, "http://127.0.0.1:9191/system/info") {
+		t.Fatal("expected auth verification to use configured system service port")
+	}
+	if hasExecuted(fake.cmds, "http://127.0.0.1:7474/system/info") {
+		t.Fatal("did not expect fallback port 7474 when ExecStart specifies a port")
 	}
 }
 

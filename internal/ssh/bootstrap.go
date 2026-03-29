@@ -247,14 +247,37 @@ func ensureSudoNonInteractive(client remoteRunner) error {
 func parseSystemExecBinaryPath(output string) string {
 	for _, field := range strings.Fields(output) {
 		field = strings.Trim(field, "{};,")
-		if strings.HasPrefix(field, "path=") {
-			field = strings.TrimPrefix(field, "path=")
-		}
+		field = strings.TrimPrefix(field, "path=")
 		if strings.HasPrefix(field, "/") && strings.HasSuffix(field, "/yokai") {
 			return field
 		}
 	}
 	return ""
+}
+
+func parseSystemExecPort(output string) int {
+	fields := strings.Fields(output)
+	for i, field := range fields {
+		field = strings.Trim(field, "{};,")
+		field = strings.TrimPrefix(field, "argv[]=")
+
+		if strings.HasPrefix(field, "--port=") {
+			var port int
+			if _, err := fmt.Sscanf(strings.TrimPrefix(field, "--port="), "%d", &port); err == nil && port > 0 {
+				return port
+			}
+		}
+
+		if field == "--port" && i+1 < len(fields) {
+			next := strings.Trim(fields[i+1], "{};,")
+			var port int
+			if _, err := fmt.Sscanf(next, "%d", &port); err == nil && port > 0 {
+				return port
+			}
+		}
+	}
+
+	return 7474
 }
 
 func systemAgentBinaryPath(client remoteRunner) string {
@@ -265,6 +288,14 @@ func systemAgentBinaryPath(client remoteRunner) string {
 		}
 	}
 	return "/usr/local/bin/yokai"
+}
+
+func systemAgentPort(client remoteRunner) int {
+	out, err := client.Exec("systemctl show -p ExecStart --value yokai-agent")
+	if err == nil {
+		return parseSystemExecPort(out)
+	}
+	return 7474
 }
 
 func verifyAgentAuth(client remoteRunner, port int, agentToken string) error {
@@ -319,7 +350,7 @@ EOF'`, sudoPrefix(useSudo), agentToken)
 	}
 
 	_, _ = client.Exec("sleep 1.5")
-	if err := verifyAgentAuth(client, 7474, agentToken); err != nil {
+	if err := verifyAgentAuth(client, systemAgentPort(client), agentToken); err != nil {
 		return err
 	}
 
