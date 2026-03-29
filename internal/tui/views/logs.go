@@ -219,7 +219,7 @@ func (l *LogViewer) waitForNextLine() tea.Cmd {
 	return func() tea.Msg {
 		line, ok := <-ch
 		if !ok {
-			return logErrorMsg{Error: fmt.Errorf("log stream closed")}
+			return nil
 		}
 		return logLineMsg{Line: line}
 	}
@@ -257,6 +257,7 @@ func (l *LogViewer) startSSE() tea.Cmd {
 			defer cancel()
 
 			scanner := bufio.NewScanner(resp.Body)
+			scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 			for scanner.Scan() {
 				line := scanner.Text()
 

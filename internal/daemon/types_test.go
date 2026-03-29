@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/spencerbull/yokai/internal/config"
 )
 
 func TestDeployRequestJSON(t *testing.T) {
@@ -30,6 +32,8 @@ func TestDeployRequestJSON(t *testing.T) {
 			"/host/models": "/app/models",
 			"/host/cache":  "/app/cache",
 		},
+		Plugins: []string{"vllm-reasoning-parser-super-v3"},
+		Runtime: config.RuntimeOptions{IPCMode: "host", ShmSize: "16g", Ulimits: map[string]string{"memlock": "-1"}},
 	}
 
 	// Marshal to JSON
@@ -47,6 +51,7 @@ func TestDeployRequestJSON(t *testing.T) {
 		`"model":"microsoft/DialoGPT-medium"`,
 		`"gpu_ids":"all"`,
 		`"extra_args":"--max-model-len 2048 --tensor-parallel-size 1"`,
+		`"ipc_mode":"host"`,
 	}
 
 	for _, field := range expectedFields {
@@ -79,6 +84,12 @@ func TestDeployRequestJSON(t *testing.T) {
 	}
 	if unmarshaled.ExtraArgs != original.ExtraArgs {
 		t.Errorf("ExtraArgs mismatch: expected %s, got %s", original.ExtraArgs, unmarshaled.ExtraArgs)
+	}
+	if len(unmarshaled.Plugins) != 1 || unmarshaled.Plugins[0] != original.Plugins[0] {
+		t.Errorf("Plugins mismatch: expected %#v, got %#v", original.Plugins, unmarshaled.Plugins)
+	}
+	if unmarshaled.Runtime.IPCMode != original.Runtime.IPCMode || unmarshaled.Runtime.ShmSize != original.Runtime.ShmSize {
+		t.Errorf("Runtime mismatch: expected %#v, got %#v", original.Runtime, unmarshaled.Runtime)
 	}
 
 	// Verify maps

@@ -117,6 +117,7 @@ func (s ServiceDetail) Render() string {
 	hints := theme.MutedStyle.Render("l") + theme.PrimaryStyle.Render(":logs") + "  " +
 		theme.MutedStyle.Render("s") + theme.PrimaryStyle.Render(":stop") + "  " +
 		theme.MutedStyle.Render("r") + theme.PrimaryStyle.Render(":restart") + "  " +
+		theme.MutedStyle.Render("t") + theme.PrimaryStyle.Render(":test") + "  " +
 		theme.MutedStyle.Render("x") + theme.PrimaryStyle.Render(":delete") + "  " +
 		theme.MutedStyle.Render("Esc") + theme.PrimaryStyle.Render(":collapse")
 	body += "\n\n" + hints

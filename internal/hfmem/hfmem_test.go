@@ -1,6 +1,10 @@
 package hfmem
 
-import "testing"
+import (
+	"errors"
+	"strings"
+	"testing"
+)
 
 func TestBuildCommandArgsFallsBackToUvx(t *testing.T) {
 	origLookPath := lookPath
@@ -37,6 +41,34 @@ func TestParseJSONInt(t *testing.T) {
 	v, err = parseJSONInt(nil)
 	if err != nil || v != 0 {
 		t.Fatalf("expected 0 for nil, got %d err=%v", v, err)
+	}
+}
+
+func TestFormatRunErrorAuthFailures(t *testing.T) {
+	tests := []struct {
+		name   string
+		stderr string
+		want   string
+	}{
+		{name: "401", stderr: "HTTPStatusError: Client error '401 Unauthorized' for url 'https://huggingface.co/foo'", want: "401 Unauthorized"},
+		{name: "403", stderr: "HTTPStatusError: Client error '403 Forbidden' for url 'https://huggingface.co/foo'", want: "403 Forbidden"},
+		{name: "404", stderr: "HTTPStatusError: Client error '404 Not Found' for url 'https://huggingface.co/foo'", want: "404 Not Found"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := formatRunError(errors.New("exit status 1"), tt.stderr)
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("expected %q in error, got %q", tt.want, err.Error())
+			}
+		})
+	}
+}
+
+func TestFormatRunErrorFallsBackToLastStderrLine(t *testing.T) {
+	err := formatRunError(errors.New("exit status 1"), "traceback line\nfinal useful line\n")
+	if got := err.Error(); got != "running hf-mem: final useful line" {
+		t.Fatalf("unexpected error: %q", got)
 	}
 }
 

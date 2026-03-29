@@ -11,9 +11,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/spencerbull/yokai/internal/bkc"
 	"github.com/spencerbull/yokai/internal/config"
 	"github.com/spencerbull/yokai/internal/hf"
 	"github.com/spencerbull/yokai/internal/hfmem"
@@ -96,15 +98,17 @@ type vllmMemoryEstimate struct {
 
 // deployRequest represents the API request payload.
 type deployRequest struct {
-	DeviceID  string            `json:"device_id"`
-	Image     string            `json:"image"`
-	Name      string            `json:"name"`
-	Model     string            `json:"model"`
-	Ports     map[string]string `json:"ports"`
-	Env       map[string]string `json:"env"`
-	GPUIDs    string            `json:"gpu_ids"`
-	ExtraArgs string            `json:"extra_args"`
-	Volumes   map[string]string `json:"volumes"`
+	DeviceID  string                `json:"device_id"`
+	Image     string                `json:"image"`
+	Name      string                `json:"name"`
+	Model     string                `json:"model"`
+	Ports     map[string]string     `json:"ports"`
+	Env       map[string]string     `json:"env"`
+	GPUIDs    string                `json:"gpu_ids"`
+	ExtraArgs string                `json:"extra_args"`
+	Volumes   map[string]string     `json:"volumes"`
+	Plugins   []string              `json:"plugins"`
+	Runtime   config.RuntimeOptions `json:"runtime"`
 }
 
 // Deploy is the multi-step deploy wizard.
@@ -132,10 +136,11 @@ type Deploy struct {
 
 	// Step 5: config
 	portInput          textinput.Model
-	extraArgsInput     textinput.Model
+	extraArgsInput     textarea.Model
 	activeConfigField  int
 	showArgsHelp       bool
 	showVLLMMemoryHelp bool
+	appliedBKCID       string
 	vllmContextInput   textinput.Model
 	vllmOverheadInput  textinput.Model
 	vllmMemoryEstimate *vllmMemoryEstimate
@@ -171,7 +176,7 @@ func NewDeploy(cfg *config.Config, version string) *Deploy {
 	modelInput := components.NewTextField("e.g. meta-llama/Llama-3.1-8B-Instruct")
 	pickerSearchInput := components.NewTextField("Type to filter")
 	portInput := components.NewPortField("8000")
-	extraArgsInput := components.NewTextField("Extra arguments")
+	extraArgsInput := components.NewTextAreaField("One flag per line")
 	vllmContextInput := components.NewPortField("32768")
 	vllmContextInput.CharLimit = 7
 	vllmOverheadInput := components.NewTextField("1.5")
@@ -262,7 +267,8 @@ func (d *Deploy) Update(msg tea.Msg) (View, tea.Cmd) {
 			}
 		}
 		d.portInput.Width = configWidth
-		d.extraArgsInput.Width = configWidth
+		d.extraArgsInput.SetWidth(configWidth)
+		d.extraArgsInput.SetHeight(6)
 
 	case deployResultMsg:
 		if msg.Error != nil {
@@ -1003,14 +1009,92 @@ func (d *Deploy) resetVLLMMemoryHelper() {
 	d.vllmMemoryError = ""
 }
 
+func workloadToBKC(workload workloadType) (bkc.Workload, bool) {
+	switch workload {
+	case wtVLLM:
+		return bkc.WorkloadVLLM, true
+	case wtLlamaCpp:
+		return bkc.WorkloadLlamaCpp, true
+	default:
+		return "", false
+	}
+}
+
+func (d *Deploy) currentBKC() (bkc.Config, bool) {
+	workload, ok := workloadToBKC(d.workload)
+	if !ok {
+		return bkc.Config{}, false
+	}
+	return bkc.Lookup(workload, d.modelInput.Value())
+}
+
+func (d *Deploy) bkcFieldIndex() int {
+	if _, ok := d.currentBKC(); ok {
+		return 2
+	}
+	return -1
+}
+
+func (d *Deploy) argsHelpFieldIndex() int {
+	if d.bkcFieldIndex() >= 0 {
+		return 3
+	}
+	return 2
+}
+
+func (d *Deploy) vllmMemoryToggleFieldIndex() int {
+	return d.argsHelpFieldIndex() + 1
+}
+
+func (d *Deploy) vllmContextFieldIndex() int {
+	return d.vllmMemoryToggleFieldIndex() + 1
+}
+
+func (d *Deploy) vllmOverheadFieldIndex() int {
+	return d.vllmMemoryToggleFieldIndex() + 2
+}
+
+func (d *Deploy) vllmActionFieldIndex() int {
+	return d.vllmMemoryToggleFieldIndex() + 3
+}
+
+func (d *Deploy) hasAppliedBKC() bool {
+	cfg, ok := d.currentBKC()
+	if !ok {
+		return false
+	}
+	return d.appliedBKCID == cfg.ID
+}
+
+func (d *Deploy) applyCurrentBKC() {
+	cfg, ok := d.currentBKC()
+	if !ok {
+		return
+	}
+	d.appliedBKCID = cfg.ID
+	d.imageInput.SetValue(cfg.Image)
+	d.portInput.SetValue(cfg.Port)
+	d.extraArgsInput.SetValue(formatArgsForEditor(cfg.ExtraArgs))
+	d.vllmMemoryEstimate = nil
+	d.vllmMemoryLoading = false
+	d.vllmMemoryError = fmt.Sprintf("applied BKC: %s", cfg.Name)
+	if d.workload == wtVLLM {
+		d.vllmContextInput.SetValue(d.detectMaxModelLen())
+	}
+}
+
 func (d *Deploy) configFieldCount() int {
+	count := 3
+	if d.bkcFieldIndex() >= 0 {
+		count++
+	}
 	if d.workload == wtVLLM {
 		if d.showVLLMMemoryHelp {
-			return 7
+			return count + 4
 		}
-		return 4
+		return count + 1
 	}
-	return 3
+	return count
 }
 
 func (d *Deploy) vllmActionLabel() string {
@@ -1021,6 +1105,17 @@ func (d *Deploy) vllmActionLabel() string {
 		return "[ Apply recommended flags ]"
 	}
 	return "[ Calculate utilization ]"
+}
+
+func (d *Deploy) bkcActionLabel() string {
+	cfg, ok := d.currentBKC()
+	if !ok {
+		return ""
+	}
+	if d.hasAppliedBKC() {
+		return "[ Reapply BKC: " + cfg.Name + " ]"
+	}
+	return "[ Apply BKC: " + cfg.Name + " ]"
 }
 
 func (d *Deploy) detectMaxModelLen() string {
@@ -1178,7 +1273,7 @@ func (d *Deploy) applyVLLMMemoryEstimate() {
 	if _, ok := argValue(args, "--tensor-parallel-size"); !ok {
 		args = setOrReplaceArg(args, "--tensor-parallel-size", strconv.Itoa(d.vllmMemoryEstimate.TensorParallelSize))
 	}
-	d.extraArgsInput.SetValue(strings.TrimSpace(args))
+	d.extraArgsInput.SetValue(formatArgsForEditor(strings.TrimSpace(args)))
 	d.vllmMemoryError = "applied recommended vLLM flags to extra args"
 }
 
@@ -1236,6 +1331,30 @@ func setOrReplaceArg(args, flag, value string) string {
 	return strings.Join(updated, " ")
 }
 
+func formatArgsForEditor(args string) string {
+	tokens := strings.Fields(args)
+	if len(tokens) == 0 {
+		return ""
+	}
+
+	lines := make([]string, 0, len(tokens))
+	for i := 0; i < len(tokens); i++ {
+		token := tokens[i]
+		if strings.HasPrefix(token, "-") && !strings.Contains(token, "=") && i+1 < len(tokens) && !strings.HasPrefix(tokens[i+1], "-") {
+			lines = append(lines, token+" "+tokens[i+1])
+			i++
+			continue
+		}
+		lines = append(lines, token)
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+func normalizeArgsForDeploy(args string) string {
+	return strings.Join(strings.Fields(args), " ")
+}
+
 func (d *Deploy) renderVLLMMemoryHelper() string {
 	if d.workload != wtVLLM {
 		return ""
@@ -1244,7 +1363,7 @@ func (d *Deploy) renderVLLMMemoryHelper() string {
 	if d.showVLLMMemoryHelp {
 		label = "[-] Hide vLLM memory helper"
 	}
-	if d.activeConfigField == 3 {
+	if d.activeConfigField == d.vllmMemoryToggleFieldIndex() {
 		label = lipgloss.NewStyle().Foreground(theme.Accent).Bold(true).Render(label)
 	} else {
 		label = theme.MutedStyle.Render(label)
@@ -1258,7 +1377,7 @@ func (d *Deploy) renderVLLMMemoryHelper() string {
 	body += theme.MutedStyle.Render("CUDA/PyTorch overhead (GB):") + "\n"
 	body += d.vllmOverheadInput.View() + "\n\n"
 	actionStyle := theme.MutedStyle
-	if d.activeConfigField == 6 {
+	if d.activeConfigField == d.vllmActionFieldIndex() {
 		actionStyle = lipgloss.NewStyle().Foreground(theme.Accent).Bold(true)
 	}
 	body += actionStyle.Render(d.vllmActionLabel()) + "\n\n"
@@ -1292,6 +1411,33 @@ func (d *Deploy) renderVLLMMemoryHelper() string {
 	return body
 }
 
+func (d *Deploy) renderBKCSection() string {
+	cfg, ok := d.currentBKC()
+	if !ok {
+		return ""
+	}
+
+	label := d.bkcActionLabel()
+	if d.activeConfigField == d.bkcFieldIndex() {
+		label = lipgloss.NewStyle().Foreground(theme.Accent).Bold(true).Render(label)
+	} else {
+		label = theme.MutedStyle.Render(label)
+	}
+
+	body := label + "\n\n"
+	body += theme.MutedStyle.Render(cfg.Description) + "\n"
+	body += theme.MutedStyle.Render("Source: "+cfg.Source) + "\n\n"
+	body += theme.MutedStyle.Render("Applies:") + "\n"
+	body += fmt.Sprintf("  Image: %s\n", cfg.Image)
+	body += fmt.Sprintf("  Port:  %s\n", cfg.Port)
+	body += theme.MutedStyle.Render("  Extra args, runtime env vars, and a persistent Hugging Face cache mount.") + "\n"
+	if d.hasAppliedBKC() {
+		body += "\n" + theme.SuccessStyle.Render("BKC applied. You can still edit image, port, and extra args before deploying.") + "\n"
+	}
+	body += "\n"
+	return body
+}
+
 func (d *Deploy) updateConfig(msg tea.KeyMsg) (*Deploy, tea.Cmd) {
 	switch msg.String() {
 	case "tab":
@@ -1315,19 +1461,30 @@ func (d *Deploy) updateConfig(msg tea.KeyMsg) (*Deploy, tea.Cmd) {
 		d.syncConfigFocus()
 		return d, nil
 	case "enter":
-		if d.activeConfigField == 2 {
+		if d.activeConfigField == d.bkcFieldIndex() {
+			d.applyCurrentBKC()
+			return d, nil
+		}
+		if d.activeConfigField == 1 {
+			var cmd tea.Cmd
+			d.extraArgsInput, cmd = d.extraArgsInput.Update(msg)
+			d.vllmMemoryEstimate = nil
+			d.vllmMemoryError = ""
+			return d, cmd
+		}
+		if d.activeConfigField == d.argsHelpFieldIndex() {
 			d.showArgsHelp = !d.showArgsHelp
 			return d, nil
 		}
 		if d.workload == wtVLLM {
 			switch d.activeConfigField {
-			case 3:
+			case d.vllmMemoryToggleFieldIndex():
 				d.showVLLMMemoryHelp = !d.showVLLMMemoryHelp
 				if !d.showVLLMMemoryHelp && d.activeConfigField >= d.configFieldCount() {
-					d.activeConfigField = 3
+					d.activeConfigField = d.vllmMemoryToggleFieldIndex()
 				}
 				return d, nil
-			case 6:
+			case d.vllmActionFieldIndex():
 				if d.vllmMemoryEstimate != nil {
 					d.applyVLLMMemoryEstimate()
 					return d, nil
@@ -1336,13 +1493,19 @@ func (d *Deploy) updateConfig(msg tea.KeyMsg) (*Deploy, tea.Cmd) {
 			}
 		}
 		// Save to config first
+		env, volumes, plugins, runtime := d.currentServiceEnhancements()
 		svc := config.Service{
-			ID:       fmt.Sprintf("%s-%s", strings.ToLower(workloadLabels[d.workload]), sanitize(d.modelInput.Value())),
-			DeviceID: d.cfg.Devices[d.deviceIdx].ID,
-			Type:     strings.ToLower(workloadLabels[d.workload]),
-			Image:    d.imageInput.Value(),
-			Model:    d.modelInput.Value(),
-			Port:     atoi(d.portInput.Value()),
+			ID:        fmt.Sprintf("%s-%s", strings.ToLower(workloadLabels[d.workload]), sanitize(d.modelInput.Value())),
+			DeviceID:  d.cfg.Devices[d.deviceIdx].ID,
+			Type:      strings.ToLower(workloadLabels[d.workload]),
+			Image:     d.imageInput.Value(),
+			Model:     d.modelInput.Value(),
+			Port:      atoi(d.portInput.Value()),
+			ExtraArgs: normalizeArgsForDeploy(d.extraArgsInput.Value()),
+			Env:       env,
+			Volumes:   volumes,
+			Plugins:   plugins,
+			Runtime:   runtime,
 		}
 		d.cfg.Services = append(d.cfg.Services, svc)
 		_ = config.Save(d.cfg)
@@ -1363,18 +1526,22 @@ func (d *Deploy) updateConfig(msg tea.KeyMsg) (*Deploy, tea.Cmd) {
 		d.showArgsHelp = !d.showArgsHelp
 		return d, nil
 	default:
-		if msg.String() == " " && d.activeConfigField == 2 {
+		if msg.String() == " " && d.activeConfigField == d.bkcFieldIndex() {
+			d.applyCurrentBKC()
+			return d, nil
+		}
+		if msg.String() == " " && d.activeConfigField == d.argsHelpFieldIndex() {
 			d.showArgsHelp = !d.showArgsHelp
 			return d, nil
 		}
-		if msg.String() == " " && d.workload == wtVLLM && d.activeConfigField == 3 {
+		if msg.String() == " " && d.workload == wtVLLM && d.activeConfigField == d.vllmMemoryToggleFieldIndex() {
 			d.showVLLMMemoryHelp = !d.showVLLMMemoryHelp
 			if !d.showVLLMMemoryHelp && d.activeConfigField >= d.configFieldCount() {
-				d.activeConfigField = 3
+				d.activeConfigField = d.vllmMemoryToggleFieldIndex()
 			}
 			return d, nil
 		}
-		if d.workload == wtVLLM && d.activeConfigField == 6 && msg.String() == " " {
+		if d.workload == wtVLLM && d.activeConfigField == d.vllmActionFieldIndex() && msg.String() == " " {
 			if d.vllmMemoryEstimate != nil {
 				d.applyVLLMMemoryEstimate()
 				return d, nil
@@ -1389,11 +1556,11 @@ func (d *Deploy) updateConfig(msg tea.KeyMsg) (*Deploy, tea.Cmd) {
 			d.extraArgsInput, cmd = d.extraArgsInput.Update(msg)
 			d.vllmMemoryEstimate = nil
 			d.vllmMemoryError = ""
-		} else if d.workload == wtVLLM && d.activeConfigField == 4 {
+		} else if d.workload == wtVLLM && d.activeConfigField == d.vllmContextFieldIndex() {
 			d.vllmContextInput, cmd = d.vllmContextInput.Update(msg)
 			d.vllmMemoryEstimate = nil
 			d.vllmMemoryError = ""
-		} else if d.workload == wtVLLM && d.activeConfigField == 5 {
+		} else if d.workload == wtVLLM && d.activeConfigField == d.vllmOverheadFieldIndex() {
 			d.vllmOverheadInput, cmd = d.vllmOverheadInput.Update(msg)
 			d.vllmMemoryEstimate = nil
 			d.vllmMemoryError = ""
@@ -1415,12 +1582,12 @@ func (d *Deploy) syncConfigFocus() {
 		d.portInput.Blur()
 		d.vllmContextInput.Blur()
 		d.vllmOverheadInput.Blur()
-	case 4:
+	case d.vllmContextFieldIndex():
 		d.portInput.Blur()
 		d.extraArgsInput.Blur()
 		d.vllmContextInput.Focus()
 		d.vllmOverheadInput.Blur()
-	case 5:
+	case d.vllmOverheadFieldIndex():
 		d.portInput.Blur()
 		d.extraArgsInput.Blur()
 		d.vllmContextInput.Blur()
@@ -1447,7 +1614,7 @@ func (d *Deploy) renderArgsHelp() string {
 	if d.showArgsHelp {
 		label = "[-] Hide extra arg help"
 	}
-	if d.activeConfigField == 2 {
+	if d.activeConfigField == d.argsHelpFieldIndex() {
 		label = lipgloss.NewStyle().Foreground(theme.Accent).Bold(true).Render(label)
 	} else {
 		label = theme.MutedStyle.Render(label)
@@ -1462,7 +1629,7 @@ func (d *Deploy) renderArgsHelp() string {
 	case wtVLLM:
 		body += theme.MutedStyle.Render("How it works:") + "\n"
 		body += "  Extra args are appended to the vLLM command after the image.\n"
-		body += "  Use them for runtime flags like sequence length or tensor parallelism.\n\n"
+		body += "  Enter one flag per line; deploy flattens them back into a normal CLI string.\n\n"
 		body += theme.MutedStyle.Render("Defaults added automatically:") + "\n"
 		body += "  --model <selected model>\n"
 		body += "  --host 0.0.0.0\n"
@@ -1471,16 +1638,98 @@ func (d *Deploy) renderArgsHelp() string {
 		body += theme.MutedStyle.Render("Override behavior:") + "\n"
 		body += "  If you set one of those flags in extra args, your value wins.\n\n"
 		body += theme.MutedStyle.Render("Example:") + "\n"
-		body += "  --tensor-parallel-size 2 --max-model-len 32768 --gpu-memory-utilization 0.95\n\n"
+		body += "  --tensor-parallel-size 2\n"
+		body += "  --max-model-len 32768\n"
+		body += "  --gpu-memory-utilization 0.95\n\n"
 		body += theme.MutedStyle.Render("Note:") + "\n"
-		body += "  Quote handling is limited, so enter plain space-separated flags.\n\n"
+		body += "  Quote handling is limited, so enter plain flags and values.\n\n"
 	default:
 		body += theme.MutedStyle.Render("How it works:") + "\n"
 		body += "  Extra args are appended to the container command after the image.\n"
-		body += "  Use plain space-separated flags that your service understands.\n\n"
+		body += "  Enter one flag per line; deploy flattens them back into a normal CLI string.\n\n"
 	}
 
 	return body
+}
+
+func (d *Deploy) activeBKC() (bkc.Config, bool) {
+	cfg, ok := d.currentBKC()
+	if !ok || d.appliedBKCID != cfg.ID {
+		return bkc.Config{}, false
+	}
+	return cfg, true
+}
+
+func (d *Deploy) currentServiceEnhancements() (map[string]string, map[string]string, []string, config.RuntimeOptions) {
+	if cfg, ok := d.activeBKC(); ok {
+		return cloneMap(cfg.Env), cloneMap(cfg.Volumes), append([]string(nil), cfg.Plugins...), cloneRuntime(cfg.Runtime)
+	}
+	return map[string]string{}, map[string]string{}, nil, config.RuntimeOptions{}
+}
+
+func cloneMap(src map[string]string) map[string]string {
+	if len(src) == 0 {
+		return map[string]string{}
+	}
+	dst := make(map[string]string, len(src))
+	for key, value := range src {
+		dst[key] = value
+	}
+	return dst
+}
+
+func cloneRuntime(src config.RuntimeOptions) config.RuntimeOptions {
+	return config.RuntimeOptions{
+		IPCMode: src.IPCMode,
+		ShmSize: src.ShmSize,
+		Ulimits: cloneMap(src.Ulimits),
+	}
+}
+
+func (d *Deploy) buildDeployRequest(svc config.Service) deployRequest {
+	req := deployRequest{
+		DeviceID:  svc.DeviceID,
+		Image:     svc.Image,
+		Name:      svc.ID,
+		Model:     svc.Model,
+		Ports:     map[string]string{d.portInput.Value(): d.portInput.Value()},
+		Env:       cloneMap(svc.Env),
+		GPUIDs:    "all",
+		ExtraArgs: normalizeArgsForDeploy(d.extraArgsInput.Value()),
+		Volumes:   cloneMap(svc.Volumes),
+		Plugins:   append([]string(nil), svc.Plugins...),
+		Runtime:   cloneRuntime(svc.Runtime),
+	}
+
+	if svc.Model != "" {
+		req.Env["MODEL"] = svc.Model
+	}
+	if cfg, ok := d.activeBKC(); ok {
+		if len(req.Env) == 1 {
+			for key, value := range cfg.Env {
+				req.Env[key] = value
+			}
+		}
+		if len(req.Volumes) == 0 {
+			for hostPath, containerPath := range cfg.Volumes {
+				req.Volumes[hostPath] = containerPath
+			}
+		}
+		if len(req.Plugins) == 0 {
+			req.Plugins = append([]string(nil), cfg.Plugins...)
+		}
+		if req.Runtime.IPCMode == "" {
+			req.Runtime.IPCMode = cfg.Runtime.IPCMode
+		}
+		if req.Runtime.ShmSize == "" {
+			req.Runtime.ShmSize = cfg.Runtime.ShmSize
+		}
+		if len(req.Runtime.Ulimits) == 0 {
+			req.Runtime.Ulimits = cloneMap(cfg.Runtime.Ulimits)
+		}
+	}
+
+	return req
 }
 
 // deployToAPI makes an HTTP POST to the daemon to deploy the service.
@@ -1492,22 +1741,7 @@ func (d *Deploy) deployToAPI(svc config.Service) tea.Cmd {
 		}
 
 		// Build deployment request
-		req := deployRequest{
-			DeviceID:  svc.DeviceID,
-			Image:     svc.Image,
-			Name:      svc.ID,
-			Model:     svc.Model,
-			Ports:     map[string]string{d.portInput.Value(): d.portInput.Value()},
-			Env:       map[string]string{},
-			GPUIDs:    "all",
-			ExtraArgs: d.extraArgsInput.Value(),
-			Volumes:   map[string]string{},
-		}
-
-		// Add model to environment if provided
-		if svc.Model != "" {
-			req.Env["MODEL"] = svc.Model
-		}
+		req := d.buildDeployRequest(svc)
 
 		// Encode request
 		reqBody, err := json.Marshal(req)
@@ -1725,6 +1959,7 @@ func (d *Deploy) View() string {
 		body += d.portInput.View() + "\n\n"
 		body += theme.MutedStyle.Render("Extra args:") + "\n"
 		body += d.extraArgsInput.View() + "\n\n"
+		body += d.renderBKCSection()
 		body += theme.MutedStyle.Render("Tab to switch fields • Enter/Space on helper rows to toggle • ? works anywhere") + "\n\n"
 		body += d.renderArgsHelp()
 		body += d.renderVLLMMemoryHelper()
@@ -1743,6 +1978,12 @@ func (d *Deploy) View() string {
 		body += fmt.Sprintf("  Image:  %s\n", d.imageInput.Value())
 		if d.modelInput.Value() != "" {
 			body += fmt.Sprintf("  Model:  %s\n", d.modelInput.Value())
+		}
+		if cfg, ok := d.currentBKC(); ok && d.hasAppliedBKC() {
+			body += fmt.Sprintf("  BKC:    %s\n", cfg.Name)
+			if len(cfg.Plugins) > 0 {
+				body += fmt.Sprintf("  Plugin: %s\n", strings.Join(cfg.Plugins, ", "))
+			}
 		}
 		body += fmt.Sprintf("  Port:   %s\n", d.portInput.Value())
 		body += "\n" + theme.SuccessStyle.Render("Press Enter to deploy")
