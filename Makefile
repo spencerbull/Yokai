@@ -9,7 +9,7 @@ AGENTS ?= finn
 AGENT_PORT ?= 7474
 AGENT_PATH ?= /usr/local/bin/yokai
 
-.PHONY: build run clean test lint agent daemon
+.PHONY: build run clean uninstall test lint agent daemon
 .PHONY: dev dev-restart dev-daemon dev-agents dev-tui dev-push
 
 build:
@@ -24,14 +24,25 @@ agent: build
 daemon: build
 	./bin/$(BINARY_NAME) daemon
 
-clean:
+clean: uninstall
 	rm -rf bin/
+
+uninstall:
+	@echo "removing installed $(BINARY_NAME) binaries (if present)..."
+	@rm -f "$$HOME/.local/bin/$(BINARY_NAME)"
+	@if [ -w /usr/local/bin ]; then \
+		rm -f /usr/local/bin/$(BINARY_NAME); \
+	elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then \
+		sudo rm -f /usr/local/bin/$(BINARY_NAME); \
+	elif [ -e /usr/local/bin/$(BINARY_NAME) ]; then \
+		echo "  WARNING: /usr/local/bin/$(BINARY_NAME) exists but needs sudo to remove"; \
+	fi
 
 test:
 	go test ./...
 
 lint:
-	golangci-lint run
+	go tool golangci-lint run
 
 tidy:
 	go mod tidy
@@ -43,12 +54,14 @@ cross:
 
 # ---------- Local dev workflow ----------
 
-# Full rebuild + restart everything (daemon + all agents + TUI)
-dev: build dev-daemon dev-agents dev-tui
+# Full local dev loop: rebuild, restart daemon, then launch TUI
+dev: build dev-daemon dev-tui
+	@echo "skipped remote agent deploy; run 'make dev-agents' when you want to push to $(AGENTS)"
 
-# Rebuild, restart daemon + agents, but don't launch TUI
-dev-restart: build dev-daemon dev-agents
-	@echo "daemon and agents restarted — run 'make dev-tui' or './bin/$(BINARY_NAME)' when ready"
+# Rebuild and restart the local daemon, but don't launch TUI
+dev-restart: build dev-daemon
+	@echo "daemon restarted locally — run 'make dev-tui' when ready"
+	@echo "skipped remote agent deploy; run 'make dev-agents' when you want to push to $(AGENTS)"
 
 # Kill old daemon and start a new one (backgrounded)
 dev-daemon: build

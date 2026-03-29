@@ -10,19 +10,19 @@ import (
 
 // ServiceDetailData holds all the info needed for the detail panel.
 type ServiceDetailData struct {
-	Name          string
-	Image         string
-	Model         string
-	ContainerID   string
-	Status        string
-	Health        string
-	Port          int
-	Device        string
-	CPUPercent    float64
-	MemUsedMB     int64
-	GPUMemMB      int64
-	Uptime        string
-	CPUHistory    []float64
+	Name        string
+	Image       string
+	Model       string
+	ContainerID string
+	Status      string
+	Health      string
+	Port        int
+	Device      string
+	CPUPercent  float64
+	MemUsedMB   int64
+	GPUMemMB    int64
+	Uptime      string
+	CPUHistory  []float64
 }
 
 // ServiceDetail renders an expanded detail card for a selected service.
@@ -117,6 +117,7 @@ func (s ServiceDetail) Render() string {
 	hints := theme.MutedStyle.Render("l") + theme.PrimaryStyle.Render(":logs") + "  " +
 		theme.MutedStyle.Render("s") + theme.PrimaryStyle.Render(":stop") + "  " +
 		theme.MutedStyle.Render("r") + theme.PrimaryStyle.Render(":restart") + "  " +
+		theme.MutedStyle.Render("x") + theme.PrimaryStyle.Render(":delete") + "  " +
 		theme.MutedStyle.Render("Esc") + theme.PrimaryStyle.Render(":collapse")
 	body += "\n\n" + hints
 
@@ -135,12 +136,14 @@ func (s ServiceDetail) healthDot() string {
 		return lipgloss.NewStyle().Foreground(theme.Good).Render("●")
 	case "starting":
 		return lipgloss.NewStyle().Foreground(theme.Warn).Render("◐")
+	case "created", "restarting":
+		return lipgloss.NewStyle().Foreground(theme.Warn).Render("◌")
 	case "unhealthy", "error":
 		return lipgloss.NewStyle().Foreground(theme.Crit).Render("●")
-	case "stopped":
+	case "stopped", "dead", "exited":
 		return lipgloss.NewStyle().Foreground(theme.TextMuted).Render("○")
 	default:
-		return lipgloss.NewStyle().Foreground(theme.TextMuted).Render("?")
+		return lipgloss.NewStyle().Foreground(theme.Warn).Render("!")
 	}
 }
 
@@ -156,11 +159,15 @@ func (s ServiceDetail) statusLabel() string {
 		return lipgloss.NewStyle().Foreground(theme.Good).Render("running")
 	case "starting":
 		return lipgloss.NewStyle().Foreground(theme.Warn).Render("starting")
+	case "created":
+		return lipgloss.NewStyle().Foreground(theme.Warn).Render("created")
+	case "restarting":
+		return lipgloss.NewStyle().Foreground(theme.Warn).Render("restarting")
 	case "unhealthy":
 		return lipgloss.NewStyle().Foreground(theme.Crit).Render("unhealthy")
 	case "error":
 		return lipgloss.NewStyle().Foreground(theme.Crit).Render("error")
-	case "stopped":
+	case "stopped", "dead", "exited":
 		return lipgloss.NewStyle().Foreground(theme.TextMuted).Render("stopped")
 	default:
 		return theme.PrimaryStyle.Render(h)
