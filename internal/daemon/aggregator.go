@@ -369,6 +369,41 @@ func (a *Aggregator) RestartContainer(deviceID, containerID string) error {
 	return nil
 }
 
+// TestContainer runs a workload-specific smoke test against a running service.
+func (a *Aggregator) TestContainer(deviceID, containerID string) (*ServiceTestResult, error) {
+	localPort := a.tunnels.LocalPort(deviceID)
+	if localPort == 0 {
+		return nil, fmt.Errorf("device %s is not connected", deviceID)
+	}
+
+	url := fmt.Sprintf("http://localhost:%d/containers/%s/test", localPort, containerID)
+	resp, err := a.agentDo("POST", url, deviceID, bytes.NewBufferString("{}"))
+	if err != nil {
+		return nil, fmt.Errorf("test request: %w", err)
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		var agentErr struct {
+			Error   string `json:"error"`
+			Message string `json:"message"`
+		}
+		if json.Unmarshal(body, &agentErr) == nil && agentErr.Message != "" {
+			return nil, fmt.Errorf("agent %s: %s", agentErr.Error, agentErr.Message)
+		}
+		return nil, fmt.Errorf("service test failed with status %d", resp.StatusCode)
+	}
+
+	var result ServiceTestResult
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("parsing service test result: %w", err)
+	}
+	return &result, nil
+}
+
 // StreamLogs connects to agent's SSE log endpoint and relays lines to the channel
 func (a *Aggregator) StreamLogs(deviceID, containerID string) (<-chan string, error) {
 	localPort := a.tunnels.LocalPort(deviceID)
@@ -404,6 +439,7 @@ func (a *Aggregator) StreamLogs(deviceID, containerID string) (<-chan string, er
 		defer close(ch)
 
 		scanner := bufio.NewScanner(resp.Body)
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		for scanner.Scan() {
 			line := scanner.Text()
 			if line == "" {
@@ -416,6 +452,9 @@ func (a *Aggregator) StreamLogs(deviceID, containerID string) (<-chan string, er
 			} else {
 				ch <- line
 			}
+		}
+		if err := scanner.Err(); err != nil {
+			ch <- fmt.Sprintf("[error] log relay scanner: %v", err)
 		}
 	}()
 

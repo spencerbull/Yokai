@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"os/exec"
 	"path"
 	"regexp"
@@ -14,6 +15,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/spencerbull/yokai/internal/config"
+	"github.com/spencerbull/yokai/internal/plugins"
 )
 
 // VLLMMetrics holds vLLM inference throughput metrics.
@@ -36,15 +40,17 @@ type Container struct {
 
 // ContainerRequest represents a container deployment request.
 type ContainerRequest struct {
-	Image     string            `json:"image"`
-	Name      string            `json:"name"`
-	Model     string            `json:"model"`
-	Ports     map[string]string `json:"ports"`
-	Env       map[string]string `json:"env"`
-	GPUIDs    string            `json:"gpu_ids"`
-	ExtraArgs string            `json:"extra_args"`
-	Volumes   map[string]string `json:"volumes"`
-	SkipPull  bool              `json:"skip_pull,omitempty"`
+	Image     string                `json:"image"`
+	Name      string                `json:"name"`
+	Model     string                `json:"model"`
+	Ports     map[string]string     `json:"ports"`
+	Env       map[string]string     `json:"env"`
+	GPUIDs    string                `json:"gpu_ids"`
+	ExtraArgs string                `json:"extra_args"`
+	Volumes   map[string]string     `json:"volumes"`
+	Plugins   []string              `json:"plugins"`
+	Runtime   config.RuntimeOptions `json:"runtime"`
+	SkipPull  bool                  `json:"skip_pull,omitempty"`
 }
 
 // ContainerResponse represents a container deployment response.
@@ -158,6 +164,9 @@ func runContainer(req ContainerRequest) (*ContainerResponse, error) {
 	if err := validateImagePlatform(req.Image); err != nil {
 		return nil, err
 	}
+	if err := applyPlugins(&req); err != nil {
+		return nil, err
+	}
 
 	// Sanitize container name
 	containerName := fmt.Sprintf("yokai-%s", sanitizeName(req.Name))
@@ -216,6 +225,16 @@ func runContainer(req ContainerRequest) (*ContainerResponse, error) {
 	// Add volumes
 	for host, container := range req.Volumes {
 		args = append(args, "-v", fmt.Sprintf("%s:%s", host, container))
+	}
+
+	if req.Runtime.IPCMode != "" {
+		args = append(args, "--ipc", req.Runtime.IPCMode)
+	}
+	if req.Runtime.ShmSize != "" {
+		args = append(args, "--shm-size", req.Runtime.ShmSize)
+	}
+	for name, value := range req.Runtime.Ulimits {
+		args = append(args, "--ulimit", fmt.Sprintf("%s=%s", name, value))
 	}
 
 	// Add restart policy
@@ -328,6 +347,84 @@ func ensureHFCacheVolume(volumes map[string]string) {
 		}
 	}
 	volumes["/var/lib/yokai/huggingface"] = "/root/.cache/huggingface"
+}
+
+func applyPlugins(req *ContainerRequest) error {
+	if len(req.Plugins) == 0 {
+		return nil
+	}
+	if req.Env == nil {
+		req.Env = make(map[string]string)
+	}
+	if req.Volumes == nil {
+		req.Volumes = make(map[string]string)
+	}
+	if req.Runtime.Ulimits == nil {
+		req.Runtime.Ulimits = make(map[string]string)
+	}
+
+	for _, pluginID := range req.Plugins {
+		plugin, ok := plugins.Lookup(pluginID)
+		if !ok {
+			return fmt.Errorf("unknown plugin %s", pluginID)
+		}
+		for _, asset := range plugin.Assets {
+			if err := ensurePluginAsset(plugin.ID, asset); err != nil {
+				return err
+			}
+		}
+		for _, mount := range plugin.Mounts {
+			req.Volumes[plugins.AssetHostPath(plugin.ID, mount.AssetFile)] = mount.ContainerPath
+		}
+		for key, value := range plugin.Env {
+			req.Env[key] = value
+		}
+		req.ExtraArgs = appendArg(req.ExtraArgs, plugin.ExtraArgs)
+		if req.Runtime.IPCMode == "" {
+			req.Runtime.IPCMode = plugin.Runtime.IPCMode
+		}
+		if req.Runtime.ShmSize == "" {
+			req.Runtime.ShmSize = plugin.Runtime.ShmSize
+		}
+		for name, value := range plugin.Runtime.Ulimits {
+			if _, exists := req.Runtime.Ulimits[name]; !exists {
+				req.Runtime.Ulimits[name] = value
+			}
+		}
+	}
+
+	return nil
+}
+
+func ensurePluginAsset(pluginID string, asset plugins.Asset) error {
+	hostPath := plugins.AssetHostPath(pluginID, asset.FileName)
+	if info, err := os.Stat(hostPath); err == nil && info.Size() > 0 {
+		return nil
+	}
+	if err := os.MkdirAll(path.Dir(hostPath), 0755); err != nil {
+		return fmt.Errorf("creating plugin dir: %w", err)
+	}
+	resp, err := http.Get(asset.URL)
+	if err != nil {
+		return fmt.Errorf("downloading plugin asset %s: %w", asset.URL, err)
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("downloading plugin asset %s: status %d", asset.URL, resp.StatusCode)
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("reading plugin asset %s: %w", asset.URL, err)
+	}
+	if len(data) == 0 {
+		return fmt.Errorf("downloaded empty plugin asset %s", asset.URL)
+	}
+	if err := os.WriteFile(hostPath, data, 0644); err != nil {
+		return fmt.Errorf("writing plugin asset %s: %w", hostPath, err)
+	}
+	return nil
 }
 
 func withVLLMModelArg(extraArgs, model string) string {
