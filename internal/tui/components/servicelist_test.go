@@ -3,6 +3,9 @@ package components
 import (
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/x/ansi"
+	zone "github.com/lrstanley/bubblezone"
 )
 
 func TestHealthIndicatorCoversCreatedAndUnknownStates(t *testing.T) {
@@ -50,5 +53,23 @@ func TestServiceListKeepsDeviceColumnForFleetView(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("expected device column to remain visible for multi-device service lists")
+	}
+}
+
+func TestMarqueeKeepsFixedVisibleWidth(t *testing.T) {
+	got := marquee("very-long-service-name", 8, 5, 3)
+	if ansi.StringWidth(got) != 8 {
+		t.Fatalf("expected marquee width 8, got %d (%q)", ansi.StringWidth(got), got)
+	}
+}
+
+func TestSelectedServiceUsesMarqueeInRenderedList(t *testing.T) {
+	zone.NewGlobal()
+	list := NewServiceList([]ServiceRow{{Name: "very-long-service-name", Selected: true}}, 24)
+	list.Cursor = 0
+	list.MarqueeOffset = 4
+	output := list.Render()
+	if !strings.Contains(output, "long") {
+		t.Fatalf("expected rendered selected row to include marquee window, got %q", output)
 	}
 }
