@@ -113,7 +113,7 @@ func (l *LocalNet) Update(msg tea.Msg) (View, tea.Cmd) {
 			if len(l.ips) > 0 {
 				selected := l.ips[l.cursor]
 				_ = selected // TODO: derive subnet, scan for devices, or navigate to SSH creds
-				return l, Navigate(NewSSHCreds(l.cfg, l.version, selected.addr, "", "local"))
+				return l, Navigate(NewSSHCreds(l.cfg, l.version, selected.addr, "", "local", nil))
 			}
 		case "esc":
 			return l, PopView()

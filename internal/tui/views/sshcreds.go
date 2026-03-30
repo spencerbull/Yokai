@@ -39,6 +39,7 @@ type SSHCreds struct {
 	version            string
 	host               string
 	label              string // human-friendly name (e.g. Tailscale hostname)
+	peerTags           []string
 	connectionType     string
 	userInput          textinput.Model
 	sshPortInput       textinput.Model
@@ -55,7 +56,7 @@ type SSHCreds struct {
 // NewSSHCreds creates the SSH credentials view.
 // label is a human-friendly display name for the device (e.g. a Tailscale
 // hostname). When empty, the host address is used as the label.
-func NewSSHCreds(cfg *config.Config, version string, host, label, connType string) *SSHCreds {
+func NewSSHCreds(cfg *config.Config, version string, host, label, connType string, peerTags []string) *SSHCreds {
 	if label == "" {
 		label = host
 	}
@@ -65,6 +66,7 @@ func NewSSHCreds(cfg *config.Config, version string, host, label, connType strin
 		version:        version,
 		host:           host,
 		label:          label,
+		peerTags:       append([]string(nil), peerTags...),
 		connectionType: connType,
 		auth:           authSSHAgent,
 		activeField:    fieldUser,
@@ -301,7 +303,7 @@ func (s *SSHCreds) submit() tea.Cmd {
 		password = s.passwordInput.Value()
 	}
 
-	return Navigate(NewBootstrap(s.cfg, s.version, s.host, s.label, s.connectionType, s.userInput.Value(), sshKey, passphrase, password, sshPort))
+	return Navigate(NewBootstrap(s.cfg, s.version, s.host, s.label, s.connectionType, s.userInput.Value(), sshKey, passphrase, password, sshPort, s.peerTags))
 }
 
 func (s *SSHCreds) View() string {

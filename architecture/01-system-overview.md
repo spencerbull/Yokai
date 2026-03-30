@@ -88,5 +88,9 @@ The TUI SCPs itself to target devices during bootstrap and runs `yokai agent` th
 - **LAN** — devices on the same local network (192.168.x.x, 10.x.x.x)
 - **Manual** — any reachable hostname or IP
 
+During Tailscale onboarding, yokai surfaces peer tags from `tailscale status --json`.
+Servers tagged `tag:ai-gpu` are highlighted in the device picker to make GPU/AI
+nodes easier to identify before SSH bootstrap.
+
 ### Config Portability
 `~/.config/yokai/config.json` contains the entire fleet state. Copy it to a new machine, run `yokai`, and the daemon reconnects to all existing agents automatically.
