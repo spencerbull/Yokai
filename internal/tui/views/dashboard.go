@@ -68,6 +68,8 @@ type Dashboard struct {
 	ramHistory map[string][]float64
 	gpuHistory map[string][]float64 // keyed by "deviceID-gpuIndex"
 	maxSamples int
+
+	marqueeOffset int
 }
 
 // Custom messages for daemon communication
@@ -82,6 +84,8 @@ type DevicesMsg struct {
 }
 
 type tickMsg struct{}
+
+type marqueeTickMsg struct{}
 
 type serviceStopMsg struct {
 	err error
@@ -178,7 +182,7 @@ func NewDashboard(cfg *config.Config, version string) *Dashboard {
 }
 
 func (d *Dashboard) Init() tea.Cmd {
-	return tea.Batch(d.pollMetrics(), d.pollDevices())
+	return tea.Batch(d.pollMetrics(), d.pollDevices(), d.scheduleMarqueeTick())
 }
 
 func (d *Dashboard) Update(msg tea.Msg) (View, tea.Cmd) {
@@ -189,6 +193,7 @@ func (d *Dashboard) Update(msg tea.Msg) (View, tea.Cmd) {
 			d.width = theme.MaxContentWidth - 2*theme.ContentPadding
 		}
 		d.height = msg.Height
+		d.resetMarquee()
 
 	case MetricsMsg:
 		if msg.Error != nil {
@@ -218,6 +223,10 @@ func (d *Dashboard) Update(msg tea.Msg) (View, tea.Cmd) {
 
 	case tickMsg:
 		return d, tea.Batch(d.pollMetrics(), d.pollDevices())
+
+	case marqueeTickMsg:
+		d.marqueeOffset = (d.marqueeOffset + 1) % 4096
+		return d, d.scheduleMarqueeTick()
 
 	case serviceStopMsg:
 		if msg.err != nil {
@@ -262,6 +271,7 @@ func (d *Dashboard) Update(msg tea.Msg) (View, tea.Cmd) {
 						d.selectedDevice = i
 						d.overviewFocus = overviewFocusDevices
 						d.showServiceDetail = false
+						d.resetMarquee()
 						break
 					}
 				}
@@ -270,6 +280,7 @@ func (d *Dashboard) Update(msg tea.Msg) (View, tea.Cmd) {
 						d.selectedDevice = i
 						d.overviewFocus = overviewFocusDevices
 						d.showServiceDetail = false
+						d.resetMarquee()
 						break
 					}
 				}
@@ -277,6 +288,7 @@ func (d *Dashboard) Update(msg tea.Msg) (View, tea.Cmd) {
 					if zone.Get(components.ServiceRowZoneIDWithPrefix(overviewAIServiceZonePrefix, i)).InBounds(msg) {
 						d.overviewFocus = overviewFocusAIServices
 						d.selectedAIServiceID = container.ID
+						d.resetMarquee()
 						break
 					}
 				}
@@ -284,6 +296,7 @@ func (d *Dashboard) Update(msg tea.Msg) (View, tea.Cmd) {
 					if zone.Get(components.ServiceRowZoneIDWithPrefix(overviewMonitoringServiceZonePrefix, i)).InBounds(msg) {
 						d.overviewFocus = overviewFocusMonitoringServices
 						d.selectedMonitoringServiceID = container.ID
+						d.resetMarquee()
 						break
 					}
 				}
@@ -291,6 +304,7 @@ func (d *Dashboard) Update(msg tea.Msg) (View, tea.Cmd) {
 				for i := range d.serviceContainers {
 					if zone.Get(components.ServiceRowZoneID(i)).InBounds(msg) {
 						d.selectedService = i
+						d.resetMarquee()
 						break
 					}
 				}
@@ -312,16 +326,19 @@ func (d *Dashboard) Update(msg tea.Msg) (View, tea.Cmd) {
 		case "esc":
 			if d.showServiceDetail {
 				d.showServiceDetail = false
+				d.resetMarquee()
 				return d, nil
 			}
 			if d.mode == dashboardDeviceDetail {
 				d.mode = dashboardOverview
 				d.selectedService = 0
+				d.resetMarquee()
 				d.updateServiceContainers()
 				return d, nil
 			}
 			if d.mode == dashboardOverview && d.overviewFocus != overviewFocusDevices {
 				d.overviewFocus = overviewFocusDevices
+				d.resetMarquee()
 				return d, nil
 			}
 		case "g":
@@ -591,6 +608,16 @@ func renderOverviewPanel(title, content string, width int, focused bool) string 
 	return theme.RenderPanel(title, content, width)
 }
 
+func (d *Dashboard) scheduleMarqueeTick() tea.Cmd {
+	return tea.Tick(220*time.Millisecond, func(time.Time) tea.Msg {
+		return marqueeTickMsg{}
+	})
+}
+
+func (d *Dashboard) resetMarquee() {
+	d.marqueeOffset = 0
+}
+
 func (d *Dashboard) moveOverviewFocus(delta int) {
 	panels := d.overviewFocusablePanels()
 	if len(panels) == 0 {
@@ -605,7 +632,10 @@ func (d *Dashboard) moveOverviewFocus(delta int) {
 		}
 	}
 	idx = (idx + delta + len(panels)) % len(panels)
-	d.overviewFocus = panels[idx]
+	if d.overviewFocus != panels[idx] {
+		d.overviewFocus = panels[idx]
+		d.resetMarquee()
+	}
 }
 
 func (d *Dashboard) moveOverviewSelection(delta int) {
@@ -633,6 +663,7 @@ func (d *Dashboard) moveOverviewServiceSelection(delta int, focus overviewFocus)
 		idx = len(containers) - 1
 	}
 	d.setOverviewSelectedServiceID(focus, containers[idx].ID)
+	d.resetMarquee()
 }
 
 func (d *Dashboard) openOverviewSelectedService() {
@@ -649,6 +680,7 @@ func (d *Dashboard) openOverviewSelectedService() {
 	}
 	d.mode = dashboardDeviceDetail
 	d.showServiceDetail = true
+	d.resetMarquee()
 	d.updateServiceContainers()
 	for i, candidate := range d.serviceContainers {
 		if candidate.ID == container.ID {
@@ -855,6 +887,7 @@ func (d *Dashboard) enterDeviceDetail() {
 	d.mode = dashboardDeviceDetail
 	d.selectedService = 0
 	d.showServiceDetail = false
+	d.resetMarquee()
 	d.updateServiceContainers()
 }
 
@@ -862,6 +895,7 @@ func (d *Dashboard) moveDeviceSelection(delta int) {
 	if len(d.devices) == 0 {
 		return
 	}
+	old := d.selectedDevice
 	d.selectedDevice += delta
 	if d.selectedDevice < 0 {
 		d.selectedDevice = 0
@@ -870,6 +904,9 @@ func (d *Dashboard) moveDeviceSelection(delta int) {
 		d.selectedDevice = len(d.devices) - 1
 	}
 	d.showServiceDetail = false
+	if old != d.selectedDevice {
+		d.resetMarquee()
+	}
 }
 
 func (d *Dashboard) clampSelectedDevice() {
@@ -1066,6 +1103,9 @@ func (d *Dashboard) renderOverviewServicePanel(title string, containers []Contai
 	serviceList.Cursor = d.overviewServiceCursor(focus, truncated)
 	serviceList.ForceDeviceColumn = true
 	serviceList.ZonePrefix = overviewServiceZonePrefix(focus)
+	if d.overviewFocus == focus {
+		serviceList.MarqueeOffset = d.marqueeOffset
+	}
 	content := serviceList.Render()
 	if len(containers) > len(truncated) {
 		content += "\n" + theme.MutedStyle.Render(fmt.Sprintf("Showing %d of %d services", len(truncated), len(containers)))
@@ -1146,14 +1186,6 @@ func dashboardServiceAlert(container ContainerData) bool {
 	default:
 		return true
 	}
-}
-
-func (d *Dashboard) overviewGPUText(device DashboardDevice) string {
-	name, _, _, _, count := d.deviceGPUStats(device)
-	if count > 1 && name != "" && name != "none" {
-		return fmt.Sprintf("%dx %s", count, name)
-	}
-	return name
 }
 
 func (d *Dashboard) deviceDisplayLabel(device DashboardDevice) string {
@@ -1275,18 +1307,6 @@ func formatOverviewMemoryPair(usedMB, totalMB int64) string {
 	return formatOverviewMem(usedMB) + "/" + formatOverviewMem(totalMB)
 }
 
-func dashboardServiceRowAlert(row components.ServiceRow) bool {
-	switch row.Health {
-	case "unhealthy", "error":
-		return true
-	}
-	switch row.Status {
-	case "exited", "dead", "error", "unhealthy":
-		return true
-	}
-	return false
-}
-
 func (d *Dashboard) fleetServiceAlerts() int {
 	alerts := 0
 	for _, metrics := range d.metrics {
@@ -1321,306 +1341,6 @@ func maxDashboardInt(a, b int) int {
 	return b
 }
 
-// renderWideLayout renders the 3-column btop-style grid (≥140 cols).
-// Row 1: Device cards side-by-side (up to 3)
-// Row 2: CPU | RAM | GPU charts side-by-side
-func (d *Dashboard) renderWideLayout() string {
-	var rows []string
-
-	// Row 1: Device cards
-	if len(d.devices) > 0 {
-		row1 := d.renderDeviceCardsRow(3)
-		if row1 != "" {
-			rows = append(rows, row1)
-		}
-	}
-
-	// Row 2: Sparkline charts (CPU, RAM, GPU) side-by-side
-	if len(d.devices) > 0 {
-		device := d.devices[d.selectedDevice]
-		row2 := d.renderChartsRow(device.ID, 3)
-		if row2 != "" {
-			rows = append(rows, row2)
-		}
-	}
-
-	if len(rows) == 0 {
-		return ""
-	}
-	return lipgloss.JoinVertical(lipgloss.Left, rows...)
-}
-
-// renderMediumLayout renders the 2-column grid (100–139 cols).
-// Row 1: 2 device cards per row
-// Row 2: CPU + RAM charts side-by-side; GPU chart below if present
-func (d *Dashboard) renderMediumLayout() string {
-	var rows []string
-
-	if len(d.devices) > 0 {
-		row1 := d.renderDeviceCardsRow(2)
-		if row1 != "" {
-			rows = append(rows, row1)
-		}
-
-		device := d.devices[d.selectedDevice]
-		row2 := d.renderChartsRow(device.ID, 2)
-		if row2 != "" {
-			rows = append(rows, row2)
-		}
-	}
-
-	if len(rows) == 0 {
-		return ""
-	}
-	return lipgloss.JoinVertical(lipgloss.Left, rows...)
-}
-
-// renderNarrowLayout renders the single-column stack (<100 cols).
-func (d *Dashboard) renderNarrowLayout() string {
-	var rows []string
-
-	if len(d.devices) > 0 {
-		if d.selectedDevice >= len(d.devices) {
-			d.selectedDevice = len(d.devices) - 1
-		}
-		device := d.devices[d.selectedDevice]
-
-		card := d.renderDeviceCardWithGPU(device, d.width)
-		rows = append(rows, card)
-
-		sparklines := d.renderDeviceSparklines(device.ID, d.width)
-		if sparklines != "" {
-			rows = append(rows, sparklines)
-		}
-	}
-
-	if len(rows) == 0 {
-		return ""
-	}
-	return lipgloss.JoinVertical(lipgloss.Left, rows...)
-}
-
-// renderDeviceCardsRow renders device cards side-by-side (up to maxCols).
-// All visible devices are shown; the active device tab is highlighted.
-func (d *Dashboard) renderDeviceCardsRow(maxCols int) string {
-	if len(d.devices) == 0 {
-		return ""
-	}
-
-	// Show all devices (wrap to next row if more than maxCols)
-	numCols := len(d.devices)
-	if numCols > maxCols {
-		numCols = maxCols
-	}
-
-	gap := numCols - 1
-	if gap < 0 {
-		gap = 0
-	}
-	cardWidth := (d.width - gap) / numCols
-	if cardWidth < 24 {
-		cardWidth = 24
-	}
-
-	var cards []string
-	for i, device := range d.devices {
-		if i >= maxCols {
-			break
-		}
-		w := cardWidth
-		// Last card may be slightly wider to fill remaining space
-		if i == numCols-1 {
-			w = d.width - (cardWidth+1)*(numCols-1)
-			if w < cardWidth {
-				w = cardWidth
-			}
-		}
-
-		// Highlight active device with focused border
-		focused := (i == d.selectedDevice)
-		card := d.renderDeviceCardCompact(device, w, focused)
-		cards = append(cards, card)
-	}
-
-	if len(cards) == 0 {
-		return ""
-	}
-	return lipgloss.JoinHorizontal(lipgloss.Top, cards...)
-}
-
-// renderDeviceCardCompact renders a compact device card, optionally with a focus border.
-func (d *Dashboard) renderDeviceCardCompact(device DashboardDevice, width int, focused bool) string {
-	var gpus []components.GPUMetrics
-	if m, ok := d.metrics[device.ID]; ok {
-		for _, gpu := range m.GPUs {
-			gpus = append(gpus, components.GPUMetrics{
-				Name:        gpu.Name,
-				UtilPercent: gpu.UtilPercent,
-				VRAMUsedMB:  gpu.VRAMUsedMB,
-				VRAMTotalMB: gpu.VRAMTotalMB,
-				TempC:       gpu.TempC,
-				PowerDrawW:  float64(gpu.PowerDrawW),
-				PowerLimitW: float64(gpu.PowerLimitW),
-				FanPercent:  gpu.FanPercent,
-			})
-		}
-	}
-
-	card := components.NewDeviceCardFull(
-		device.Label,
-		device.Host,
-		device.Online,
-		device.CPUPercent,
-		device.RAMPercent,
-		device.ServiceCount,
-		gpus,
-		width,
-	)
-	card.Focused = focused
-	return card.Render()
-}
-
-// renderChartsRow renders CPU/RAM/GPU stream charts side-by-side.
-// numCols determines how many charts to show per row.
-func (d *Dashboard) renderChartsRow(deviceID string, numCols int) string {
-	cpuVals := d.cpuHistory[deviceID]
-	ramVals := d.ramHistory[deviceID]
-
-	// Get GPU history
-	var gpuVals []float64
-	var gpuLabel string
-	if m, ok := d.metrics[deviceID]; ok {
-		for _, gpu := range m.GPUs {
-			historyKey := fmt.Sprintf("%s-%d", deviceID, gpu.Index)
-			if vals, ok := d.gpuHistory[historyKey]; ok && len(vals) > 0 {
-				gpuVals = vals
-				gpuLabel = fmt.Sprintf("GPU %d%%", gpu.UtilPercent)
-				break
-			}
-		}
-	}
-
-	// Collect charts that have data
-	type chartSpec struct {
-		label  string
-		values []float64
-		color  lipgloss.Color
-	}
-	var chartSpecs []chartSpec
-
-	if len(cpuVals) > 0 {
-		label := fmt.Sprintf(" CPU %.0f%%", cpuVals[len(cpuVals)-1])
-		chartSpecs = append(chartSpecs, chartSpec{label, cpuVals, theme.Good})
-	}
-	if len(ramVals) > 0 {
-		label := fmt.Sprintf(" RAM %.0f%%", ramVals[len(ramVals)-1])
-		chartSpecs = append(chartSpecs, chartSpec{label, ramVals, theme.Accent})
-	}
-	if len(gpuVals) > 0 {
-		chartSpecs = append(chartSpecs, chartSpec{" " + gpuLabel, gpuVals, theme.Warn})
-	}
-
-	if len(chartSpecs) == 0 {
-		return ""
-	}
-
-	// If more charts than columns, truncate to numCols (GPU may wrap in medium layout)
-	if len(chartSpecs) > numCols {
-		chartSpecs = chartSpecs[:numCols]
-	}
-
-	n := len(chartSpecs)
-	gap := n - 1
-	if gap < 0 {
-		gap = 0
-	}
-	chartWidth := (d.width - gap) / n
-	if chartWidth < 20 {
-		chartWidth = 20
-	}
-	chartHeight := 6
-
-	var charts []string
-	for i, spec := range chartSpecs {
-		val := spec.values[len(spec.values)-1]
-		titleStyle := utilColorStyle(val)
-		chartTitle := titleStyle.Render(spec.label)
-		w := chartWidth
-		if i == n-1 {
-			w = d.width - (chartWidth+1)*(n-1)
-			if w < chartWidth {
-				w = chartWidth
-			}
-		}
-		iw := w - 4
-		if iw < 10 {
-			iw = 10
-		}
-		sc := components.NewStreamChartGradient(spec.label, spec.values, iw, chartHeight, spec.color)
-		charts = append(charts, theme.RenderPanel(chartTitle, sc.Render(), w))
-	}
-
-	return lipgloss.JoinHorizontal(lipgloss.Top, charts...)
-}
-
-// renderDeviceTabBar renders the device tab selector in btop style.
-func (d *Dashboard) renderDeviceTabBar() string {
-	var tabs []string
-
-	activeLabelStyle := lipgloss.NewStyle().
-		Foreground(theme.Background).
-		Background(theme.Accent).
-		Bold(true).
-		Padding(0, 1)
-
-	inactiveStyle := lipgloss.NewStyle().
-		Foreground(theme.TextMuted).
-		Padding(0, 1)
-
-	for i, device := range d.devices {
-		label := device.Label
-		if label == "" {
-			label = device.ID
-		}
-		// Add status dot
-		dot := theme.StatusOffline()
-		if device.Online {
-			dot = theme.StatusOnline()
-		}
-		tabLabel := dot + " " + label
-
-		zoneID := fmt.Sprintf("device-tab-%d", i)
-		if i == d.selectedDevice {
-			rendered := activeLabelStyle.Render(tabLabel)
-			tabs = append(tabs, zone.Mark(zoneID, rendered))
-		} else {
-			tabs = append(tabs, zone.Mark(zoneID, inactiveStyle.Render(tabLabel)))
-		}
-	}
-
-	tabRow := lipgloss.JoinHorizontal(lipgloss.Center, tabs...)
-	hint := theme.MutedStyle.Render("  h/l: switch")
-
-	// Separator line below tabs
-	sepLine := lipgloss.NewStyle().
-		Foreground(theme.Border).
-		Render(strings.Repeat("─", d.width))
-
-	return tabRow + hint + "\n" + sepLine
-}
-
-// utilColorStyle returns a lipgloss style colored by utilization threshold.
-func utilColorStyle(val float64) lipgloss.Style {
-	switch {
-	case val >= 80:
-		return lipgloss.NewStyle().Foreground(theme.Crit).Bold(true)
-	case val >= 50:
-		return lipgloss.NewStyle().Foreground(theme.Warn).Bold(true)
-	default:
-		return lipgloss.NewStyle().Foreground(theme.Good).Bold(true)
-	}
-}
-
 // moveDeviceTab changes the active device tab by delta, wrapping around.
 func (d *Dashboard) moveDeviceTab(delta int) {
 	if len(d.devices) == 0 {
@@ -1630,6 +1350,7 @@ func (d *Dashboard) moveDeviceTab(delta int) {
 	// Reset service selection when switching devices
 	d.selectedService = 0
 	d.showServiceDetail = false
+	d.resetMarquee()
 	d.updateServiceContainers()
 }
 
@@ -1763,27 +1484,12 @@ func (d *Dashboard) renderErrorBanner() string {
 		Render(content)
 }
 
-func (d *Dashboard) renderHeader() string {
-	deviceCount := len(d.devices)
-	serviceCount := 0
-	for _, device := range d.devices {
-		serviceCount += device.ServiceCount
-	}
-
-	headerText := fmt.Sprintf("yokai — %d device(s), %d service(s)  v%s",
-		deviceCount, serviceCount, d.version)
-
-	return lipgloss.NewStyle().
-		Foreground(theme.Accent).
-		Bold(true).
-		Render(headerText)
-}
-
 func (d *Dashboard) renderServiceList() string {
 	serviceRows := d.buildServiceRows()
 
 	serviceList := components.NewServiceList(serviceRows, d.width-4)
 	serviceList.Cursor = d.selectedService
+	serviceList.MarqueeOffset = d.marqueeOffset
 
 	titleText := "Services"
 	if d.mode == dashboardDeviceDetail {
@@ -1927,12 +1633,16 @@ func (d *Dashboard) moveServiceCursor(delta int) {
 		return
 	}
 
+	old := d.selectedService
 	d.selectedService += delta
 	if d.selectedService < 0 {
 		d.selectedService = 0
 	}
 	if d.selectedService >= serviceCount {
 		d.selectedService = serviceCount - 1
+	}
+	if old != d.selectedService {
+		d.resetMarquee()
 	}
 }
 
