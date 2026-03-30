@@ -13,8 +13,9 @@ View hierarchy, navigation state machine, and keybindings.
 | 2 | SSH Credentials | `sshcreds.go` | After device selection | 1a/1b/1c |
 | 3 | Bootstrap | `bootstrap.go` | After SSH connect | SSH Creds |
 | 4 | HF Token | `hftoken.go` | After all devices bootstrapped | Bootstrap |
-| 5 | Dashboard | `dashboard.go` | After onboarding / default view | — (home) |
-| 5a | Service Detail | `dashboard.go` | Enter on service row | Dashboard |
+| 5 | Dashboard Overview | `dashboard.go` | After onboarding / default view | — (home) |
+| 5a | Device Detail | `dashboard.go` | Enter on device row | Dashboard Overview |
+| 5b | Service Detail | `dashboard.go` | Enter on service row in device detail | Device Detail |
 | 6 | Deploy Wizard | `deploy.go` | `n` from Dashboard | Dashboard |
 | 7 | Device Manager | `devices.go` | `d` from Dashboard | Dashboard |
 | 8 | Log Viewer | `logs.go` | `l` from Dashboard | Dashboard |
@@ -54,7 +55,7 @@ View hierarchy, navigation state machine, and keybindings.
                                 │
                                 ▼
   ┌─────────────────────────────────────────────────────────┐
-  │                    DASHBOARD (5)                         │  ◄── HOME
+  │                DASHBOARD OVERVIEW (5)                    │  ◄── HOME
   │                                                         │
   │  Global keybinds:                                       │
   │    n → Deploy Wizard (6)                                │
@@ -65,11 +66,15 @@ View hierarchy, navigation state machine, and keybindings.
   │    ? → Help Overlay (10)                                │
   │    q → Quit                                             │
   │                                                         │
-  │  In-dashboard:                                          │
-  │    Tab/Shift+Tab → cycle panel focus                    │
-  │    ↑/↓           → navigate within panel                │
-  │    1-9           → quick-switch device                  │
-  │    Enter          → expand service detail (5a)          │
+  │  Overview:                                              │
+  │    ↑/↓           → select device                        │
+  │    Enter         → open device detail (5a)             │
+  │                                                         │
+  │  Device detail:                                         │
+  │    h/l           → switch device                        │
+  │    ↑/↓           → select service                       │
+  │    Enter         → expand service detail (5b)          │
+  │    Esc           → return to overview                  │
   │    s             → stop selected service                │
   │    r             → restart selected service             │
   │                                                         │
@@ -129,15 +134,27 @@ Backspace at any step → go to previous step
 | `?` | Help | Help Overlay |
 | `q` | Quit | — |
 
-### Dashboard
+### Dashboard Overview
 
 | Key | Action |
 |-----|--------|
-| `Tab` | Cycle panel focus |
-| `Shift+Tab` | Reverse cycle |
-| `↑`/`↓` | Navigate within panel |
-| `1`-`9` | Quick-switch device |
+| `Tab` / `Shift+Tab` | Switch overview panel |
+| `↑`/`↓` | Move within focused panel |
+| `Enter` | Open device detail or inspect selected service |
+| `L` | Open logs for selected service |
+| `s` / `r` / `t` / `x` | Act on selected service |
+| `Esc` | Return focus to devices panel |
+| `n` | Open deploy wizard |
+| `d` | Open device manager |
+
+### Device Detail
+
+| Key | Action |
+|-----|--------|
+| `h`/`l` | Switch device |
+| `↑`/`↓` | Select service |
 | `Enter` | Expand/collapse service detail |
+| `Esc` | Return to dashboard overview |
 | `s` | Stop selected service |
 | `r` | Restart selected service |
 
@@ -160,6 +177,12 @@ Backspace at any step → go to previous step
 | `Space` | Toggle selection (multi-select) |
 | `Tab` | Next field |
 | `Esc` | Cancel |
+
+### Tailscale Flow Notes
+
+- The Tailscale picker reads peers from `tailscale status --json`.
+- Peer rows surface Tailscale ACL tags, with `tag:ai-gpu` highlighted as `AI GPU`.
+- Press `h` in the Tailscale flow to expand inline instructions for creating and applying the recommended Tailscale tag.
 
 ### Device Manager
 

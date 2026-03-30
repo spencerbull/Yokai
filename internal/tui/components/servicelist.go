@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	zone "github.com/lrstanley/bubblezone"
 	"github.com/spencerbull/yokai/internal/tui/theme"
 )
@@ -29,9 +30,13 @@ type ServiceRow struct {
 
 // ServiceList renders a table of services.
 type ServiceList struct {
-	Services []ServiceRow
-	Cursor   int
-	Width    int
+	Services          []ServiceRow
+	Cursor            int
+	Width             int
+	ForceDeviceColumn bool
+	ZonePrefix        string
+	MarqueeOffset     int
+	MarqueeGap        int
 }
 
 // NewServiceList creates a new service list with the given parameters.
@@ -70,6 +75,8 @@ func (s ServiceList) activeColumns() []column {
 	hasGPUMem := false
 	hasToks := false
 	hasPrefill := false
+	hasMultipleDevices := false
+	deviceName := ""
 	for _, svc := range s.Services {
 		if svc.Model != "" {
 			hasModel = true
@@ -83,10 +90,20 @@ func (s ServiceList) activeColumns() []column {
 		if svc.PromptTokPerSec > 0 {
 			hasPrefill = true
 		}
+		if svc.Device != "" {
+			if deviceName == "" {
+				deviceName = svc.Device
+			} else if svc.Device != deviceName {
+				hasMultipleDevices = true
+			}
+		}
 	}
 
 	var cols []column
 	for _, col := range allColumns {
+		if col.id == "device" && !s.ForceDeviceColumn && !hasMultipleDevices {
+			continue
+		}
 		if col.id == "model" && !hasModel {
 			continue
 		}
@@ -176,6 +193,9 @@ func (s ServiceList) cellValue(svc ServiceRow, col column, width int) string {
 	case "health":
 		return s.healthIndicator(svc)
 	case "service":
+		if svc.Selected {
+			return marquee(svc.Name, width, s.MarqueeOffset, s.marqueeGap())
+		}
 		return truncate(svc.Name, width)
 	case "model":
 		model := svc.Model
@@ -215,7 +235,7 @@ func (s ServiceList) renderRow(svc ServiceRow, widths []int, cols []column, rowI
 	for i, col := range cols {
 		cell := s.cellValue(svc, col, widths[i])
 		if col.id == "health" {
-			parts = append(parts, cell+strings.Repeat(" ", max(0, widths[i]-1)))
+			parts = append(parts, cell+strings.Repeat(" ", max(0, widths[i]-ansi.StringWidth(cell))))
 		} else {
 			parts = append(parts, pad(cell, widths[i]))
 		}
@@ -223,7 +243,7 @@ func (s ServiceList) renderRow(svc ServiceRow, widths []int, cols []column, rowI
 
 	row := strings.Join(parts, " ")
 
-	zoneID := ServiceRowZoneID(rowIdx)
+	zoneID := ServiceRowZoneIDWithPrefix(s.ZonePrefix, rowIdx)
 
 	if svc.Selected {
 		bar := lipgloss.NewStyle().
@@ -303,29 +323,67 @@ func (s ServiceList) healthIndicator(svc ServiceRow) string {
 // ServiceRowZoneID returns the zone ID for a service row at the given index.
 // Used by both the service list renderer and the dashboard mouse handler.
 func ServiceRowZoneID(rowIdx int) string {
-	return fmt.Sprintf("svc-row-%d", rowIdx)
+	return ServiceRowZoneIDWithPrefix("", rowIdx)
+}
+
+func ServiceRowZoneIDWithPrefix(prefix string, rowIdx int) string {
+	if prefix == "" {
+		return fmt.Sprintf("svc-row-%d", rowIdx)
+	}
+	return fmt.Sprintf("%s-svc-row-%d", prefix, rowIdx)
+}
+
+func (s ServiceList) marqueeGap() int {
+	if s.MarqueeGap > 0 {
+		return s.MarqueeGap
+	}
+	return 3
 }
 
 // helpers
 
 func pad(s string, width int) string {
-	if len(s) >= width {
-		return s[:width]
+	if width <= 0 {
+		return ""
 	}
-	return s + strings.Repeat(" ", width-len(s))
+	s = ansi.Truncate(s, width, "")
+	if sw := ansi.StringWidth(s); sw < width {
+		return s + strings.Repeat(" ", width-sw)
+	}
+	return s
 }
 
 func truncate(s string, width int) string {
 	if width <= 0 {
 		return ""
 	}
-	if len(s) <= width {
+	if ansi.StringWidth(s) <= width {
 		return s
 	}
-	if width <= 3 {
-		return s[:width]
+	if width == 1 {
+		return ansi.Truncate(s, width, "")
 	}
-	return s[:width-1] + "…"
+	return ansi.Truncate(s, width, "…")
+}
+
+func marquee(s string, width, offset, gap int) string {
+	if width <= 0 {
+		return ""
+	}
+	if ansi.StringWidth(s) <= width {
+		return pad(s, width)
+	}
+	if gap < 1 {
+		gap = 1
+	}
+	cycle := s + strings.Repeat(" ", gap) + s
+	cycleWidth := ansi.StringWidth(s) + gap
+	if cycleWidth <= 0 {
+		return pad(s, width)
+	}
+	start := offset % cycleWidth
+	window := ansi.Cut(cycle, start, start+width)
+	return pad(window, width)
 }
 
 func formatMem(mb int64) string {

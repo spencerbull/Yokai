@@ -74,6 +74,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// and the current view doesn't have an active text input that needs
 		// raw key events like tab, digits, etc.)
 		if a.showTabs && len(a.viewStack) == 0 && !a.currentView.InputActive() {
+			if a.currentView.Name() == "Dashboard" && (msg.String() == "tab" || msg.String() == "shift+tab") {
+				break
+			}
 			if cmd := a.handleTabKey(msg.String()); cmd != nil {
 				return a, cmd
 			}
@@ -196,24 +199,18 @@ func (a *App) View() string {
 		contentWidth = theme.MaxContentWidth
 	}
 
-	var sections []string
-
-	// Tab bar (shown when tabs are active)
+	var tabBarView string
 	if a.showTabs {
 		tabBar := components.NewTabBar(components.DefaultTabs(), a.activeTab, contentWidth)
-		sections = append(sections, tabBar.Render())
+		tabBarView = tabBar.Render()
 	}
 
-	// Main content
 	content := a.currentView.View()
-	sections = append(sections, content)
 
-	// Status bar at the bottom
 	statusBar := a.buildStatusBar(contentWidth)
-	sections = append(sections, statusBar.Render())
+	statusBarView := statusBar.Render()
 
-	assembled := lipgloss.JoinVertical(lipgloss.Center, sections...)
-	output := lipgloss.Place(a.width, a.height, lipgloss.Center, lipgloss.Top, assembled)
+	output := a.renderShell(tabBarView, content, statusBarView)
 
 	// Overlay toasts in the top-right corner with a 1-char right margin
 	if toastView := a.toasts.View(a.width); toastView != "" {
@@ -230,9 +227,74 @@ func (a *App) View() string {
 	return zone.Scan(output)
 }
 
+func (a *App) renderShell(tabBarView, content, statusBarView string) string {
+	if a.currentView.Name() == "Dashboard" {
+		return a.renderCenteredDashboardShell(tabBarView, content, statusBarView)
+	}
+
+	var sections []string
+	if tabBarView != "" {
+		sections = append(sections, tabBarView)
+	}
+	sections = append(sections, content, statusBarView)
+	assembled := lipgloss.JoinVertical(lipgloss.Center, sections...)
+	return lipgloss.Place(a.width, a.height, lipgloss.Center, lipgloss.Top, assembled)
+}
+
+func (a *App) renderCenteredDashboardShell(tabBarView, content, statusBarView string) string {
+	tabHeight := renderedLineCount(tabBarView)
+	statusHeight := renderedLineCount(statusBarView)
+	bodyHeight := a.height - tabHeight - statusHeight
+	contentHeight := renderedLineCount(content)
+	if bodyHeight <= 0 || contentHeight >= bodyHeight {
+		return a.renderShellFallback(tabBarView, content, statusBarView)
+	}
+
+	var sections []string
+	if tabBarView != "" {
+		sections = append(sections, lipgloss.Place(a.width, tabHeight, lipgloss.Center, lipgloss.Top, tabBarView))
+	}
+	sections = append(sections, lipgloss.Place(a.width, bodyHeight, lipgloss.Center, lipgloss.Center, content))
+	sections = append(sections, lipgloss.Place(a.width, statusHeight, lipgloss.Center, lipgloss.Bottom, statusBarView))
+	return stackRenderedBlocks(sections...)
+}
+
+func (a *App) renderShellFallback(tabBarView, content, statusBarView string) string {
+	var sections []string
+	if tabBarView != "" {
+		sections = append(sections, tabBarView)
+	}
+	sections = append(sections, content, statusBarView)
+	assembled := lipgloss.JoinVertical(lipgloss.Center, sections...)
+	return lipgloss.Place(a.width, a.height, lipgloss.Center, lipgloss.Top, assembled)
+}
+
+func renderedLineCount(s string) int {
+	if s == "" {
+		return 0
+	}
+	return strings.Count(s, "\n") + 1
+}
+
+func stackRenderedBlocks(blocks ...string) string {
+	var lines []string
+	for _, block := range blocks {
+		if block == "" {
+			continue
+		}
+		lines = append(lines, strings.Split(block, "\n")...)
+	}
+	return strings.Join(lines, "\n")
+}
+
 // navigate pushes current view onto stack and switches to the target.
 func (a *App) navigate(msg views.NavigateMsg) (tea.Model, tea.Cmd) {
 	if msg.Replace {
+		if _, ok := msg.Target.(*views.Dashboard); ok {
+			a.viewStack = nil
+			a.showTabs = true
+			a.activeTab = tabDashboard
+		}
 		a.currentView = msg.Target
 	} else {
 		a.viewStack = append(a.viewStack, a.currentView)
