@@ -436,6 +436,9 @@ func (dm *DeviceManager) View() string {
 		detail += fmt.Sprintf("  Connection: %s\n", dev.ConnectionType)
 		detail += fmt.Sprintf("  Agent Port: %d\n", dev.AgentPort)
 		detail += fmt.Sprintf("  GPU Type:   %s\n", dev.GPUType)
+		if len(dev.Tags) > 0 {
+			detail += fmt.Sprintf("  Tags:       %s\n", strings.Join(dev.Tags, ", "))
+		}
 
 		// Show connection test result if available
 		if dm.testing[dev.ID] {

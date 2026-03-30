@@ -2,13 +2,16 @@ package ssh
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -19,12 +22,31 @@ import (
 
 // ClientConfig holds SSH connection parameters.
 type ClientConfig struct {
-	Host          string
-	Port          string
-	User          string
-	KeyPath       string // path to private key, empty to try defaults
-	KeyPassphrase string // passphrase for encrypted private key
-	Password      string // fallback password auth
+	Host           string
+	Port           string
+	User           string
+	ConnectionType string
+	KeyPath        string // path to private key, empty to try defaults
+	KeyPassphrase  string // passphrase for encrypted private key
+	Password       string // fallback password auth
+}
+
+// TailscaleAuthError indicates the remote requires a browser-based Tailscale SSH check.
+type TailscaleAuthError struct {
+	URL    string
+	Output string
+	err    error
+}
+
+func (e *TailscaleAuthError) Error() string {
+	if e.URL == "" {
+		return "tailscale ssh requires browser authentication"
+	}
+	return "tailscale ssh requires browser authentication: " + e.URL
+}
+
+func (e *TailscaleAuthError) Unwrap() error {
+	return e.err
 }
 
 // Client wraps an SSH connection.
@@ -71,10 +93,61 @@ func Connect(cfg ClientConfig) (*Client, error) {
 	addr := net.JoinHostPort(cfg.Host, cfg.Port)
 	conn, err := ssh.Dial("tcp", addr, sshConfig)
 	if err != nil {
+		if authErr := probeTailscaleAuth(cfg, err); authErr != nil {
+			return nil, authErr
+		}
 		return nil, fmt.Errorf("SSH dial %s: %w", addr, err)
 	}
 
 	return &Client{conn: conn, config: cfg}, nil
+}
+
+var tailscaleAuthURLPattern = regexp.MustCompile(`https://[^\s"']+`)
+
+func probeTailscaleAuth(cfg ClientConfig, originalErr error) error {
+	if !usesTailscaleSSHProbe(cfg) {
+		return nil
+	}
+	if _, err := exec.LookPath("tailscale"); err != nil {
+		return nil
+	}
+
+	target := cfg.Host
+	if cfg.User != "" {
+		target = cfg.User + "@" + target
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "tailscale", "ssh", target, "--", "true")
+	out, _ := cmd.CombinedOutput()
+	output := strings.TrimSpace(string(out))
+	url := extractTailscaleAuthURL(output)
+	if url == "" {
+		return nil
+	}
+
+	return &TailscaleAuthError{
+		URL:    url,
+		Output: output,
+		err:    originalErr,
+	}
+}
+
+func extractTailscaleAuthURL(output string) string {
+	return tailscaleAuthURLPattern.FindString(output)
+}
+
+func usesTailscaleSSHProbe(cfg ClientConfig) bool {
+	if strings.EqualFold(cfg.ConnectionType, "tailscale") {
+		return true
+	}
+	host := strings.ToLower(strings.TrimSpace(cfg.Host))
+	if host == "" {
+		return false
+	}
+	return strings.HasSuffix(host, ".ts.net") || strings.HasPrefix(host, "100.") || strings.HasPrefix(host, "fd7a:")
 }
 
 func tolerateKnownHostsKeyTypeMismatch(cb ssh.HostKeyCallback) ssh.HostKeyCallback {

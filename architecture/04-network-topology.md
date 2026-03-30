@@ -42,6 +42,10 @@ Tailscale provides:
 - NAT traversal — works across different networks, firewalls
 - No port forwarding needed on routers
 
+Yokai also reads `tailscale status --json` during Tailscale onboarding so the
+device picker can surface server tags such as `tag:ai-gpu`. The tag is used as
+an enrollment hint only; SSH bootstrap still targets the device's Tailscale IP.
+
 ### LAN Connection
 
 ```
