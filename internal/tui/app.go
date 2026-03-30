@@ -215,15 +215,13 @@ func (a *App) View() string {
 	assembled := lipgloss.JoinVertical(lipgloss.Center, sections...)
 	output := lipgloss.Place(a.width, a.height, lipgloss.Center, lipgloss.Top, assembled)
 
-	// Overlay toasts in the top-right corner
+	// Overlay toasts in the top-right corner with a 1-char right margin
 	if toastView := a.toasts.View(a.width); toastView != "" {
-		// Render toasts on top of the first lines of output
 		toastLines := strings.Split(toastView, "\n")
 		outputLines := strings.Split(output, "\n")
 		for i, tl := range toastLines {
 			if i < len(outputLines) {
-				// Overlay toast line (right-aligned) onto the output line
-				outputLines[i] = overlayRight(outputLines[i], tl, a.width)
+				outputLines[i] = overlayRight(outputLines[i], tl+" ", a.width)
 			}
 		}
 		output = strings.Join(outputLines, "\n")

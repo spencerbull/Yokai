@@ -49,14 +49,16 @@ func Connect(cfg ClientConfig) (*Client, error) {
 		return nil, fmt.Errorf("resolving SSH auth: %w", err)
 	}
 
-	// Build known_hosts callback (permissive if file doesn't exist)
+	// Build known_hosts callback that learns first-seen hosts like OpenSSH.
 	hostKeyCallback := ssh.InsecureIgnoreHostKey()
 	knownHostsPath := expandPath("~/.ssh/known_hosts")
 	if _, err := os.Stat(knownHostsPath); err == nil {
 		cb, err := knownhosts.New(knownHostsPath)
 		if err == nil {
-			hostKeyCallback = tolerateKnownHostsKeyTypeMismatch(cb)
+			hostKeyCallback = addUnknownHostToKnownHosts(knownHostsPath, tolerateKnownHostsKeyTypeMismatch(cb))
 		}
+	} else if errors.Is(err, os.ErrNotExist) {
+		hostKeyCallback = addUnknownHostToKnownHosts(knownHostsPath, hostKeyCallback)
 	}
 
 	sshConfig := &ssh.ClientConfig{
@@ -99,6 +101,47 @@ func tolerateKnownHostsKeyTypeMismatch(cb ssh.HostKeyCallback) ssh.HostKeyCallba
 
 		return nil
 	}
+}
+
+func addUnknownHostToKnownHosts(path string, cb ssh.HostKeyCallback) ssh.HostKeyCallback {
+	return func(hostname string, remote net.Addr, key ssh.PublicKey) error {
+		err := cb(hostname, remote, key)
+		if err == nil {
+			return nil
+		}
+
+		var keyErr *knownhosts.KeyError
+		if !errors.As(err, &keyErr) || len(keyErr.Want) != 0 {
+			return err
+		}
+
+		if writeErr := appendKnownHost(path, hostname, key); writeErr != nil {
+			return fmt.Errorf("adding %s to known_hosts: %w", hostname, writeErr)
+		}
+
+		return nil
+	}
+}
+
+func appendKnownHost(path, hostname string, key ssh.PublicKey) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+
+	line := knownhosts.Line([]string{hostname}, key) + "\n"
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = f.Close()
+	}()
+
+	if _, err := f.WriteString(line); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // Close closes the SSH connection.
