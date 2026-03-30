@@ -1,8 +1,11 @@
 package views
 
 import (
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -55,6 +58,54 @@ type AITools struct {
 type aiToolsConfigMsg struct {
 	results []toolResult
 	err     error // overall error (e.g., no services)
+}
+
+func resolveOpenAIModelIDs(client *http.Client, host string, port int, fallback string) ([]string, bool) {
+	fallback = strings.TrimSpace(fallback)
+	baseURL := fmt.Sprintf("http://%s:%d/v1/models", host, port)
+	req, err := http.NewRequest(http.MethodGet, baseURL, nil)
+	if err != nil {
+		return nil, false
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, false
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, false
+	}
+
+	var payload struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil || len(payload.Data) == 0 {
+		if fallback == "" {
+			return nil, true
+		}
+		return []string{fallback}, true
+	}
+
+	seen := make(map[string]bool, len(payload.Data))
+	models := make([]string, 0, len(payload.Data))
+	for _, model := range payload.Data {
+		id := strings.TrimSpace(model.ID)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		models = append(models, id)
+	}
+	if len(models) == 0 && fallback != "" {
+		return []string{fallback}, true
+	}
+	return models, true
 }
 
 // NewAITools creates the AI tools configuration view.
@@ -175,6 +226,8 @@ func (a *AITools) configureSelected(selected []string) tea.Cmd {
 			serviceID string
 		}
 
+		httpClient := &http.Client{Timeout: 5 * time.Second}
+
 		// Build device lookup set
 		deviceByID := make(map[string]config.Device)
 		for _, dev := range devices {
@@ -194,14 +247,19 @@ func (a *AITools) configureSelected(selected []string) tea.Cmd {
 			if modelName == "" {
 				modelName = svc.Type
 			}
-
-			endpoints = append(endpoints, endpoint{
-				host:      dev.Host,
-				port:      svc.Port,
-				modelID:   svc.ID,
-				modelName: modelName,
-				serviceID: svc.ID,
-			})
+			resolved, reachable := resolveOpenAIModelIDs(httpClient, dev.Host, svc.Port, modelName)
+			if !reachable {
+				continue
+			}
+			for _, resolvedModelID := range resolved {
+				endpoints = append(endpoints, endpoint{
+					host:      dev.Host,
+					port:      svc.Port,
+					modelID:   resolvedModelID,
+					modelName: resolvedModelID,
+					serviceID: svc.ID,
+				})
+			}
 		}
 
 		if len(endpoints) == 0 {

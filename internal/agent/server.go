@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -50,6 +51,7 @@ func Run(port string, version string) error {
 	mux.HandleFunc("POST /containers/{id}/stop", requireAuth(handleContainerStop))
 	mux.HandleFunc("DELETE /containers/{id}", requireAuth(handleContainerDelete))
 	mux.HandleFunc("POST /containers/{id}/restart", requireAuth(handleContainerRestart))
+	mux.HandleFunc("POST /containers/{id}/test", requireAuth(handleContainerTest))
 	mux.HandleFunc("GET /containers/{id}/logs", requireAuth(handleContainerLogs))
 	mux.HandleFunc("POST /images/pull", requireAuth(handleImagePull))
 	mux.HandleFunc("GET /images/tags/{image...}", requireAuth(handleImageTags))
@@ -397,6 +399,40 @@ func handleContainerRestart(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func handleContainerTest(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "missing_id", "Container ID is required")
+		return
+	}
+
+	containers, err := listContainers()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "docker_error", err.Error())
+		return
+	}
+
+	var target *Container
+	for i := range containers {
+		if containers[i].ID == id || strings.HasPrefix(containers[i].ID, id) || containers[i].Name == id {
+			target = &containers[i]
+			break
+		}
+	}
+	if target == nil {
+		writeError(w, http.StatusNotFound, "container_not_found", fmt.Sprintf("Container %s not found", id))
+		return
+	}
+
+	result, err := testContainerService(*target)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "service_test_failed", err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
 func handleContainerLogs(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if id == "" {
@@ -437,29 +473,46 @@ func handleContainerLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Stream stdout
-	go func() {
-		scanner := bufio.NewScanner(stdout)
-		for scanner.Scan() {
-			_, _ = fmt.Fprintf(w, "data: %s\n\n", scanner.Text()) // Best-effort SSE write to client.
-			flusher.Flush()
-		}
-	}()
+	type logEvent struct {
+		line string
+	}
+	logCh := make(chan logEvent, 64)
+	scanDone := make(chan struct{}, 2)
 
-	// Stream stderr
-	go func() {
-		scanner := bufio.NewScanner(stderr)
-		for scanner.Scan() {
-			_, _ = fmt.Fprintf(w, "data: [stderr] %s\n\n", scanner.Text()) // Best-effort SSE write to client.
-			flusher.Flush()
-		}
-	}()
+	startScan := func(reader io.Reader, prefix string) {
+		go func() {
+			defer func() { scanDone <- struct{}{} }()
+			scanner := bufio.NewScanner(reader)
+			scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+			for scanner.Scan() {
+				line := scanner.Text()
+				if prefix != "" {
+					line = prefix + line
+				}
+				select {
+				case logCh <- logEvent{line: line}:
+				case <-r.Context().Done():
+					return
+				}
+			}
+			if err := scanner.Err(); err != nil {
+				select {
+				case logCh <- logEvent{line: "[stderr] scanner error: " + err.Error()}:
+				case <-r.Context().Done():
+				}
+			}
+		}()
+	}
+
+	startScan(stdout, "")
+	startScan(stderr, "[stderr] ")
 
 	// Wait for command to finish or client disconnect
 	done := make(chan error, 1)
 	go func() {
 		done <- cmd.Wait()
 	}()
+	completedScans := 0
 
 	select {
 	case <-r.Context().Done():
@@ -468,8 +521,37 @@ func handleContainerLogs(w http.ResponseWriter, r *http.Request) {
 				log.Printf("failed to kill docker logs process: %v", err)
 			}
 		}
-	case <-done:
-		// Command finished
+		return
+	default:
+	}
+
+	for {
+		select {
+		case <-r.Context().Done():
+			if cmd.Process != nil {
+				if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+					log.Printf("failed to kill docker logs process: %v", err)
+				}
+			}
+			return
+		case event := <-logCh:
+			if event.line != "" {
+				_, _ = fmt.Fprintf(w, "data: %s\n\n", event.line)
+				flusher.Flush()
+			}
+		case <-scanDone:
+			completedScans++
+			if completedScans == 2 {
+				if cmd.ProcessState == nil || !cmd.ProcessState.Exited() {
+					<-done
+				}
+				return
+			}
+		case <-done:
+			if completedScans >= 2 {
+				return
+			}
+		}
 	}
 }
 

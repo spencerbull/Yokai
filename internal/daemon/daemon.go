@@ -57,6 +57,7 @@ func Run(version string) error {
 	mux.HandleFunc("POST /containers/{deviceID}/{containerID}/stop", d.handleStopContainer)
 	mux.HandleFunc("DELETE /containers/{deviceID}/{containerID}/remove", d.handleRemoveContainer)
 	mux.HandleFunc("POST /containers/{deviceID}/{containerID}/restart", d.handleRestartContainer)
+	mux.HandleFunc("POST /containers/{deviceID}/{containerID}/test", d.handleTestContainer)
 	mux.HandleFunc("GET /logs/{deviceID}/{containerID}", d.handleLogs)
 	mux.HandleFunc("GET /images/tags", d.handleImageTags)
 	mux.HandleFunc("POST /reload", d.handleReload)
@@ -215,6 +216,22 @@ func (d *Daemon) handleRestartContainer(w http.ResponseWriter, r *http.Request) 
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "restarted"})
+}
+
+func (d *Daemon) handleTestContainer(w http.ResponseWriter, r *http.Request) {
+	deviceID := r.PathValue("deviceID")
+	containerID := r.PathValue("containerID")
+
+	result, err := d.aggregator.TestContainer(deviceID, containerID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"error":   "service_test_failed",
+			"message": err.Error(),
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (d *Daemon) handleLogs(w http.ResponseWriter, r *http.Request) {
