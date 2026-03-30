@@ -129,11 +129,11 @@ func StatusLoading() string {
 	return lipgloss.NewStyle().Foreground(Warn).Render("⟳")
 }
 
-// fractionalBlocks provides sub-character precision for progress bars.
-// From 1/8 fill to full fill: ▏▎▍▌▋▊▉█
-var fractionalBlocks = []string{"▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"}
+const (
+	meterBlockGlyph = "■"
+)
 
-// ProgressBar renders a gradient progress bar with sub-character precision.
+// ProgressBar renders a square-block progress bar.
 // width is the total bar width in characters including brackets.
 // The fill color is value-based: green (<50%), amber (50-80%), red (>80%).
 func ProgressBar(percent float64, width int) string {
@@ -156,7 +156,7 @@ func ProgressBar(percent float64, width int) string {
 	fillStyle := lipgloss.NewStyle().Foreground(color)
 	emptyStyle := lipgloss.NewStyle().Foreground(TextMuted)
 
-	// Calculate fill with fractional precision
+	// Calculate fill using whole square blocks for a btop-style meter.
 	fillFloat := percent / 100.0 * float64(innerWidth)
 	if fillFloat < 0 {
 		fillFloat = 0
@@ -165,36 +165,27 @@ func ProgressBar(percent float64, width int) string {
 		fillFloat = float64(innerWidth)
 	}
 
-	fullChars := int(fillFloat)
-	remainder := fillFloat - float64(fullChars)
+	filledChars := int(fillFloat + 0.5)
+	if filledChars > innerWidth {
+		filledChars = innerWidth
+	}
 
 	var bar string
 	bar += "["
 
-	// Full filled characters
-	bar += fillStyle.Render(repeat("█", fullChars))
-
-	// Fractional character for sub-cell precision
-	fracIdx := int(remainder * 8)
-	if fracIdx > 0 && fracIdx <= 8 && fullChars < innerWidth {
-		if fracIdx > 7 {
-			fracIdx = 7
-		}
-		bar += fillStyle.Render(fractionalBlocks[fracIdx-1])
-		fullChars++
-	}
+	bar += fillStyle.Render(repeat(meterBlockGlyph, filledChars))
 
 	// Empty space
-	empty := innerWidth - fullChars
+	empty := innerWidth - filledChars
 	if empty > 0 {
-		bar += emptyStyle.Render(repeat("░", empty))
+		bar += emptyStyle.Render(repeat(meterBlockGlyph, empty))
 	}
 
 	bar += "]"
 	return bar
 }
 
-// GradientBar renders a multi-segment progress bar where each segment is
+// GradientBar renders a multi-segment square-block progress bar where each segment is
 // colored based on its position: first 50% green, 50-80% amber, 80-100% red.
 // This gives a gradient effect within the bar itself.
 func GradientBar(percent float64, width int) string {
@@ -211,8 +202,10 @@ func GradientBar(percent float64, width int) string {
 		fillFloat = float64(innerWidth)
 	}
 
-	fullChars := int(fillFloat)
-	remainder := fillFloat - float64(fullChars)
+	filledChars := int(fillFloat + 0.5)
+	if filledChars > innerWidth {
+		filledChars = innerWidth
+	}
 
 	// Segment thresholds in character positions
 	greenEnd := int(0.50 * float64(innerWidth))
@@ -226,42 +219,21 @@ func GradientBar(percent float64, width int) string {
 	var bar string
 	bar += "["
 
-	for i := 0; i < fullChars; i++ {
+	for i := 0; i < filledChars; i++ {
 		switch {
 		case i < greenEnd:
-			bar += greenStyle.Render("█")
+			bar += greenStyle.Render(meterBlockGlyph)
 		case i < warnEnd:
-			bar += warnStyle.Render("█")
+			bar += warnStyle.Render(meterBlockGlyph)
 		default:
-			bar += critStyle.Render("█")
-		}
-	}
-
-	// Fractional character
-	if fullChars < innerWidth && remainder > 0 {
-		fracIdx := int(remainder * 8)
-		if fracIdx > 7 {
-			fracIdx = 7
-		}
-		if fracIdx > 0 {
-			var fracStyle lipgloss.Style
-			switch {
-			case fullChars < greenEnd:
-				fracStyle = greenStyle
-			case fullChars < warnEnd:
-				fracStyle = warnStyle
-			default:
-				fracStyle = critStyle
-			}
-			bar += fracStyle.Render(fractionalBlocks[fracIdx-1])
-			fullChars++
+			bar += critStyle.Render(meterBlockGlyph)
 		}
 	}
 
 	// Empty space
-	empty := innerWidth - fullChars
+	empty := innerWidth - filledChars
 	if empty > 0 {
-		bar += emptyStyle.Render(repeat("░", empty))
+		bar += emptyStyle.Render(repeat(meterBlockGlyph, empty))
 	}
 
 	bar += "]"

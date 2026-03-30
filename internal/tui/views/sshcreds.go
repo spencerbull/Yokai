@@ -74,7 +74,6 @@ func NewSSHCreds(cfg *config.Config, version string, host, label, connType strin
 
 	// Initialize text inputs using components helpers
 	s.userInput = components.NewTextField("username")
-	s.userInput.SetValue("root")
 	s.userInput.Focus()
 
 	s.sshPortInput = components.NewPortField("22")

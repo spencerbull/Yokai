@@ -74,6 +74,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// and the current view doesn't have an active text input that needs
 		// raw key events like tab, digits, etc.)
 		if a.showTabs && len(a.viewStack) == 0 && !a.currentView.InputActive() {
+			if a.currentView.Name() == "Dashboard" && (msg.String() == "tab" || msg.String() == "shift+tab") {
+				break
+			}
 			if cmd := a.handleTabKey(msg.String()); cmd != nil {
 				return a, cmd
 			}
@@ -233,6 +236,11 @@ func (a *App) View() string {
 // navigate pushes current view onto stack and switches to the target.
 func (a *App) navigate(msg views.NavigateMsg) (tea.Model, tea.Cmd) {
 	if msg.Replace {
+		if _, ok := msg.Target.(*views.Dashboard); ok {
+			a.viewStack = nil
+			a.showTabs = true
+			a.activeTab = tabDashboard
+		}
 		a.currentView = msg.Target
 	} else {
 		a.viewStack = append(a.viewStack, a.currentView)

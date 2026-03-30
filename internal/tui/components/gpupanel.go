@@ -130,17 +130,12 @@ func (g GPUPanel) Render() string {
 	return panel
 }
 
-// GradientProgressBar renders a progress bar with fractional block characters
-// for smoother fill and the given color.
+// GradientProgressBar renders a square-block progress bar with the given color.
 func GradientProgressBar(percent float64, width int, color lipgloss.Color) string {
 	if width < 2 {
 		width = 2
 	}
 	innerWidth := width - 2 // account for [ ]
-
-	// Calculate fill using fractional blocks for sub-character precision
-	// Fractional blocks: ▏▎▍▌▋▊▉█ (1/8 to 8/8)
-	fractionalBlocks := []string{"▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"}
 
 	fillFloat := percent / 100.0 * float64(innerWidth)
 	if fillFloat < 0 {
@@ -150,11 +145,9 @@ func GradientProgressBar(percent float64, width int, color lipgloss.Color) strin
 		fillFloat = float64(innerWidth)
 	}
 
-	fullChars := int(fillFloat)
-	remainder := fillFloat - float64(fullChars)
-	fracIdx := int(remainder * 8)
-	if fracIdx >= 8 {
-		fracIdx = 7
+	filledChars := int(fillFloat + 0.5)
+	if filledChars > innerWidth {
+		filledChars = innerWidth
 	}
 
 	fillStyle := lipgloss.NewStyle().Foreground(color)
@@ -164,20 +157,14 @@ func GradientProgressBar(percent float64, width int, color lipgloss.Color) strin
 	bar.WriteString("[")
 
 	// Full filled characters
-	for i := 0; i < fullChars; i++ {
-		bar.WriteString(fillStyle.Render("█"))
-	}
-
-	// Fractional character
-	if fullChars < innerWidth && fracIdx > 0 {
-		bar.WriteString(fillStyle.Render(fractionalBlocks[fracIdx-1]))
-		fullChars++ // Count the fractional char
+	for i := 0; i < filledChars; i++ {
+		bar.WriteString(fillStyle.Render("■"))
 	}
 
 	// Empty space
-	remaining := innerWidth - fullChars
+	remaining := innerWidth - filledChars
 	if remaining > 0 {
-		bar.WriteString(emptyStyle.Render(strings.Repeat("░", remaining)))
+		bar.WriteString(emptyStyle.Render(strings.Repeat("■", remaining)))
 	}
 
 	bar.WriteString("]")
