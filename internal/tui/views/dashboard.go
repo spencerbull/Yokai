@@ -71,6 +71,11 @@ type serviceDeleteMsg struct {
 	err         error
 }
 
+type serviceTestMsg struct {
+	resultMessage string
+	err           error
+}
+
 // DashboardMetrics represents the metrics data from the daemon API
 type DashboardMetrics struct {
 	CPU        CPUData         `json:"cpu"`
@@ -210,6 +215,12 @@ func (d *Dashboard) Update(msg tea.Msg) (View, tea.Cmd) {
 
 		return d, ShowToast("Service deleted", ToastSuccess)
 
+	case serviceTestMsg:
+		if msg.err != nil {
+			return d, ShowToast("Test failed: "+compactServiceTestError(msg.err), ToastError)
+		}
+		return d, ShowToast(msg.resultMessage, ToastSuccess)
+
 	case tea.MouseMsg:
 		if msg.Action == tea.MouseActionRelease {
 			// Check if a device tab was clicked
@@ -286,6 +297,10 @@ func (d *Dashboard) Update(msg tea.Msg) (View, tea.Cmd) {
 				serviceID := strings.TrimPrefix(container.Name, "yokai-")
 				msg := fmt.Sprintf("Delete service %q? This stops and removes the container.", container.Name)
 				return d, Navigate(NewConfirmView(msg, d.deleteService(containerID, serviceID), nil))
+			}
+		case "t":
+			if container := d.getSelectedContainer(); container != nil {
+				return d, d.testService(container.ID)
 			}
 		case "g":
 			// Open Grafana - could implement later
@@ -1088,6 +1103,60 @@ func (d *Dashboard) deleteService(containerID, serviceID string) tea.Cmd {
 	}
 }
 
+func (d *Dashboard) testService(containerID string) tea.Cmd {
+	return func() tea.Msg {
+		deviceID := d.findDeviceIDForContainer(containerID)
+		if deviceID == "" {
+			return serviceTestMsg{err: fmt.Errorf("device not found")}
+		}
+
+		url := fmt.Sprintf("http://%s/containers/%s/%s/test", d.cfg.Daemon.Listen, deviceID, containerID)
+		resp, err := http.Post(url, "application/json", strings.NewReader("{}"))
+		if err != nil {
+			return serviceTestMsg{err: err}
+		}
+		defer func() {
+			_ = resp.Body.Close()
+		}()
+
+		if resp.StatusCode != http.StatusOK {
+			var errResp struct {
+				Message string `json:"message"`
+			}
+			if json.NewDecoder(resp.Body).Decode(&errResp) == nil && errResp.Message != "" {
+				return serviceTestMsg{err: fmt.Errorf("%s", errResp.Message)}
+			}
+			return serviceTestMsg{err: fmt.Errorf("daemon returned status %d", resp.StatusCode)}
+		}
+
+		var result struct {
+			Message string `json:"message"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			return serviceTestMsg{err: err}
+		}
+		if strings.TrimSpace(result.Message) == "" {
+			result.Message = "Service test passed"
+		}
+		return serviceTestMsg{resultMessage: result.Message}
+	}
+}
+
+func compactServiceTestError(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := strings.TrimSpace(err.Error())
+	if strings.Contains(msg, "status 404") || strings.Contains(strings.ToLower(msg), "page not found") {
+		return "service test route unavailable; restart local daemon and re-bootstrap the device agent"
+	}
+	msg = strings.Join(strings.Fields(msg), " ")
+	if len(msg) > 110 {
+		return msg[:107] + "..."
+	}
+	return msg
+}
+
 func (d *Dashboard) findDevice(deviceID string) *DashboardDevice {
 	for i := range d.devices {
 		if d.devices[i].ID == deviceID {
@@ -1192,6 +1261,7 @@ func (d *Dashboard) KeyBinds() []KeyBind {
 		{Key: "n", Help: "new"},
 		{Key: "s", Help: "stop"},
 		{Key: "r", Help: "restart"},
+		{Key: "t", Help: "test"},
 		{Key: "x", Help: "delete"},
 		{Key: "L", Help: "logs"},
 		{Key: "d", Help: "devices"},

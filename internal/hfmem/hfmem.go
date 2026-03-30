@@ -1,10 +1,12 @@
 package hfmem
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os/exec"
 	"strconv"
+	"strings"
 )
 
 type Estimate struct {
@@ -29,9 +31,11 @@ func EstimateModel(modelID, token string, maxModelLen int) (*Estimate, error) {
 	}
 
 	cmd := command(args[0], args[1:]...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("running hf-mem: %w", err)
+		return nil, formatRunError(err, stderr.String())
 	}
 
 	var result cliResult
@@ -69,6 +73,32 @@ func buildCommandArgs(modelID, token string, maxModelLen int) ([]string, error) 
 	}
 
 	return nil, fmt.Errorf("hf-mem not installed (tried 'hf-mem' and 'uvx hf-mem')")
+}
+
+func formatRunError(err error, stderr string) error {
+	stderr = strings.TrimSpace(stderr)
+	if stderr == "" {
+		return fmt.Errorf("running hf-mem: %w", err)
+	}
+
+	switch {
+	case strings.Contains(stderr, "401 Unauthorized"):
+		return fmt.Errorf("running hf-mem: Hugging Face returned 401 Unauthorized; check your HF token and access to the selected model")
+	case strings.Contains(stderr, "403 Forbidden"):
+		return fmt.Errorf("running hf-mem: Hugging Face returned 403 Forbidden; request access to the selected model and verify your HF token")
+	case strings.Contains(stderr, "404 Not Found"):
+		return fmt.Errorf("running hf-mem: Hugging Face returned 404 Not Found; verify the selected model ID")
+	}
+
+	lines := strings.Split(stderr, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line != "" {
+			return fmt.Errorf("running hf-mem: %s", line)
+		}
+	}
+
+	return fmt.Errorf("running hf-mem: %w", err)
 }
 
 func parseJSONInt(v any) (int64, error) {

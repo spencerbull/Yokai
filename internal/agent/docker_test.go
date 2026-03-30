@@ -1,8 +1,13 @@
 package agent
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
+
+	"github.com/spencerbull/yokai/internal/plugins"
 )
 
 func TestSanitizeName(t *testing.T) {
@@ -248,6 +253,50 @@ func TestDefaultArgsRespectUserOverrides(t *testing.T) {
 				t.Fatalf("%s: expected %q in %q", tt.name, want, tt.got)
 			}
 		}
+	}
+}
+
+func TestApplyPluginsAddsAssetsMountsAndArgs(t *testing.T) {
+	t.Setenv("YOKAI_PLUGIN_DIR", t.TempDir())
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("plugin-body"))
+	}))
+	defer server.Close()
+
+	plugin, ok := plugins.Lookup("vllm-reasoning-parser-super-v3")
+	if !ok {
+		t.Fatal("expected plugin catalog entry")
+	}
+	oldURL := plugin.Assets[0].URL
+	plugin.Assets[0].URL = server.URL
+
+	// shadow the catalog lookup with a temporary env-controlled URL by swapping after lookup use
+	req := &ContainerRequest{
+		Plugins: []string{"vllm-reasoning-parser-super-v3"},
+		Env:     map[string]string{},
+		Volumes: map[string]string{},
+	}
+
+	// direct write through ensurePluginAsset to avoid mutating package catalog; simulate asset fetch
+	if err := ensurePluginAsset(plugin.ID, plugins.Asset{FileName: plugin.Assets[0].FileName, URL: server.URL}); err != nil {
+		t.Fatalf("ensurePluginAsset failed: %v", err)
+	}
+	if err := applyPlugins(req); err == nil {
+		// applyPlugins will re-download from the real URL in catalog; only assert if plugin already cached path exists
+	} else if !strings.Contains(err.Error(), oldURL) {
+		t.Fatalf("unexpected applyPlugins error: %v", err)
+	}
+
+	assetPath := plugins.AssetHostPath(plugin.ID, plugin.Assets[0].FileName)
+	if _, err := os.Stat(assetPath); err != nil {
+		t.Fatalf("expected plugin asset at %s: %v", assetPath, err)
+	}
+	if req.Volumes[assetPath] != "/plugins/super_v3_reasoning_parser.py" {
+		t.Fatalf("expected plugin volume mount, got %#v", req.Volumes)
+	}
+	if !strings.Contains(req.ExtraArgs, "--reasoning-parser super_v3") {
+		t.Fatalf("expected plugin extra args, got %q", req.ExtraArgs)
 	}
 }
 

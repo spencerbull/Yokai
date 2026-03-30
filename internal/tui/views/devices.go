@@ -97,8 +97,9 @@ func (dm *DeviceManager) Update(msg tea.Msg) (View, tea.Cmd) {
 		return dm, ShowToast("Agent upgraded successfully", ToastSuccess)
 
 	case deviceDeleteResultMsg:
+		var remoteErr error
 		if msg.err != nil {
-			return dm, ShowToast("Remote cleanup failed; local device kept: "+msg.err.Error(), ToastError)
+			remoteErr = msg.err
 		}
 
 		removedServices := dm.cfg.RemoveServicesByDevice(msg.deviceID)
@@ -111,15 +112,21 @@ func (dm *DeviceManager) Update(msg tea.Msg) (View, tea.Cmd) {
 			dm.cursor--
 		}
 
-		toast := "Device removed"
-		if msg.cleanupRequested {
+		var toast string
+		var toastLevel = ToastSuccess
+		if remoteErr != nil {
+			toast = fmt.Sprintf("Device removed locally (remote cleanup failed: %s)", remoteErr)
+			toastLevel = ToastWarn
+		} else if msg.cleanupRequested {
 			toast = "Device removed and remote Yokai cleaned"
+		} else {
+			toast = "Device removed"
 		}
 		if removedServices > 0 {
 			toast = fmt.Sprintf("%s (%d service entries removed)", toast, removedServices)
 		}
 
-		return dm, tea.Batch(dm.reloadDaemon(), ShowToast(toast, ToastSuccess))
+		return dm, tea.Batch(dm.reloadDaemon(), ShowToast(toast, toastLevel))
 
 	case tea.KeyMsg:
 		switch msg.String() {

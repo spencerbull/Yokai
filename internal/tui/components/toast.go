@@ -92,35 +92,38 @@ func (tm *ToastManager) Update(msg tea.Msg) tea.Cmd {
 }
 
 // View renders the toast stack. Returns empty string if no toasts.
+// The caller (overlayRight) handles right-alignment onto the output.
 func (tm *ToastManager) View(termWidth int) string {
 	if len(tm.toasts) == 0 {
 		return ""
 	}
 
-	var rendered []string
-	for _, t := range tm.toasts {
-		rendered = append(rendered, renderToast(t))
+	maxW := toastMaxWidth
+	if termWidth-2 < maxW {
+		maxW = termWidth - 2
 	}
 
-	stack := lipgloss.JoinVertical(lipgloss.Right, rendered...)
+	var rendered []string
+	for _, t := range tm.toasts {
+		rendered = append(rendered, renderToast(t, maxW))
+	}
 
-	// Place in top-right corner
-	return lipgloss.PlaceHorizontal(termWidth, lipgloss.Right, stack)
+	return lipgloss.JoinVertical(lipgloss.Right, rendered...)
 }
 
-func renderToast(t toast) string {
+func renderToast(t toast, maxWidth int) string {
 	var icon string
 	var borderColor lipgloss.Color
 
 	switch t.level {
 	case ToastInfo:
-		icon = "ℹ"
+		icon = "i"
 		borderColor = theme.Accent
 	case ToastSuccess:
 		icon = "✓"
 		borderColor = theme.Good
 	case ToastWarn:
-		icon = "⚠"
+		icon = "!"
 		borderColor = theme.Warn
 	case ToastError:
 		icon = "✗"
@@ -134,6 +137,6 @@ func renderToast(t toast) string {
 		BorderForeground(borderColor).
 		Foreground(theme.TextPrimary).
 		Padding(0, 1).
-		MaxWidth(toastMaxWidth).
+		MaxWidth(maxWidth).
 		Render(content)
 }
