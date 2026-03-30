@@ -4,8 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"sort"
 	"strings"
 )
+
+const AIGPUTag = "tag:ai-gpu"
 
 // Peer represents a Tailscale peer device.
 type Peer struct {
@@ -20,8 +23,8 @@ type Peer struct {
 
 // Status represents the result of `tailscale status --json`.
 type Status struct {
-	BackendState string           `json:"BackendState"` // "Running", "Stopped", "NeedsLogin"
-	Self         *statusPeer      `json:"Self"`
+	BackendState string                 `json:"BackendState"` // "Running", "Stopped", "NeedsLogin"
+	Self         *statusPeer            `json:"Self"`
 	Peers        map[string]*statusPeer `json:"Peer"`
 }
 
@@ -95,6 +98,69 @@ func (s *Status) OnlinePeers() []Peer {
 		}
 	}
 	return online
+}
+
+// HasTag reports whether the peer has the given tag.
+func (p Peer) HasTag(tag string) bool {
+	tag = strings.ToLower(strings.TrimSpace(tag))
+	if tag == "" {
+		return false
+	}
+	for _, candidate := range p.Tags {
+		if strings.ToLower(candidate) == tag {
+			return true
+		}
+	}
+	return false
+}
+
+// HighlightedTags returns Yokai-recognized tags in display order.
+func (p Peer) HighlightedTags() []string {
+	if p.HasTag(AIGPUTag) {
+		return []string{"AI GPU"}
+	}
+	return nil
+}
+
+// OtherTags returns non-highlighted raw tags in sorted order.
+func (p Peer) OtherTags() []string {
+	if len(p.Tags) == 0 {
+		return nil
+	}
+	other := make([]string, 0, len(p.Tags))
+	for _, tag := range p.Tags {
+		if strings.EqualFold(tag, AIGPUTag) {
+			continue
+		}
+		other = append(other, tag)
+	}
+	sort.Strings(other)
+	if len(other) == 0 {
+		return nil
+	}
+	return other
+}
+
+// EnrollmentTagHelp explains how to mark AI GPU servers in Tailscale.
+func EnrollmentTagHelp() string {
+	return `Recommended Yokai tag: tag:ai-gpu
+
+Define the tag in your tailnet policy:
+  {
+    "tagOwners": {
+      "tag:ai-gpu": ["group:infra"]
+    }
+  }
+
+Apply it to the server:
+  Admin console: Machines -> device -> Edit tags -> tag:ai-gpu
+  CLI: sudo tailscale set --advertise-tags=tag:ai-gpu
+
+If the device was authenticated as a user, you may need:
+  sudo tailscale up --advertise-tags=tag:ai-gpu --force-reauth
+
+Use tags for non-human server nodes. In Tailscale, tags become the
+device identity and replace user-based authentication on that machine.`
 }
 
 // InstallInstructions returns platform-specific install instructions.

@@ -3,17 +3,20 @@ package views
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"time"
 
+	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spencerbull/yokai/internal/config"
 	"github.com/spencerbull/yokai/internal/docker"
 	sshpkg "github.com/spencerbull/yokai/internal/ssh"
+	"github.com/spencerbull/yokai/internal/tui/components"
 	"github.com/spencerbull/yokai/internal/tui/theme"
 )
 
@@ -35,6 +38,7 @@ type Bootstrap struct {
 	version        string
 	host           string
 	label          string // human-friendly device name
+	peerTags       []string
 	connectionType string
 	sshUser        string
 	sshKey         string
@@ -44,6 +48,8 @@ type Bootstrap struct {
 
 	step       bootstrapStep
 	err        string
+	authURL    string
+	errorBox   textarea.Model
 	preflight  *sshpkg.PreflightResult
 	agentToken string
 	width      int
@@ -53,13 +59,14 @@ type Bootstrap struct {
 type bootstrapProgressMsg struct {
 	step       bootstrapStep
 	err        error
+	authURL    string
 	preflight  *sshpkg.PreflightResult
 	agentToken string
 }
 
 // NewBootstrap creates the bootstrap view.
 // label is a human-friendly name for the device (e.g. Tailscale hostname).
-func NewBootstrap(cfg *config.Config, version string, host, label, connType, user, keyPath, passphrase, password string, sshPort int) *Bootstrap {
+func NewBootstrap(cfg *config.Config, version string, host, label, connType, user, keyPath, passphrase, password string, sshPort int, peerTags []string) *Bootstrap {
 	if label == "" {
 		label = host
 	}
@@ -71,6 +78,7 @@ func NewBootstrap(cfg *config.Config, version string, host, label, connType, use
 		version:        version,
 		host:           host,
 		label:          label,
+		peerTags:       append([]string(nil), peerTags...),
 		connectionType: connType,
 		sshUser:        user,
 		sshKey:         keyPath,
@@ -78,7 +86,16 @@ func NewBootstrap(cfg *config.Config, version string, host, label, connType, use
 		sshPassword:    password,
 		sshPort:        sshPort,
 		step:           bsConnecting,
+		errorBox:       newBootstrapErrorBox(),
 	}
+}
+
+func newBootstrapErrorBox() textarea.Model {
+	box := components.NewTextAreaField("")
+	box.SetHeight(8)
+	box.SetWidth(48)
+	box.Focus()
+	return box
 }
 
 func (b *Bootstrap) Init() tea.Cmd {
@@ -89,14 +106,23 @@ func (b *Bootstrap) runBootstrap() tea.Cmd {
 	return func() tea.Msg {
 		// Step 1: Connect via SSH
 		client, err := sshpkg.Connect(sshpkg.ClientConfig{
-			Host:          b.host,
-			Port:          fmt.Sprintf("%d", b.sshPort),
-			User:          b.sshUser,
-			KeyPath:       b.sshKey,
-			KeyPassphrase: b.sshPassphrase,
-			Password:      b.sshPassword,
+			Host:           b.host,
+			Port:           fmt.Sprintf("%d", b.sshPort),
+			User:           b.sshUser,
+			ConnectionType: b.connectionType,
+			KeyPath:        b.sshKey,
+			KeyPassphrase:  b.sshPassphrase,
+			Password:       b.sshPassword,
 		})
 		if err != nil {
+			var authErr *sshpkg.TailscaleAuthError
+			if errors.As(err, &authErr) {
+				return bootstrapProgressMsg{
+					step:    bsFailed,
+					err:     fmt.Errorf("tailscale ssh requires browser authentication"),
+					authURL: authErr.URL,
+				}
+			}
 			return bootstrapProgressMsg{step: bsFailed, err: fmt.Errorf("SSH connect: %w", err)}
 		}
 		defer func() {
@@ -147,12 +173,13 @@ func (b *Bootstrap) runMonitoringDeploy() tea.Cmd {
 	return func() tea.Msg {
 		// Connect to SSH for monitoring deployment
 		client, err := sshpkg.Connect(sshpkg.ClientConfig{
-			Host:          b.host,
-			Port:          fmt.Sprintf("%d", b.sshPort),
-			User:          b.sshUser,
-			KeyPath:       b.sshKey,
-			KeyPassphrase: b.sshPassphrase,
-			Password:      b.sshPassword,
+			Host:           b.host,
+			Port:           fmt.Sprintf("%d", b.sshPort),
+			User:           b.sshUser,
+			ConnectionType: b.connectionType,
+			KeyPath:        b.sshKey,
+			KeyPassphrase:  b.sshPassphrase,
+			Password:       b.sshPassword,
 		})
 		if err != nil {
 			return bootstrapProgressMsg{step: bsFailed, err: fmt.Errorf("SSH connect for monitoring: %w", err)}
@@ -230,11 +257,16 @@ func (b *Bootstrap) Update(msg tea.Msg) (View, tea.Cmd) {
 			b.width = theme.MaxContentWidth - 2*theme.ContentPadding
 		}
 		b.height = msg.Height
+		b.errorBox.SetWidth(clampBootstrapInt(b.width-16, 28, 60))
+		b.errorBox.SetHeight(clampBootstrapInt(b.height/4, 6, 12))
 
 	case bootstrapProgressMsg:
 		if msg.err != nil {
 			b.step = bsFailed
 			b.err = msg.err.Error()
+			b.authURL = msg.authURL
+			b.setErrorBoxContent()
+			b.errorBox.Focus()
 			if msg.preflight != nil {
 				b.preflight = msg.preflight
 			}
@@ -242,6 +274,7 @@ func (b *Bootstrap) Update(msg tea.Msg) (View, tea.Cmd) {
 		}
 
 		b.step = msg.step
+		b.authURL = msg.authURL
 		if msg.preflight != nil {
 			b.preflight = msg.preflight
 		}
@@ -261,6 +294,7 @@ func (b *Bootstrap) Update(msg tea.Msg) (View, tea.Cmd) {
 				ConnectionType: b.connectionType,
 				AgentPort:      7474,
 				AgentToken:     b.agentToken,
+				Tags:           append([]string(nil), b.peerTags...),
 			}
 			if b.preflight != nil && b.preflight.GPUDetected {
 				device.GPUType = "nvidia"
@@ -306,8 +340,21 @@ func (b *Bootstrap) Update(msg tea.Msg) (View, tea.Cmd) {
 			if b.step == bsFailed {
 				b.step = bsConnecting
 				b.err = ""
+				b.authURL = ""
+				b.setErrorBoxContent()
+				b.errorBox.Blur()
 				return b, b.runBootstrap()
 			}
+		}
+
+		if b.step == bsFailed {
+			prev := b.errorBox.Value()
+			var cmd tea.Cmd
+			b.errorBox, cmd = b.errorBox.Update(msg)
+			if b.errorBox.Value() != prev {
+				b.errorBox.SetValue(prev)
+			}
+			return b, cmd
 		}
 	}
 	return b, nil
@@ -376,6 +423,10 @@ func (b *Bootstrap) View() string {
 	if b.err != "" {
 		statusLine = "\n" + theme.CritStyle.Render("Error: "+b.err)
 		if b.step == bsFailed {
+			statusLine += "\n\n" + theme.PrimaryStyle.Render("Failure details (focusable for copy/paste):")
+			statusLine += "\n" + b.errorBox.View()
+		}
+		if b.step == bsFailed {
 			statusLine += "\n\n" + theme.MutedStyle.Render("Press 'r' to retry, Esc to go back")
 		}
 	} else if b.step == bsMonitoringPrompt {
@@ -420,7 +471,31 @@ func boolStatus(ok bool, detail string) string {
 	return theme.CritStyle.Render("✗") + " not found"
 }
 
-func (b *Bootstrap) InputActive() bool { return false }
+func (b *Bootstrap) InputActive() bool { return b.step == bsFailed }
+
+func (b *Bootstrap) setErrorBoxContent() {
+	if b.err == "" {
+		b.errorBox.SetValue("")
+		return
+	}
+
+	content := "Error: " + b.err
+	if b.authURL != "" {
+		content += "\n\nOpen this URL to complete Tailscale SSH authentication:\n" + b.authURL
+		content += "\n\nAfter you finish in the browser, press 'r' to retry."
+	}
+	b.errorBox.SetValue(content)
+}
+
+func clampBootstrapInt(v, minV, maxV int) int {
+	if v < minV {
+		return minV
+	}
+	if v > maxV {
+		return maxV
+	}
+	return v
+}
 
 func (b *Bootstrap) Name() string { return "Bootstrap" }
 

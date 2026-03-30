@@ -161,6 +161,12 @@ Backspace at any step → go to previous step
 | `Tab` | Next field |
 | `Esc` | Cancel |
 
+### Tailscale Flow Notes
+
+- The Tailscale picker reads peers from `tailscale status --json`.
+- Peer rows surface Tailscale ACL tags, with `tag:ai-gpu` highlighted as `AI GPU`.
+- Press `h` in the Tailscale flow to expand inline instructions for creating and applying the recommended Tailscale tag.
+
 ### Device Manager
 
 | Key | Action |
