@@ -29,9 +29,11 @@ type ServiceRow struct {
 
 // ServiceList renders a table of services.
 type ServiceList struct {
-	Services []ServiceRow
-	Cursor   int
-	Width    int
+	Services          []ServiceRow
+	Cursor            int
+	Width             int
+	ForceDeviceColumn bool
+	ZonePrefix        string
 }
 
 // NewServiceList creates a new service list with the given parameters.
@@ -70,6 +72,8 @@ func (s ServiceList) activeColumns() []column {
 	hasGPUMem := false
 	hasToks := false
 	hasPrefill := false
+	hasMultipleDevices := false
+	deviceName := ""
 	for _, svc := range s.Services {
 		if svc.Model != "" {
 			hasModel = true
@@ -83,10 +87,20 @@ func (s ServiceList) activeColumns() []column {
 		if svc.PromptTokPerSec > 0 {
 			hasPrefill = true
 		}
+		if svc.Device != "" {
+			if deviceName == "" {
+				deviceName = svc.Device
+			} else if svc.Device != deviceName {
+				hasMultipleDevices = true
+			}
+		}
 	}
 
 	var cols []column
 	for _, col := range allColumns {
+		if col.id == "device" && !s.ForceDeviceColumn && !hasMultipleDevices {
+			continue
+		}
 		if col.id == "model" && !hasModel {
 			continue
 		}
@@ -223,7 +237,7 @@ func (s ServiceList) renderRow(svc ServiceRow, widths []int, cols []column, rowI
 
 	row := strings.Join(parts, " ")
 
-	zoneID := ServiceRowZoneID(rowIdx)
+	zoneID := ServiceRowZoneIDWithPrefix(s.ZonePrefix, rowIdx)
 
 	if svc.Selected {
 		bar := lipgloss.NewStyle().
@@ -303,7 +317,14 @@ func (s ServiceList) healthIndicator(svc ServiceRow) string {
 // ServiceRowZoneID returns the zone ID for a service row at the given index.
 // Used by both the service list renderer and the dashboard mouse handler.
 func ServiceRowZoneID(rowIdx int) string {
-	return fmt.Sprintf("svc-row-%d", rowIdx)
+	return ServiceRowZoneIDWithPrefix("", rowIdx)
+}
+
+func ServiceRowZoneIDWithPrefix(prefix string, rowIdx int) string {
+	if prefix == "" {
+		return fmt.Sprintf("svc-row-%d", rowIdx)
+	}
+	return fmt.Sprintf("%s-svc-row-%d", prefix, rowIdx)
 }
 
 // helpers

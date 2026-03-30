@@ -12,6 +12,7 @@ type remoteRunner interface {
 
 // PreflightResult holds the results of remote pre-flight checks.
 type PreflightResult struct {
+	KernelOS               string
 	OS                     string
 	Arch                   string
 	DockerInstalled        bool
@@ -27,6 +28,11 @@ type PreflightResult struct {
 // Preflight runs pre-flight checks on a remote device via SSH.
 func Preflight(client *Client) (*PreflightResult, error) {
 	result := &PreflightResult{}
+
+	// OS info
+	if out, err := client.Exec("uname -s"); err == nil {
+		result.KernelOS = strings.TrimSpace(out)
+	}
 
 	// OS info
 	if out, err := client.Exec("cat /etc/os-release 2>/dev/null | grep PRETTY_NAME | cut -d= -f2 | tr -d '\"'"); err == nil {

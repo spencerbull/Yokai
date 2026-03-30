@@ -4,15 +4,37 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	zone "github.com/lrstanley/bubblezone"
 	"github.com/spencerbull/yokai/internal/config"
 	"github.com/spencerbull/yokai/internal/tui/components"
 	"github.com/spencerbull/yokai/internal/tui/theme"
+)
+
+type dashboardMode int
+
+const (
+	dashboardOverview dashboardMode = iota
+	dashboardDeviceDetail
+)
+
+type overviewFocus int
+
+const (
+	overviewFocusDevices overviewFocus = iota
+	overviewFocusAIServices
+	overviewFocusMonitoringServices
+)
+
+const (
+	overviewAIServiceZonePrefix         = "overview-ai"
+	overviewMonitoringServiceZonePrefix = "overview-monitoring"
 )
 
 // Dashboard is the main btop-style monitoring view.
@@ -22,12 +44,16 @@ type Dashboard struct {
 	width   int
 	height  int
 
-	// Device tab selection
-	activeDeviceTab int
+	mode           dashboardMode
+	selectedDevice int
+	overviewFocus  overviewFocus
+
+	selectedAIServiceID         string
+	selectedMonitoringServiceID string
 
 	// Service selection
-	selectedService int
-	showDetail      bool
+	selectedService   int
+	showServiceDetail bool
 
 	// Live metrics data
 	metrics   map[string]*DashboardMetrics
@@ -135,15 +161,19 @@ type DashboardDevice struct {
 
 // NewDashboard creates the dashboard view.
 func NewDashboard(cfg *config.Config, version string) *Dashboard {
+	zone.NewGlobal()
 	return &Dashboard{
-		cfg:        cfg,
-		version:    version,
-		metrics:    make(map[string]*DashboardMetrics),
-		devices:    []DashboardDevice{},
-		cpuHistory: make(map[string][]float64),
-		ramHistory: make(map[string][]float64),
-		gpuHistory: make(map[string][]float64),
-		maxSamples: 60, // 60 samples * 2s = 2 minutes of history
+		cfg:             cfg,
+		version:         version,
+		mode:            dashboardOverview,
+		overviewFocus:   overviewFocusDevices,
+		metrics:         make(map[string]*DashboardMetrics),
+		devices:         []DashboardDevice{},
+		cpuHistory:      make(map[string][]float64),
+		ramHistory:      make(map[string][]float64),
+		gpuHistory:      make(map[string][]float64),
+		maxSamples:      60, // 60 samples * 2s = 2 minutes of history
+		selectedService: 0,
 	}
 }
 
@@ -166,8 +196,9 @@ func (d *Dashboard) Update(msg tea.Msg) (View, tea.Cmd) {
 		} else {
 			d.metrics = msg.Metrics
 			d.updateSparklineData()
-			d.updateServiceContainers()
 			d.enrichDevices()
+			d.clampSelectedDevice()
+			d.updateServiceContainers()
 			d.lastError = nil
 		}
 		return d, tea.Tick(2*time.Second, func(time.Time) tea.Msg {
@@ -180,6 +211,8 @@ func (d *Dashboard) Update(msg tea.Msg) (View, tea.Cmd) {
 		} else {
 			d.devices = msg.Devices
 			d.enrichDevices()
+			d.clampSelectedDevice()
+			d.updateServiceContainers()
 			d.lastError = nil
 		}
 
@@ -223,23 +256,43 @@ func (d *Dashboard) Update(msg tea.Msg) (View, tea.Cmd) {
 
 	case tea.MouseMsg:
 		if msg.Action == tea.MouseActionRelease {
-			// Check if a device tab was clicked
-			for i := range d.devices {
-				if zone.Get(fmt.Sprintf("device-tab-%d", i)).InBounds(msg) {
-					if i != d.activeDeviceTab {
-						d.activeDeviceTab = i
-						d.selectedService = 0
-						d.showDetail = false
-						d.updateServiceContainers()
+			if d.mode == dashboardOverview {
+				for i := range d.devices {
+					if zone.Get(overviewPickerZoneID(i)).InBounds(msg) {
+						d.selectedDevice = i
+						d.overviewFocus = overviewFocusDevices
+						d.showServiceDetail = false
+						break
 					}
-					break
 				}
-			}
-			// Check if a service row was clicked
-			for i := range d.serviceContainers {
-				if zone.Get(components.ServiceRowZoneID(i)).InBounds(msg) {
-					d.selectedService = i
-					break
+				for i := range d.devices {
+					if zone.Get(dashboardDeviceZoneID(i)).InBounds(msg) {
+						d.selectedDevice = i
+						d.overviewFocus = overviewFocusDevices
+						d.showServiceDetail = false
+						break
+					}
+				}
+				for i, container := range d.visibleOverviewServiceContainersForFocus(overviewFocusAIServices) {
+					if zone.Get(components.ServiceRowZoneIDWithPrefix(overviewAIServiceZonePrefix, i)).InBounds(msg) {
+						d.overviewFocus = overviewFocusAIServices
+						d.selectedAIServiceID = container.ID
+						break
+					}
+				}
+				for i, container := range d.visibleOverviewServiceContainersForFocus(overviewFocusMonitoringServices) {
+					if zone.Get(components.ServiceRowZoneIDWithPrefix(overviewMonitoringServiceZonePrefix, i)).InBounds(msg) {
+						d.overviewFocus = overviewFocusMonitoringServices
+						d.selectedMonitoringServiceID = container.ID
+						break
+					}
+				}
+			} else {
+				for i := range d.serviceContainers {
+					if zone.Get(components.ServiceRowZoneID(i)).InBounds(msg) {
+						d.selectedService = i
+						break
+					}
 				}
 			}
 		}
@@ -257,54 +310,82 @@ func (d *Dashboard) Update(msg tea.Msg) (View, tea.Cmd) {
 		case "?":
 			return d, Navigate(NewHelp(d.version))
 		case "esc":
-			if d.showDetail {
-				d.showDetail = false
+			if d.showServiceDetail {
+				d.showServiceDetail = false
 				return d, nil
 			}
-		case "j", "down":
-			d.moveServiceCursor(1)
-			d.showDetail = false
-		case "k", "up":
-			d.moveServiceCursor(-1)
-			d.showDetail = false
-		case "enter":
-			if len(d.serviceContainers) > 0 {
-				d.showDetail = !d.showDetail
+			if d.mode == dashboardDeviceDetail {
+				d.mode = dashboardOverview
+				d.selectedService = 0
+				d.updateServiceContainers()
+				return d, nil
 			}
-		case "h", "left":
-			d.moveDeviceTab(-1)
-		case "l", "right":
-			d.moveDeviceTab(1)
-		case "L":
-			if container := d.getSelectedContainer(); container != nil {
-				deviceID := d.findDeviceIDForContainer(container.ID)
-				return d, Navigate(NewLogViewer(d.cfg, d.version, container.Name, deviceID, container.ID))
-			}
-		case "s":
-			if container := d.getSelectedContainer(); container != nil {
-				containerID := container.ID
-				name := container.Name
-				msg := fmt.Sprintf("Stop service %q?", name)
-				return d, Navigate(NewConfirmView(msg, d.stopService(containerID), nil))
-			}
-		case "r":
-			if container := d.getSelectedContainer(); container != nil {
-				return d, d.restartService(container.ID)
-			}
-		case "x":
-			if container := d.getSelectedContainer(); container != nil {
-				containerID := container.ID
-				serviceID := strings.TrimPrefix(container.Name, "yokai-")
-				msg := fmt.Sprintf("Delete service %q? This stops and removes the container.", container.Name)
-				return d, Navigate(NewConfirmView(msg, d.deleteService(containerID, serviceID), nil))
-			}
-		case "t":
-			if container := d.getSelectedContainer(); container != nil {
-				return d, d.testService(container.ID)
+			if d.mode == dashboardOverview && d.overviewFocus != overviewFocusDevices {
+				d.overviewFocus = overviewFocusDevices
+				return d, nil
 			}
 		case "g":
 			// Open Grafana - could implement later
 			return d, nil
+		}
+
+		if container := d.getSelectedContainer(); container != nil {
+			switch msg.String() {
+			case "L":
+				deviceID := d.findDeviceIDForContainer(container.ID)
+				return d, Navigate(NewLogViewer(d.cfg, d.version, container.Name, deviceID, container.ID))
+			case "s":
+				containerID := container.ID
+				name := container.Name
+				confirmMsg := fmt.Sprintf("Stop service %q?", name)
+				return d, Navigate(NewConfirmView(confirmMsg, d.stopService(containerID), nil))
+			case "r":
+				return d, d.restartService(container.ID)
+			case "x":
+				containerID := container.ID
+				serviceID := strings.TrimPrefix(container.Name, "yokai-")
+				confirmMsg := fmt.Sprintf("Delete service %q? This stops and removes the container.", container.Name)
+				return d, Navigate(NewConfirmView(confirmMsg, d.deleteService(containerID, serviceID), nil))
+			case "t":
+				return d, d.testService(container.ID)
+			}
+		}
+
+		switch d.mode {
+		case dashboardOverview:
+			switch msg.String() {
+			case "tab", "l", "right":
+				d.moveOverviewFocus(1)
+			case "shift+tab", "h", "left":
+				d.moveOverviewFocus(-1)
+			case "j", "down":
+				d.moveOverviewSelection(1)
+			case "k", "up":
+				d.moveOverviewSelection(-1)
+			case "enter":
+				if d.overviewFocus == overviewFocusDevices {
+					d.enterDeviceDetail()
+				} else {
+					d.openOverviewSelectedService()
+				}
+			}
+		case dashboardDeviceDetail:
+			switch msg.String() {
+			case "j", "down":
+				d.moveServiceCursor(1)
+				d.showServiceDetail = false
+			case "k", "up":
+				d.moveServiceCursor(-1)
+				d.showServiceDetail = false
+			case "enter":
+				if len(d.serviceContainers) > 0 {
+					d.showServiceDetail = !d.showServiceDetail
+				}
+			case "h", "left":
+				d.moveDeviceTab(-1)
+			case "l", "right":
+				d.moveDeviceTab(1)
+			}
 		}
 	}
 	return d, nil
@@ -323,40 +404,921 @@ func (d *Dashboard) View() string {
 		sections = append(sections, d.renderErrorBanner())
 	}
 
-	// Device tabs / header
-	if len(d.devices) > 0 {
-		// Clamp active tab
-		if d.activeDeviceTab >= len(d.devices) {
-			d.activeDeviceTab = len(d.devices) - 1
+	switch d.mode {
+	case dashboardOverview:
+		sections = append(sections, d.renderOverviewHeader())
+		if summary := d.renderOverviewSummaryPanels(); summary != "" {
+			sections = append(sections, summary)
 		}
-		sections = append(sections, d.renderDeviceTabBar())
-	} else {
-		sections = append(sections, d.renderHeader())
-	}
-
-	// Responsive layout based on terminal width
-	// Wide (≥140): 3 cols; Medium (100-139): 2 cols; Narrow (<100): single stack
-	switch {
-	case d.width >= 140:
-		sections = append(sections, d.renderWideLayout())
-	case d.width >= 100:
-		sections = append(sections, d.renderMediumLayout())
-	default:
-		sections = append(sections, d.renderNarrowLayout())
-	}
-
-	// Service list (full width, filtered to active device)
-	sections = append(sections, d.renderServiceList())
-
-	// Service detail panel (expandable)
-	if d.showDetail {
-		if detail := d.renderServiceDetail(); detail != "" {
+		sections = append(sections, d.renderOverviewDeviceList())
+		if preview := d.renderOverviewServicePreview(); preview != "" {
+			sections = append(sections, preview)
+		}
+	case dashboardDeviceDetail:
+		sections = append(sections, d.renderDeviceDetailHeader())
+		if detail := d.renderDeviceDetailLayout(); detail != "" {
 			sections = append(sections, detail)
+		}
+		sections = append(sections, d.renderServiceList())
+		if d.showServiceDetail {
+			if detail := d.renderServiceDetail(); detail != "" {
+				sections = append(sections, detail)
+			}
 		}
 	}
 
 	content := lipgloss.JoinVertical(lipgloss.Left, sections...)
 	return lipgloss.NewStyle().Width(d.width).Render(content)
+}
+
+func (d *Dashboard) renderOverviewHeader() string {
+	online, services, gpuNodes, alerts := d.fleetStats()
+	summary := fmt.Sprintf("%d device(s) · %d online · %d service(s) · %d GPU node(s)", len(d.devices), online, services, gpuNodes)
+	if alerts > 0 {
+		summary += fmt.Sprintf(" · %d alert(s)", alerts)
+	}
+
+	lines := []string{
+		theme.TitleStyle.Render("Fleet Overview"),
+		theme.MutedStyle.Render(summary),
+	}
+	lines = append(lines, theme.MutedStyle.Render("Tab between panels · j/k navigate · Enter inspect · L/s/r/x/t act on selected service"))
+	return strings.Join(lines, "\n")
+}
+
+func (d *Dashboard) renderOverviewSummaryPanels() string {
+	if len(d.devices) == 0 {
+		return ""
+	}
+
+	switch {
+	case d.width >= 120:
+		widths := dashboardPanelWidths(d.width, 2)
+		firstRow := lipgloss.JoinHorizontal(lipgloss.Top,
+			d.renderOverviewFleetGPUPanel(widths[0]),
+			d.renderOverviewFleetRuntimePanel(widths[1]),
+		)
+		return lipgloss.JoinVertical(lipgloss.Left, firstRow, d.renderOverviewSelectedDevicePanel(d.width))
+	case d.width >= 84:
+		widths := dashboardPanelWidths(d.width, 2)
+		firstRow := lipgloss.JoinHorizontal(lipgloss.Top,
+			d.renderOverviewFleetGPUPanel(widths[0]),
+			d.renderOverviewFleetRuntimePanel(widths[1]),
+		)
+		return lipgloss.JoinVertical(lipgloss.Left, firstRow, d.renderOverviewSelectedDevicePanel(d.width))
+	default:
+		return lipgloss.JoinVertical(lipgloss.Left,
+			d.renderOverviewFleetGPUPanel(d.width),
+			d.renderOverviewFleetRuntimePanel(d.width),
+			d.renderOverviewSelectedDevicePanel(d.width),
+		)
+	}
+}
+
+func (d *Dashboard) renderOverviewFleetGPUPanel(width int) string {
+	avgUtil, usedMB, totalMB, activeGPUs, gpuCount := d.fleetGPUStats()
+	title := theme.TitleStyle.Render("AI Fleet")
+	innerWidth := maxDashboardInt(24, width-6)
+	vramPercent := 0.0
+	if totalMB > 0 {
+		vramPercent = float64(usedMB) / float64(totalMB) * 100
+	}
+
+	lines := []string{
+		renderOverviewMetricLine("VRAM", vramPercent, formatOverviewMemoryPair(usedMB, totalMB), innerWidth),
+		renderOverviewMetricLine("GPU", avgUtil, fmt.Sprintf("%.0f%% avg", avgUtil), innerWidth),
+		theme.MutedStyle.Render(fmt.Sprintf("GPUs   %d active / %d total", activeGPUs, gpuCount)),
+		theme.MutedStyle.Render(fmt.Sprintf("Free   %s available", formatOverviewMem(maxDashboardInt64(totalMB-usedMB, 0)))),
+	}
+
+	return theme.RenderPanel(title, strings.Join(lines, "\n"), width)
+}
+
+func (d *Dashboard) renderOverviewFleetRuntimePanel(width int) string {
+	avgCPU, avgRAM := d.fleetCPUAndRAMStats()
+	online, services, _, _ := d.fleetStats()
+	serviceAlerts := d.fleetServiceAlerts()
+	innerWidth := maxDashboardInt(24, width-6)
+	deviceCount := len(d.devices)
+	offline := deviceCount - online
+	title := theme.TitleStyle.Render("Fleet Runtime")
+
+	lines := []string{
+		renderOverviewMetricLine("CPU", avgCPU, fmt.Sprintf("%.0f%% avg", avgCPU), innerWidth),
+		renderOverviewMetricLine("RAM", avgRAM, fmt.Sprintf("%.0f%% avg", avgRAM), innerWidth),
+		theme.MutedStyle.Render(fmt.Sprintf("Nodes  %d online · %d offline", online, maxDashboardInt(offline, 0))),
+		theme.MutedStyle.Render(fmt.Sprintf("Svc    %d total · %d alert(s)", services, serviceAlerts)),
+	}
+
+	return theme.RenderPanel(title, strings.Join(lines, "\n"), width)
+}
+
+func (d *Dashboard) renderOverviewSelectedDevicePanel(width int) string {
+	device := d.selectedDashboardDevice()
+	title := theme.TitleStyle.Render("Per Device")
+	if device == nil {
+		return theme.RenderPanel(title, theme.MutedStyle.Render("No device selected"), width)
+	}
+
+	gpuName, gpuUtil, usedMB, totalMB, gpuCount := d.deviceGPUStats(*device)
+	vramPercent := 0.0
+	if totalMB > 0 {
+		vramPercent = float64(usedMB) / float64(totalMB) * 100
+	}
+	innerWidth := maxDashboardInt(24, width-6)
+	nameLine := theme.PrimaryStyle.Bold(true).Render(d.deviceDisplayLabel(*device))
+	if device.Host != "" {
+		nameLine += theme.MutedStyle.Render(" · " + device.Host)
+	}
+
+	lines := []string{d.renderOverviewDevicePicker(), nameLine}
+	if gpuName != "" && gpuName != "none" {
+		if gpuCount > 1 {
+			gpuName = fmt.Sprintf("%dx %s", gpuCount, gpuName)
+		}
+		lines = append(lines, theme.MutedStyle.Render("GPU    "+gpuName))
+		lines = append(lines,
+			renderOverviewMetricLine("GUtil", gpuUtil, fmt.Sprintf("%.0f%%", gpuUtil), innerWidth),
+			renderOverviewMetricLine("VRAM", vramPercent, formatOverviewMemoryPair(usedMB, totalMB), innerWidth),
+		)
+	} else {
+		lines = append(lines, theme.MutedStyle.Render("GPU    none"))
+	}
+	lines = append(lines, theme.MutedStyle.Render(fmt.Sprintf("CPU %.0f%% · RAM %.0f%% · %d svc", device.CPUPercent, device.RAMPercent, device.ServiceCount)))
+
+	return theme.RenderPanel(title, strings.Join(lines, "\n"), width)
+}
+
+func (d *Dashboard) renderOverviewDevicePicker() string {
+	if len(d.devices) == 0 {
+		return ""
+	}
+
+	activeStyle := lipgloss.NewStyle().Foreground(theme.Background).Background(theme.Accent).Bold(true).Padding(0, 1)
+	inactiveStyle := lipgloss.NewStyle().Foreground(theme.TextPrimary).Background(theme.Highlight).Padding(0, 1)
+
+	chips := make([]string, 0, len(d.devices))
+	for i, device := range d.devices {
+		label := d.deviceDisplayLabel(device)
+		if device.Online {
+			label = theme.StatusOnline() + " " + label
+		} else {
+			label = theme.StatusOffline() + " " + label
+		}
+		zoneID := overviewPickerZoneID(i)
+		if i == d.selectedDevice {
+			chips = append(chips, zone.Mark(zoneID, activeStyle.Render(label)))
+		} else {
+			chips = append(chips, zone.Mark(zoneID, inactiveStyle.Render(label)))
+		}
+	}
+	return strings.Join(chips, "  ")
+}
+
+func renderOverviewMetricLine(label string, percent float64, suffix string, width int) string {
+	labelText := theme.MutedStyle.Render(label)
+	barWidth := width - ansi.StringWidth(label) - ansi.StringWidth(suffix) - 2
+	if barWidth < 10 {
+		return labelText + " " + suffix
+	}
+	return labelText + " " + components.ThresholdProgressBar(percent, barWidth) + " " + suffix
+}
+
+func renderOverviewPanel(title, content string, width int, focused bool) string {
+	if focused {
+		return theme.RenderFocusedPanel(title, content, width)
+	}
+	return theme.RenderPanel(title, content, width)
+}
+
+func (d *Dashboard) moveOverviewFocus(delta int) {
+	panels := d.overviewFocusablePanels()
+	if len(panels) == 0 {
+		d.overviewFocus = overviewFocusDevices
+		return
+	}
+	idx := 0
+	for i, panel := range panels {
+		if panel == d.overviewFocus {
+			idx = i
+			break
+		}
+	}
+	idx = (idx + delta + len(panels)) % len(panels)
+	d.overviewFocus = panels[idx]
+}
+
+func (d *Dashboard) moveOverviewSelection(delta int) {
+	switch d.overviewFocus {
+	case overviewFocusDevices:
+		d.moveDeviceSelection(delta)
+	case overviewFocusAIServices:
+		d.moveOverviewServiceSelection(delta, overviewFocusAIServices)
+	case overviewFocusMonitoringServices:
+		d.moveOverviewServiceSelection(delta, overviewFocusMonitoringServices)
+	}
+}
+
+func (d *Dashboard) moveOverviewServiceSelection(delta int, focus overviewFocus) {
+	containers := d.visibleOverviewServiceContainersForFocus(focus)
+	if len(containers) == 0 {
+		return
+	}
+	idx := d.overviewServiceCursor(focus, containers)
+	idx += delta
+	if idx < 0 {
+		idx = 0
+	}
+	if idx >= len(containers) {
+		idx = len(containers) - 1
+	}
+	d.setOverviewSelectedServiceID(focus, containers[idx].ID)
+}
+
+func (d *Dashboard) openOverviewSelectedService() {
+	container := d.getSelectedContainer()
+	if container == nil {
+		return
+	}
+	deviceID := d.findDeviceIDForContainer(container.ID)
+	for i, device := range d.devices {
+		if device.ID == deviceID {
+			d.selectedDevice = i
+			break
+		}
+	}
+	d.mode = dashboardDeviceDetail
+	d.showServiceDetail = true
+	d.updateServiceContainers()
+	for i, candidate := range d.serviceContainers {
+		if candidate.ID == container.ID {
+			d.selectedService = i
+			return
+		}
+	}
+}
+
+func (d *Dashboard) overviewFocusablePanels() []overviewFocus {
+	panels := []overviewFocus{overviewFocusDevices}
+	if len(d.overviewAIServiceContainers()) > 0 {
+		panels = append(panels, overviewFocusAIServices)
+	}
+	if len(d.overviewMonitoringServiceContainers()) > 0 {
+		panels = append(panels, overviewFocusMonitoringServices)
+	}
+	return panels
+}
+
+func (d *Dashboard) visibleOverviewServiceContainersForFocus(focus overviewFocus) []ContainerData {
+	containers := d.overviewServiceContainersForFocus(focus)
+	limit := d.overviewServicePreviewLimit()
+	if limit > 0 && len(containers) > limit {
+		return containers[:limit]
+	}
+	return containers
+}
+
+func (d *Dashboard) overviewAIServiceContainers() []ContainerData {
+	var containers []ContainerData
+	for _, container := range d.serviceContainers {
+		if isMonitoringServiceContainer(container) {
+			continue
+		}
+		containers = append(containers, container)
+	}
+	return containers
+}
+
+func (d *Dashboard) overviewMonitoringServiceContainers() []ContainerData {
+	var containers []ContainerData
+	for _, container := range d.serviceContainers {
+		if isMonitoringServiceContainer(container) {
+			containers = append(containers, container)
+		}
+	}
+	return containers
+}
+
+func (d *Dashboard) overviewServiceContainersForFocus(focus overviewFocus) []ContainerData {
+	switch focus {
+	case overviewFocusAIServices:
+		return d.overviewAIServiceContainers()
+	case overviewFocusMonitoringServices:
+		return d.overviewMonitoringServiceContainers()
+	default:
+		return nil
+	}
+}
+
+func (d *Dashboard) overviewServiceCursor(focus overviewFocus, containers []ContainerData) int {
+	selectedID := d.overviewSelectedServiceID(focus)
+	for i, container := range containers {
+		if container.ID == selectedID {
+			return i
+		}
+	}
+	return 0
+}
+
+func (d *Dashboard) overviewSelectedServiceID(focus overviewFocus) string {
+	switch focus {
+	case overviewFocusAIServices:
+		return d.selectedAIServiceID
+	case overviewFocusMonitoringServices:
+		return d.selectedMonitoringServiceID
+	default:
+		return ""
+	}
+}
+
+func (d *Dashboard) setOverviewSelectedServiceID(focus overviewFocus, serviceID string) {
+	switch focus {
+	case overviewFocusAIServices:
+		d.selectedAIServiceID = serviceID
+	case overviewFocusMonitoringServices:
+		d.selectedMonitoringServiceID = serviceID
+	}
+}
+
+func overviewServiceZonePrefix(focus overviewFocus) string {
+	switch focus {
+	case overviewFocusAIServices:
+		return overviewAIServiceZonePrefix
+	case overviewFocusMonitoringServices:
+		return overviewMonitoringServiceZonePrefix
+	default:
+		return ""
+	}
+}
+
+func (d *Dashboard) serviceRowForContainer(container ContainerData) components.ServiceRow {
+	deviceLabel := d.serviceContainerDeviceLabel(container.ID)
+	return components.ServiceRow{
+		Name:                strings.TrimPrefix(container.Name, "yokai-"),
+		Type:                d.inferServiceType(container.Name),
+		Model:               d.getServiceModel(container),
+		Status:              container.Status,
+		Health:              container.Health,
+		Device:              deviceLabel,
+		Port:                extractExternalPort(container.Ports),
+		CPUPercent:          container.CPUPercent,
+		MemUsedMB:           container.MemUsedMB,
+		GPUMemMB:            container.GPUMemMB,
+		Uptime:              formatUptime(container.UptimeSeconds),
+		GenerationTokPerSec: container.GenerationTokPerSec,
+		PromptTokPerSec:     container.PromptTokPerSec,
+	}
+}
+
+func dashboardPanelWidths(totalWidth, columns int) []int {
+	if columns <= 0 {
+		return nil
+	}
+	widths := make([]int, columns)
+	gapTotal := columns - 1
+	base := (totalWidth - gapTotal) / columns
+	for i := range widths {
+		widths[i] = base
+	}
+	used := base*columns + gapTotal
+	if used < totalWidth {
+		widths[len(widths)-1] += totalWidth - used
+	}
+	return widths
+}
+
+func (d *Dashboard) renderOverviewDeviceList() string {
+	title := theme.TitleStyle.Render("Devices")
+	if len(d.devices) == 0 {
+		return theme.RenderPanel(title, theme.MutedStyle.Render("No devices connected yet. Press 'd' for Devices to add one."), d.width)
+	}
+
+	innerWidth := d.width - 6
+	if innerWidth < 40 {
+		innerWidth = 40
+	}
+	start, end := d.overviewWindow()
+
+	lines := []string{
+		theme.MutedStyle.Render(d.renderOverviewDeviceHeader(innerWidth)),
+		theme.MutedStyle.Render(strings.Repeat("─", innerWidth+1)),
+	}
+	if start > 0 {
+		lines = append(lines, theme.MutedStyle.Render(fmt.Sprintf("  ↑ %d more device(s)", start)))
+	}
+	for i := start; i < end; i++ {
+		lines = append(lines, d.renderOverviewDeviceRow(d.devices[i], i == d.selectedDevice, i, innerWidth))
+	}
+	if end < len(d.devices) {
+		lines = append(lines, theme.MutedStyle.Render(fmt.Sprintf("  ↓ %d more device(s)", len(d.devices)-end)))
+	}
+
+	return renderOverviewPanel(title, strings.Join(lines, "\n"), d.width, d.overviewFocus == overviewFocusDevices)
+}
+
+func (d *Dashboard) renderDeviceDetailHeader() string {
+	device := d.selectedDashboardDevice()
+	if device == nil {
+		return theme.TitleStyle.Render("Device Detail")
+	}
+
+	status := theme.StatusOffline() + " offline"
+	if device.Online {
+		status = theme.StatusOnline() + " online"
+	}
+	meta := fmt.Sprintf("%s · %s · %s · %d/%d", d.deviceDisplayLabel(*device), device.Host, status, d.selectedDevice+1, len(d.devices))
+
+	return strings.Join([]string{
+		theme.TitleStyle.Render("Device Detail"),
+		theme.PrimaryStyle.Render(meta),
+		theme.MutedStyle.Render("Esc to overview · h/l switch device · j/k select service"),
+	}, "\n")
+}
+
+func (d *Dashboard) renderDeviceDetailLayout() string {
+	device := d.selectedDashboardDevice()
+	if device == nil {
+		return ""
+	}
+
+	sections := []string{d.renderDeviceCardWithGPU(*device, d.width)}
+	if sparklines := d.renderDeviceSparklines(device.ID, d.width); sparklines != "" {
+		sections = append(sections, sparklines)
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, sections...)
+}
+
+func (d *Dashboard) enterDeviceDetail() {
+	if len(d.devices) == 0 {
+		return
+	}
+	d.mode = dashboardDeviceDetail
+	d.selectedService = 0
+	d.showServiceDetail = false
+	d.updateServiceContainers()
+}
+
+func (d *Dashboard) moveDeviceSelection(delta int) {
+	if len(d.devices) == 0 {
+		return
+	}
+	d.selectedDevice += delta
+	if d.selectedDevice < 0 {
+		d.selectedDevice = 0
+	}
+	if d.selectedDevice >= len(d.devices) {
+		d.selectedDevice = len(d.devices) - 1
+	}
+	d.showServiceDetail = false
+}
+
+func (d *Dashboard) clampSelectedDevice() {
+	if len(d.devices) == 0 {
+		d.selectedDevice = 0
+		d.mode = dashboardOverview
+		d.selectedService = 0
+		d.showServiceDetail = false
+		return
+	}
+	if d.selectedDevice < 0 {
+		d.selectedDevice = 0
+	}
+	if d.selectedDevice >= len(d.devices) {
+		d.selectedDevice = len(d.devices) - 1
+	}
+}
+
+func (d *Dashboard) selectedDashboardDevice() *DashboardDevice {
+	if len(d.devices) == 0 {
+		return nil
+	}
+	d.clampSelectedDevice()
+	return &d.devices[d.selectedDevice]
+}
+
+func (d *Dashboard) renderOverviewDeviceHeader(innerWidth int) string {
+	switch {
+	case innerWidth >= 118:
+		labelW, hostW, gpuW := 14, 18, 20
+		return strings.Join([]string{
+			fitDashboardCell("", 2),
+			fitDashboardCell("Device", labelW),
+			fitDashboardCell("Host", hostW),
+			fitDashboardCell("GPU", gpuW),
+			fitDashboardCell("GUtil", 7),
+			fitDashboardCell("VRAM", 10),
+			fitDashboardCell("CPU", 6),
+			fitDashboardCell("RAM", 6),
+			fitDashboardCell("Svc", 5),
+		}, " ")
+	case innerWidth >= 96:
+		labelW, gpuW := 16, 18
+		return strings.Join([]string{
+			fitDashboardCell("", 2),
+			fitDashboardCell("Device", labelW),
+			fitDashboardCell("GPU", gpuW),
+			fitDashboardCell("GUtil", 7),
+			fitDashboardCell("VRAM", 10),
+			fitDashboardCell("CPU", 6),
+			fitDashboardCell("RAM", 6),
+			fitDashboardCell("Svc", 5),
+		}, " ")
+	case innerWidth >= 82:
+		labelW, gpuW := 18, 14
+		return strings.Join([]string{
+			fitDashboardCell("", 2),
+			fitDashboardCell("Device", labelW),
+			fitDashboardCell("GPU", gpuW),
+			fitDashboardCell("VRAM", 10),
+			fitDashboardCell("CPU", 6),
+			fitDashboardCell("RAM", 6),
+			fitDashboardCell("Svc", 5),
+		}, " ")
+	default:
+		nameW := maxDashboardInt(16, innerWidth-(2+1+10+1+6+1+5+4))
+		return strings.Join([]string{
+			fitDashboardCell("", 2),
+			fitDashboardCell("Device", nameW),
+			fitDashboardCell("VRAM", 10),
+			fitDashboardCell("CPU", 6),
+			fitDashboardCell("Svc", 5),
+		}, " ")
+	}
+}
+
+func (d *Dashboard) renderOverviewDeviceRow(device DashboardDevice, selected bool, index, innerWidth int) string {
+	label := d.deviceDisplayLabel(device)
+	host := device.Host
+	if host == "" {
+		host = "-"
+	}
+	status := theme.StatusOffline()
+	if device.Online {
+		status = theme.StatusOnline()
+	}
+	gpuName, gpuUtil, vramUsedMB, vramTotalMB, _ := d.deviceGPUStats(device)
+	cpu := dashboardPercent(device.Online, device.CPUPercent)
+	ram := dashboardPercent(device.Online, device.RAMPercent)
+	gutil := dashboardPercent(device.Online && vramTotalMB > 0, gpuUtil)
+	vram := formatOverviewMemoryPair(vramUsedMB, vramTotalMB)
+	svc := fmt.Sprintf("%d", device.ServiceCount)
+
+	var row string
+	switch {
+	case innerWidth >= 118:
+		labelW, hostW, gpuW := 14, 18, 20
+		row = strings.Join([]string{
+			fitDashboardCell(status, 2),
+			fitDashboardCell(label, labelW),
+			fitDashboardCell(host, hostW),
+			fitDashboardCell(gpuName, gpuW),
+			fitDashboardCell(gutil, 7),
+			fitDashboardCell(vram, 10),
+			fitDashboardCell(cpu, 6),
+			fitDashboardCell(ram, 6),
+			fitDashboardCell(svc, 5),
+		}, " ")
+	case innerWidth >= 96:
+		labelW, gpuW := 16, 18
+		row = strings.Join([]string{
+			fitDashboardCell(status, 2),
+			fitDashboardCell(label, labelW),
+			fitDashboardCell(gpuName, gpuW),
+			fitDashboardCell(gutil, 7),
+			fitDashboardCell(vram, 10),
+			fitDashboardCell(cpu, 6),
+			fitDashboardCell(ram, 6),
+			fitDashboardCell(svc, 5),
+		}, " ")
+	case innerWidth >= 82:
+		labelW, gpuW := 18, 14
+		row = strings.Join([]string{
+			fitDashboardCell(status, 2),
+			fitDashboardCell(label+" · "+host, labelW),
+			fitDashboardCell(gpuName, gpuW),
+			fitDashboardCell(vram, 10),
+			fitDashboardCell(cpu, 6),
+			fitDashboardCell(ram, 6),
+			fitDashboardCell(svc, 5),
+		}, " ")
+	default:
+		nameW := maxDashboardInt(16, innerWidth-(2+1+10+1+6+1+5+4))
+		row = strings.Join([]string{
+			fitDashboardCell(status, 2),
+			fitDashboardCell(label+" · "+host, nameW),
+			fitDashboardCell(vram, 10),
+			fitDashboardCell(cpu, 6),
+			fitDashboardCell(svc, 5),
+		}, " ")
+	}
+
+	zoneID := dashboardDeviceZoneID(index)
+	if selected {
+		bar := lipgloss.NewStyle().Foreground(theme.Accent).Bold(true).Render("▌")
+		content := lipgloss.NewStyle().Background(theme.Highlight).Foreground(theme.TextPrimary).Width(innerWidth + 1).Render(row)
+		return zone.Mark(zoneID, bar+content)
+	}
+
+	content := lipgloss.NewStyle().Foreground(theme.TextPrimary).Width(innerWidth + 1).Render(" " + row)
+	return zone.Mark(zoneID, content)
+}
+
+func (d *Dashboard) renderOverviewServicePreview() string {
+	aiContainers := d.overviewAIServiceContainers()
+	monitoringContainers := d.overviewMonitoringServiceContainers()
+	if len(aiContainers) == 0 && len(monitoringContainers) == 0 {
+		return ""
+	}
+	limit := d.overviewServicePreviewLimit()
+	if limit <= 0 {
+		return ""
+	}
+
+	if d.width >= 110 {
+		widths := dashboardPanelWidths(d.width, 2)
+		return lipgloss.JoinHorizontal(lipgloss.Top,
+			d.renderOverviewServicePanel("AI Services", aiContainers, widths[0], limit, overviewFocusAIServices),
+			d.renderOverviewServicePanel("Monitoring Services", monitoringContainers, widths[1], limit, overviewFocusMonitoringServices),
+		)
+	}
+
+	sections := []string{d.renderOverviewServicePanel("AI Services", aiContainers, d.width, limit, overviewFocusAIServices)}
+	if len(monitoringContainers) > 0 {
+		sections = append(sections, d.renderOverviewServicePanel("Monitoring Services", monitoringContainers, d.width, limit, overviewFocusMonitoringServices))
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, sections...)
+}
+
+func (d *Dashboard) renderOverviewServicePanel(title string, containers []ContainerData, width, limit int, focus overviewFocus) string {
+	titleText := theme.TitleStyle.Render(title)
+	if len(containers) == 0 {
+		return renderOverviewPanel(titleText, theme.MutedStyle.Render("No services in this category."), width, d.overviewFocus == focus)
+	}
+	truncated := containers
+	if len(truncated) > limit {
+		truncated = truncated[:limit]
+	}
+	rows := make([]components.ServiceRow, 0, len(truncated))
+	for _, container := range truncated {
+		rows = append(rows, d.serviceRowForContainer(container))
+	}
+	serviceList := components.NewServiceList(rows, width-4)
+	serviceList.Cursor = d.overviewServiceCursor(focus, truncated)
+	serviceList.ForceDeviceColumn = true
+	serviceList.ZonePrefix = overviewServiceZonePrefix(focus)
+	content := serviceList.Render()
+	if len(containers) > len(truncated) {
+		content += "\n" + theme.MutedStyle.Render(fmt.Sprintf("Showing %d of %d services", len(truncated), len(containers)))
+	}
+	return renderOverviewPanel(titleText, content, width, d.overviewFocus == focus)
+}
+
+func (d *Dashboard) overviewWindow() (int, int) {
+	if len(d.devices) == 0 {
+		return 0, 0
+	}
+	maxRows := d.height - 30
+	if maxRows < 4 {
+		maxRows = 4
+	}
+	if maxRows > 12 {
+		maxRows = 12
+	}
+	if maxRows >= len(d.devices) {
+		return 0, len(d.devices)
+	}
+
+	start := d.selectedDevice - maxRows/2
+	if start < 0 {
+		start = 0
+	}
+	end := start + maxRows
+	if end > len(d.devices) {
+		end = len(d.devices)
+		start = end - maxRows
+	}
+	return start, end
+}
+
+func (d *Dashboard) overviewServicePreviewLimit() int {
+	start, end := d.overviewWindow()
+	visibleDeviceRows := end - start
+	limit := d.height - 22 - visibleDeviceRows
+	if limit < 4 {
+		limit = 4
+	}
+	if limit > 10 {
+		limit = 10
+	}
+	return limit
+}
+
+func (d *Dashboard) fleetStats() (online, services, gpuNodes, alerts int) {
+	for _, device := range d.devices {
+		if device.Online {
+			online++
+		} else {
+			alerts++
+		}
+		services += device.ServiceCount
+		if device.GPUCount > 0 {
+			gpuNodes++
+		}
+	}
+	for _, metrics := range d.metrics {
+		for _, container := range metrics.Containers {
+			if dashboardServiceAlert(container) {
+				alerts++
+			}
+		}
+	}
+	return online, services, gpuNodes, alerts
+}
+
+func dashboardServiceAlert(container ContainerData) bool {
+	status := container.Health
+	if status == "" {
+		status = container.Status
+	}
+	switch status {
+	case "healthy", "running", "starting", "created", "restarting", "":
+		return false
+	default:
+		return true
+	}
+}
+
+func (d *Dashboard) overviewGPUText(device DashboardDevice) string {
+	name, _, _, _, count := d.deviceGPUStats(device)
+	if count > 1 && name != "" && name != "none" {
+		return fmt.Sprintf("%dx %s", count, name)
+	}
+	return name
+}
+
+func (d *Dashboard) deviceDisplayLabel(device DashboardDevice) string {
+	if device.Label != "" {
+		return device.Label
+	}
+	return device.ID
+}
+
+func dashboardDeviceZoneID(index int) string {
+	return fmt.Sprintf("dashboard-device-%d", index)
+}
+
+func overviewPickerZoneID(index int) string {
+	return fmt.Sprintf("overview-picker-%d", index)
+}
+
+func dashboardPercent(online bool, value float64) string {
+	if !online {
+		return "--"
+	}
+	return fmt.Sprintf("%.0f%%", value)
+}
+
+func fitDashboardCell(value string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if ansi.StringWidth(value) > width {
+		if width == 1 {
+			value = "…"
+		} else {
+			value = ansi.Truncate(value, width-1, "") + "…"
+		}
+	}
+	if pad := width - ansi.StringWidth(value); pad > 0 {
+		value += strings.Repeat(" ", pad)
+	}
+	return value
+}
+
+func (d *Dashboard) deviceGPUStats(device DashboardDevice) (name string, util float64, usedMB, totalMB int64, count int) {
+	name = "none"
+	if metrics, ok := d.metrics[device.ID]; ok && len(metrics.GPUs) > 0 {
+		count = len(metrics.GPUs)
+		name = strings.TrimPrefix(metrics.GPUs[0].Name, "NVIDIA ")
+		var totalUtil float64
+		for _, gpu := range metrics.GPUs {
+			totalUtil += float64(gpu.UtilPercent)
+			usedMB += gpu.VRAMUsedMB
+			totalMB += gpu.VRAMTotalMB
+		}
+		util = totalUtil / float64(len(metrics.GPUs))
+		return name, util, usedMB, totalMB, count
+	}
+
+	if device.GPUCount > 0 {
+		count = device.GPUCount
+		name = strings.TrimPrefix(device.GPUType, "NVIDIA ")
+		if name == "" {
+			name = "GPU"
+		}
+	}
+	return name, 0, 0, 0, count
+}
+
+func (d *Dashboard) fleetGPUStats() (avgUtil float64, usedMB, totalMB int64, activeGPUs, gpuCount int) {
+	var utilSum float64
+	for _, metrics := range d.metrics {
+		if len(metrics.GPUs) == 0 {
+			continue
+		}
+		for _, gpu := range metrics.GPUs {
+			gpuCount++
+			utilSum += float64(gpu.UtilPercent)
+			usedMB += gpu.VRAMUsedMB
+			totalMB += gpu.VRAMTotalMB
+			if gpu.UtilPercent > 0 || gpu.VRAMUsedMB > 0 {
+				activeGPUs++
+			}
+		}
+	}
+	if gpuCount > 0 {
+		avgUtil = utilSum / float64(gpuCount)
+	}
+	return avgUtil, usedMB, totalMB, activeGPUs, gpuCount
+}
+
+func (d *Dashboard) fleetCPUAndRAMStats() (avgCPU, avgRAM float64) {
+	count := 0
+	for _, device := range d.devices {
+		if !device.Online {
+			continue
+		}
+		avgCPU += device.CPUPercent
+		avgRAM += device.RAMPercent
+		count++
+	}
+	if count == 0 {
+		return 0, 0
+	}
+	return avgCPU / float64(count), avgRAM / float64(count)
+}
+
+func formatOverviewMem(mb int64) string {
+	if mb <= 0 {
+		return "-"
+	}
+	if mb < 1024 {
+		return fmt.Sprintf("%dM", mb)
+	}
+	return fmt.Sprintf("%.1fG", float64(mb)/1024)
+}
+
+func formatOverviewMemoryPair(usedMB, totalMB int64) string {
+	if totalMB <= 0 {
+		return "-"
+	}
+	return formatOverviewMem(usedMB) + "/" + formatOverviewMem(totalMB)
+}
+
+func dashboardServiceRowAlert(row components.ServiceRow) bool {
+	switch row.Health {
+	case "unhealthy", "error":
+		return true
+	}
+	switch row.Status {
+	case "exited", "dead", "error", "unhealthy":
+		return true
+	}
+	return false
+}
+
+func (d *Dashboard) fleetServiceAlerts() int {
+	alerts := 0
+	for _, metrics := range d.metrics {
+		for _, container := range metrics.Containers {
+			if dashboardServiceAlert(container) {
+				alerts++
+			}
+		}
+	}
+	return alerts
+}
+
+func isMonitoringServiceRow(row components.ServiceRow) bool {
+	return strings.HasPrefix(strings.ToLower(row.Name), "mon-")
+}
+
+func isMonitoringServiceContainer(container ContainerData) bool {
+	return isMonitoringServiceRow(components.ServiceRow{Name: strings.TrimPrefix(container.Name, "yokai-")})
+}
+
+func maxDashboardInt64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func maxDashboardInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // renderWideLayout renders the 3-column btop-style grid (≥140 cols).
@@ -375,7 +1337,7 @@ func (d *Dashboard) renderWideLayout() string {
 
 	// Row 2: Sparkline charts (CPU, RAM, GPU) side-by-side
 	if len(d.devices) > 0 {
-		device := d.devices[d.activeDeviceTab]
+		device := d.devices[d.selectedDevice]
 		row2 := d.renderChartsRow(device.ID, 3)
 		if row2 != "" {
 			rows = append(rows, row2)
@@ -400,7 +1362,7 @@ func (d *Dashboard) renderMediumLayout() string {
 			rows = append(rows, row1)
 		}
 
-		device := d.devices[d.activeDeviceTab]
+		device := d.devices[d.selectedDevice]
 		row2 := d.renderChartsRow(device.ID, 2)
 		if row2 != "" {
 			rows = append(rows, row2)
@@ -418,10 +1380,10 @@ func (d *Dashboard) renderNarrowLayout() string {
 	var rows []string
 
 	if len(d.devices) > 0 {
-		if d.activeDeviceTab >= len(d.devices) {
-			d.activeDeviceTab = len(d.devices) - 1
+		if d.selectedDevice >= len(d.devices) {
+			d.selectedDevice = len(d.devices) - 1
 		}
-		device := d.devices[d.activeDeviceTab]
+		device := d.devices[d.selectedDevice]
 
 		card := d.renderDeviceCardWithGPU(device, d.width)
 		rows = append(rows, card)
@@ -475,7 +1437,7 @@ func (d *Dashboard) renderDeviceCardsRow(maxCols int) string {
 		}
 
 		// Highlight active device with focused border
-		focused := (i == d.activeDeviceTab)
+		focused := (i == d.selectedDevice)
 		card := d.renderDeviceCardCompact(device, w, focused)
 		cards = append(cards, card)
 	}
@@ -628,7 +1590,7 @@ func (d *Dashboard) renderDeviceTabBar() string {
 		tabLabel := dot + " " + label
 
 		zoneID := fmt.Sprintf("device-tab-%d", i)
-		if i == d.activeDeviceTab {
+		if i == d.selectedDevice {
 			rendered := activeLabelStyle.Render(tabLabel)
 			tabs = append(tabs, zone.Mark(zoneID, rendered))
 		} else {
@@ -664,22 +1626,25 @@ func (d *Dashboard) moveDeviceTab(delta int) {
 	if len(d.devices) == 0 {
 		return
 	}
-	d.activeDeviceTab = (d.activeDeviceTab + delta + len(d.devices)) % len(d.devices)
+	d.selectedDevice = (d.selectedDevice + delta + len(d.devices)) % len(d.devices)
 	// Reset service selection when switching devices
 	d.selectedService = 0
-	d.showDetail = false
+	d.showServiceDetail = false
 	d.updateServiceContainers()
 }
 
 // activeDeviceID returns the device ID for the currently selected tab.
 func (d *Dashboard) activeDeviceID() string {
+	if d.mode == dashboardOverview {
+		return ""
+	}
 	if len(d.devices) == 0 {
 		return ""
 	}
-	if d.activeDeviceTab >= len(d.devices) {
-		d.activeDeviceTab = len(d.devices) - 1
+	if d.selectedDevice >= len(d.devices) {
+		d.selectedDevice = len(d.devices) - 1
 	}
-	return d.devices[d.activeDeviceTab].ID
+	return d.devices[d.selectedDevice].ID
 }
 
 // renderDeviceCardWithGPU renders a full-width device card with GPU metrics inline.
@@ -820,57 +1785,23 @@ func (d *Dashboard) renderServiceList() string {
 	serviceList := components.NewServiceList(serviceRows, d.width-4)
 	serviceList.Cursor = d.selectedService
 
-	title := theme.TitleStyle.Render("Services")
+	titleText := "Services"
+	if d.mode == dashboardDeviceDetail {
+		if device := d.selectedDashboardDevice(); device != nil {
+			titleText = "Services — " + d.deviceDisplayLabel(*device)
+		}
+	}
+	title := theme.TitleStyle.Render(titleText)
 	content := serviceList.Render()
 
 	return theme.RenderPanel(title, content, d.width)
 }
 
 func (d *Dashboard) buildServiceRows() []components.ServiceRow {
-	var rows []components.ServiceRow
-
-	activeID := d.activeDeviceID()
-
-	// Build from container data in metrics (filtered to active device)
-	for deviceID, metrics := range d.metrics {
-		if activeID != "" && deviceID != activeID {
-			continue
-		}
-		device := d.findDevice(deviceID)
-		if device == nil {
-			continue
-		}
-
-		deviceLabel := device.Label
-		if deviceLabel == "" {
-			deviceLabel = device.ID
-		}
-
-		for _, container := range metrics.Containers {
-			serviceType := d.inferServiceType(container.Name)
-
-			// Strip the "yokai-" prefix for cleaner display
-			displayName := strings.TrimPrefix(container.Name, "yokai-")
-
-			row := components.ServiceRow{
-				Name:                displayName,
-				Type:                serviceType,
-				Model:               d.getServiceModel(container),
-				Status:              container.Status,
-				Health:              container.Health,
-				Device:              deviceLabel,
-				Port:                extractExternalPort(container.Ports),
-				CPUPercent:          container.CPUPercent,
-				MemUsedMB:           container.MemUsedMB,
-				GPUMemMB:            container.GPUMemMB,
-				Uptime:              formatUptime(container.UptimeSeconds),
-				GenerationTokPerSec: container.GenerationTokPerSec,
-				PromptTokPerSec:     container.PromptTokPerSec,
-			}
-			rows = append(rows, row)
-		}
+	rows := make([]components.ServiceRow, 0, len(d.serviceContainers))
+	for _, container := range d.serviceContainers {
+		rows = append(rows, d.serviceRowForContainer(container))
 	}
-
 	return rows
 }
 
@@ -1006,6 +1937,17 @@ func (d *Dashboard) moveServiceCursor(delta int) {
 }
 
 func (d *Dashboard) getSelectedContainer() *ContainerData {
+	if d.mode == dashboardOverview {
+		containers := d.visibleOverviewServiceContainersForFocus(d.overviewFocus)
+		if len(containers) == 0 {
+			return nil
+		}
+		idx := d.overviewServiceCursor(d.overviewFocus, containers)
+		if idx >= 0 && idx < len(containers) {
+			return &containers[idx]
+		}
+		return nil
+	}
 	if d.selectedService >= 0 && d.selectedService < len(d.serviceContainers) {
 		return &d.serviceContainers[d.selectedService]
 	}
@@ -1034,11 +1976,88 @@ func (d *Dashboard) updateServiceContainers() {
 		for _, metrics := range d.metrics {
 			d.serviceContainers = append(d.serviceContainers, metrics.Containers...)
 		}
-		return
-	}
-	if m, ok := d.metrics[activeID]; ok {
+	} else if m, ok := d.metrics[activeID]; ok {
 		d.serviceContainers = append(d.serviceContainers, m.Containers...)
 	}
+	d.sortServiceContainers()
+	if d.mode == dashboardOverview {
+		d.syncOverviewSelections()
+	}
+
+	if len(d.serviceContainers) == 0 {
+		d.selectedService = 0
+		d.showServiceDetail = false
+		return
+	}
+	if d.selectedService < 0 {
+		d.selectedService = 0
+	}
+	if d.selectedService >= len(d.serviceContainers) {
+		d.selectedService = len(d.serviceContainers) - 1
+	}
+	if d.mode == dashboardOverview {
+		d.showServiceDetail = false
+	}
+}
+
+func (d *Dashboard) sortServiceContainers() {
+	sort.SliceStable(d.serviceContainers, func(i, j int) bool {
+		return d.lessServiceContainer(d.serviceContainers[i], d.serviceContainers[j])
+	})
+}
+
+func (d *Dashboard) lessServiceContainer(left, right ContainerData) bool {
+	leftAlert := dashboardServiceAlert(left)
+	rightAlert := dashboardServiceAlert(right)
+	if leftAlert != rightAlert {
+		return leftAlert
+	}
+	leftDevice := d.serviceContainerDeviceLabel(left.ID)
+	rightDevice := d.serviceContainerDeviceLabel(right.ID)
+	if leftDevice != rightDevice {
+		return leftDevice < rightDevice
+	}
+	leftName := strings.TrimPrefix(left.Name, "yokai-")
+	rightName := strings.TrimPrefix(right.Name, "yokai-")
+	return leftName < rightName
+}
+
+func (d *Dashboard) serviceContainerDeviceLabel(containerID string) string {
+	deviceID := d.findDeviceIDForContainer(containerID)
+	if device := d.findDevice(deviceID); device != nil {
+		return d.deviceDisplayLabel(*device)
+	}
+	return deviceID
+}
+
+func (d *Dashboard) syncOverviewSelections() {
+	ai := d.visibleOverviewServiceContainersForFocus(overviewFocusAIServices)
+	monitoring := d.visibleOverviewServiceContainersForFocus(overviewFocusMonitoringServices)
+	d.selectedAIServiceID = syncOverviewSelectionID(ai, d.selectedAIServiceID)
+	d.selectedMonitoringServiceID = syncOverviewSelectionID(monitoring, d.selectedMonitoringServiceID)
+
+	validFocus := false
+	for _, panel := range d.overviewFocusablePanels() {
+		if panel == d.overviewFocus {
+			validFocus = true
+			break
+		}
+	}
+	if !validFocus {
+		d.overviewFocus = overviewFocusDevices
+	}
+}
+
+func syncOverviewSelectionID(containers []ContainerData, current string) string {
+	if len(containers) == 0 {
+		return ""
+	}
+	for _, container := range containers {
+		if container.ID == current {
+			return current
+		}
+	}
+	return containers[0].ID
 }
 
 func (d *Dashboard) stopService(containerID string) tea.Cmd {
@@ -1254,10 +2273,25 @@ func (d *Dashboard) InputActive() bool { return false }
 func (d *Dashboard) Name() string { return "Dashboard" }
 
 func (d *Dashboard) KeyBinds() []KeyBind {
+	if d.mode == dashboardOverview {
+		return []KeyBind{
+			{Key: "tab", Help: "panel"},
+			{Key: "j/k", Help: "move"},
+			{Key: "enter", Help: "inspect"},
+			{Key: "L", Help: "logs"},
+			{Key: "s/r/x/t", Help: "service action"},
+			{Key: "n", Help: "new"},
+			{Key: "d", Help: "devices"},
+			{Key: "c", Help: "ai tools"},
+			{Key: "?", Help: "help"},
+			{Key: "q", Help: "quit"},
+		}
+	}
 	return []KeyBind{
 		{Key: "h/l", Help: "device"},
 		{Key: "j/k", Help: "service"},
-		{Key: "enter", Help: "detail"},
+		{Key: "enter", Help: "service detail"},
+		{Key: "esc", Help: "overview"},
 		{Key: "n", Help: "new"},
 		{Key: "s", Help: "stop"},
 		{Key: "r", Help: "restart"},

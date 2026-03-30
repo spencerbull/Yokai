@@ -29,3 +29,26 @@ func TestStatusTextIncludesRestartingState(t *testing.T) {
 		t.Fatalf("expected created status text, got %q", got)
 	}
 }
+
+func TestServiceListHidesDeviceColumnForSingleDevice(t *testing.T) {
+	list := NewServiceList([]ServiceRow{{Name: "svc-a", Device: "alpha"}, {Name: "svc-b", Device: "alpha"}}, 100)
+	for _, col := range list.activeColumns() {
+		if col.id == "device" {
+			t.Fatal("expected device column to be hidden for a single-device service list")
+		}
+	}
+}
+
+func TestServiceListKeepsDeviceColumnForFleetView(t *testing.T) {
+	list := NewServiceList([]ServiceRow{{Name: "svc-a", Device: "alpha"}, {Name: "svc-b", Device: "beta"}}, 100)
+	found := false
+	for _, col := range list.activeColumns() {
+		if col.id == "device" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected device column to remain visible for multi-device service lists")
+	}
+}

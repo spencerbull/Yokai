@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/charmbracelet/bubbles/textarea"
@@ -143,18 +144,20 @@ func (b *Bootstrap) runBootstrap() tea.Cmd {
 			}
 		}
 
-		// Step 3: Generate agent token and deploy agent
+		// Step 3: Generate agent token and deploy an agent binary for the remote platform.
 		tokenBytes := make([]byte, 32)
 		if _, err := rand.Read(tokenBytes); err != nil {
 			return bootstrapProgressMsg{step: bsFailed, err: fmt.Errorf("generating token: %w", err)}
 		}
 		agentToken := hex.EncodeToString(tokenBytes)
 
-		// Get current binary path for deployment
-		binaryPath, err := os.Executable()
+		binaryPath, err := sshpkg.BuildLocalBinaryForTarget(pf.KernelOS, pf.Arch)
 		if err != nil {
-			return bootstrapProgressMsg{step: bsFailed, err: fmt.Errorf("getting binary path: %w", err)}
+			return bootstrapProgressMsg{step: bsFailed, err: fmt.Errorf("building remote agent binary: %w", err)}
 		}
+		defer func() {
+			_ = os.RemoveAll(filepath.Dir(binaryPath))
+		}()
 
 		// Deploy the agent
 		if err := sshpkg.DeployAgent(client, binaryPath, agentToken); err != nil {
