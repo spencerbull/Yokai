@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"reflect"
 	"sync"
 	"syscall"
 	"time"
@@ -50,7 +51,15 @@ func Run(version string) error {
 	// HTTP server
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", d.handleHealth)
+	mux.HandleFunc("GET /discovery/ssh-config-hosts", d.handleSSHConfigHosts)
+	mux.HandleFunc("GET /discovery/tailscale/status", d.handleTailscaleStatus)
+	mux.HandleFunc("GET /discovery/tailscale/peers", d.handleTailscalePeers)
+	mux.HandleFunc("POST /bootstrap/device", d.handleBootstrapDevice)
 	mux.HandleFunc("GET /devices", d.handleDevices)
+	mux.HandleFunc("POST /devices", d.handleCreateDevice)
+	mux.HandleFunc("PUT /devices/{deviceID}", d.handleUpdateDevice)
+	mux.HandleFunc("POST /devices/{deviceID}/test", d.handleTestDevice)
+	mux.HandleFunc("DELETE /devices/{deviceID}", d.handleDeleteDevice)
 	mux.HandleFunc("GET /metrics", d.handleMetrics)
 	mux.HandleFunc("GET /metrics/{deviceID}", d.handleDeviceMetrics)
 	mux.HandleFunc("POST /deploy", d.handleDeploy)
@@ -60,6 +69,11 @@ func Run(version string) error {
 	mux.HandleFunc("POST /containers/{deviceID}/{containerID}/test", d.handleTestContainer)
 	mux.HandleFunc("GET /logs/{deviceID}/{containerID}", d.handleLogs)
 	mux.HandleFunc("GET /images/tags", d.handleImageTags)
+	mux.HandleFunc("GET /settings", d.handleGetSettings)
+	mux.HandleFunc("PATCH /settings", d.handlePatchSettings)
+	mux.HandleFunc("PUT /settings/hf-token", d.handlePutHFToken)
+	mux.HandleFunc("GET /history/deploy", d.handleGetDeployHistory)
+	mux.HandleFunc("PUT /history/deploy", d.handlePutDeployHistory)
 	mux.HandleFunc("POST /reload", d.handleReload)
 
 	addr := cfg.Daemon.Listen
@@ -103,31 +117,6 @@ func (d *Daemon) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"status":  "ok",
 		"version": d.version,
 		"devices": deviceCount,
-	})
-}
-
-func (d *Daemon) handleDevices(w http.ResponseWriter, r *http.Request) {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-
-	type deviceStatus struct {
-		config.Device
-		Online     bool `json:"online"`
-		TunnelPort int  `json:"tunnel_port"`
-	}
-
-	var devices []deviceStatus
-	for _, dev := range d.cfg.Devices {
-		ds := deviceStatus{
-			Device:     dev,
-			Online:     d.tunnels.IsConnected(dev.ID),
-			TunnelPort: d.tunnels.LocalPort(dev.ID),
-		}
-		devices = append(devices, ds)
-	}
-
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"devices": devices,
 	})
 }
 
@@ -199,7 +188,19 @@ func (d *Daemon) handleRemoveContainer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"status": "removed"})
+	removedServices, err := d.removeServiceByContainerID(containerID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"error":   "config_save_failed",
+			"message": err.Error(),
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status":           "removed",
+		"removed_services": removedServices,
+	})
 }
 
 func (d *Daemon) handleRestartContainer(w http.ResponseWriter, r *http.Request) {
@@ -353,4 +354,56 @@ func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	if err := enc.Encode(data); err != nil {
 		fmt.Fprintf(os.Stderr, "json encode error: %v\n", err)
 	}
+}
+
+func (d *Daemon) applyConfigUpdate(nextCfg *config.Config) {
+	d.mu.Lock()
+	oldDevices := append([]config.Device(nil), d.cfg.Devices...)
+	d.cfg = nextCfg
+	d.tunnels.UpdateConfig(nextCfg)
+	d.aggregator.UpdateConfig(nextCfg)
+	d.mu.Unlock()
+
+	oldByID := make(map[string]config.Device, len(oldDevices))
+	for _, device := range oldDevices {
+		oldByID[device.ID] = device
+	}
+	newByID := make(map[string]config.Device, len(nextCfg.Devices))
+	for _, device := range nextCfg.Devices {
+		newByID[device.ID] = device
+	}
+
+	for id := range oldByID {
+		if _, ok := newByID[id]; !ok {
+			d.tunnels.CloseDevice(id)
+		}
+	}
+
+	for id, device := range newByID {
+		oldDevice, existed := oldByID[id]
+		if !existed {
+			d.tunnels.ConnectDevice(device)
+			continue
+		}
+		if !reflect.DeepEqual(oldDevice, device) {
+			d.tunnels.CloseDevice(id)
+			d.tunnels.ConnectDevice(device)
+		}
+	}
+}
+
+func (d *Daemon) removeServiceByContainerID(containerID string) (int, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	removed := d.cfg.RemoveServiceByContainerID(containerID)
+	if removed == 0 {
+		return 0, nil
+	}
+
+	if err := config.Save(d.cfg); err != nil {
+		return 0, fmt.Errorf("saving config after service removal: %w", err)
+	}
+
+	return removed, nil
 }

@@ -8,6 +8,8 @@ import (
 	"strings"
 )
 
+const defaultGoVersion = "1.25"
+
 // BuildLocalBinaryForTarget builds a temporary yokai binary for the target platform.
 func BuildLocalBinaryForTarget(kernelOS, arch string) (string, error) {
 	goos, err := normalizeTargetOS(kernelOS)
@@ -25,7 +27,11 @@ func BuildLocalBinaryForTarget(kernelOS, arch string) (string, error) {
 	}
 
 	binaryPath := filepath.Join(tmpDir, "yokai")
-	cmd := exec.Command("go", "build", "-o", binaryPath, "./cmd/yokai")
+	cmd, err := localGoBuildCommand(binaryPath)
+	if err != nil {
+		_ = os.RemoveAll(tmpDir)
+		return "", err
+	}
 	cmd.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS="+goos, "GOARCH="+goarch)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -34,6 +40,18 @@ func BuildLocalBinaryForTarget(kernelOS, arch string) (string, error) {
 	}
 
 	return binaryPath, nil
+}
+
+func localGoBuildCommand(binaryPath string) (*exec.Cmd, error) {
+	if goPath, err := exec.LookPath("go"); err == nil {
+		return exec.Command(goPath, "build", "-o", binaryPath, "./cmd/yokai"), nil
+	}
+
+	if misePath, err := exec.LookPath("mise"); err == nil {
+		return exec.Command(misePath, "exec", "go@"+defaultGoVersion, "--", "go", "build", "-o", binaryPath, "./cmd/yokai"), nil
+	}
+
+	return nil, fmt.Errorf("go toolchain not found locally (expected either `go` on PATH or `mise exec go@%s`)", defaultGoVersion)
 }
 
 func normalizeTargetOS(kernelOS string) (string, error) {
