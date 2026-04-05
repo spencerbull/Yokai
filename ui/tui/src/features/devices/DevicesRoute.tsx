@@ -1,7 +1,7 @@
-import { AddDeviceSourceModal } from "./AddDeviceSourceModal"
-import { DeviceEditorModal } from "./DeviceEditorModal"
-import { SSHImportModal } from "./SSHImportModal"
-import { TailscaleImportModal } from "./TailscaleImportModal"
+import { DeviceSetupOverlays } from "./DeviceSetupOverlays"
+import { DeviceOverviewPane } from "../dashboard/DeviceOverviewPane"
+import { ServiceCategoryPane } from "../dashboard/ServiceCategoryPane"
+import { isAIService, isMonitoringService } from "../dashboard/normalizeFleet"
 import { useTheme } from "../../theme/context"
 import type { DevicesController } from "./useDevicesController"
 
@@ -11,6 +11,10 @@ type DevicesRouteProps = {
 
 export function DevicesRoute(props: DevicesRouteProps) {
   const theme = useTheme()
+
+  if (props.controller.viewMode === "detail") {
+    return <DeviceDetailRoute controller={props.controller} />
+  }
 
   return (
     <box flexDirection="column" gap={1} flexGrow={1}>
@@ -39,15 +43,17 @@ export function DevicesRoute(props: DevicesRouteProps) {
               const selected = device.id === props.controller.selectedDevice?.id
               const color = device.online ? theme.colors.success : theme.colors.warning
               return (
-                <text key={device.id} fg={selected ? theme.colors.selectionText : theme.colors.textMuted} bg={selected ? theme.colors.selectionBackground : theme.colors.panelMuted}>
-                  <span fg={selected ? theme.colors.selectionText : color}>{selected ? "▌" : device.online ? "●" : "○"}</span>{" "}
-                  {truncate(device.label || device.id, 18)}
-                  <span fg={selected ? theme.colors.selectionText : theme.colors.textSubtle}> · {truncate(device.connection_type || "manual", 10)} · {device.agent_port}</span>
-                </text>
+                <box key={device.id} focusable backgroundColor={selected ? theme.colors.selectionBackground : theme.colors.panelMuted} onMouseDown={() => props.controller.openDeviceView(device.id)}>
+                  <text fg={selected ? theme.colors.selectionText : theme.colors.textMuted} bg={selected ? theme.colors.selectionBackground : theme.colors.panelMuted}>
+                    <span fg={selected ? theme.colors.selectionText : color}>{selected ? "▌" : device.online ? "●" : "○"}</span>{" "}
+                    {truncate(device.label || device.id, 18)}
+                    <span fg={selected ? theme.colors.selectionText : theme.colors.textSubtle}> · {truncate(device.connection_type || "manual", 10)} · {device.agent_port}</span>
+                  </text>
+                </box>
               )
             })
           )}
-          <text fg={theme.colors.textSubtle}>Actions: A add wizard · E edit · T test · X remove · R refresh</text>
+          <text fg={theme.colors.textSubtle}>Actions: Enter open view · A add · E edit · T test · U upgrade · Shift+T bulk test · Shift+U bulk upgrade · X remove · R refresh</text>
         </box>
 
         <box
@@ -78,7 +84,7 @@ export function DevicesRoute(props: DevicesRouteProps) {
               <DetailLine label="Tags" value={props.controller.selectedDevice.tags?.join(", ") || "-"} />
               <DetailLine label="Tunnel" value={props.controller.selectedDevice.online ? `online on ${props.controller.selectedDevice.tunnel_port}` : "offline"} />
               {props.controller.selectedDevice.tunnel_error ? <DetailError title="Tunnel Error" value={props.controller.selectedDevice.tunnel_error} /> : null}
-              <text fg={theme.colors.textSubtle}>Select a device with Up/Down, then use the action keys above.</text>
+              <text fg={theme.colors.textSubtle}>Use T to test, U to upgrade, Shift+T to test all, and Shift+U to upgrade all.</text>
             </>
           ) : (
             <text fg={theme.colors.textSubtle}>No device selected.</text>
@@ -94,35 +100,100 @@ export function DevicesRoute(props: DevicesRouteProps) {
 
       {props.controller.pendingAction ? <Banner color={theme.colors.accent}>Running {props.controller.pendingAction}...</Banner> : null}
 
-      {props.controller.addSource ? (
-        <AddDeviceSourceModal
-          selectedIndex={props.controller.addSource.selectedIndex}
-          onSelect={props.controller.selectAddSource}
-        />
-      ) : null}
-
-      {props.controller.editor ? (
-        <DeviceEditorModal field={props.controller.editor.field} form={props.controller.editor.form} onChange={props.controller.setEditorValue} />
-      ) : null}
-
-      {props.controller.importer ? (
-        <SSHImportModal error={props.controller.importer.error} hosts={props.controller.importer.hosts} loading={props.controller.importer.loading} selectedIndex={props.controller.importer.selectedIndex} />
-      ) : null}
-
-      {props.controller.tailscaleImporter ? (
-        <TailscaleImportModal
-          error={props.controller.tailscaleImporter.error}
-          peers={props.controller.tailscaleImporter.peers}
-          query={props.controller.tailscaleImporter.query}
-          selectedIndex={props.controller.tailscaleImporter.selectedIndex}
-          showTagHelp={props.controller.tailscaleImporter.showTagHelp}
-          status={props.controller.tailscaleImporter.status}
-          visiblePeers={props.controller.visiblePeers}
-          onQueryChange={props.controller.setTailscaleQuery}
-        />
-      ) : null}
+      <DeviceSetupOverlays controller={props.controller} />
     </box>
   )
+}
+
+function DeviceDetailRoute(props: { controller: DevicesController }) {
+  const theme = useTheme()
+  const device = props.controller.selectedDevice
+  const fleetDevice = props.controller.selectedFleetDevice
+  const services = props.controller.selectedServices
+  const aiServices = services.filter(isAIService)
+  const monitoringServices = services.filter(isMonitoringService)
+
+  if (!device) {
+    return <text fg={theme.colors.textSubtle}>No device selected.</text>
+  }
+
+  return (
+    <scrollbox height={28} style={scrollboxStyle(theme)}>
+      <box flexDirection="column" gap={1} paddingRight={1}>
+        {props.controller.notice ? <Banner color={noticeColor(theme, props.controller.notice.level)}>{props.controller.notice.message}</Banner> : null}
+        {props.controller.pendingAction ? <Banner color={theme.colors.accent}>Running {props.controller.pendingAction}...</Banner> : null}
+
+        <box border borderStyle="single" borderColor={theme.colors.borderStrong} backgroundColor={theme.colors.panelMuted} padding={1} flexDirection="column" gap={1}>
+          <text fg={theme.colors.text}><strong>{device.label || device.id}</strong></text>
+          <text fg={theme.colors.textMuted}>{device.host} · {device.connection_type || "manual"} · {device.online ? "online" : "offline"}</text>
+          <text fg={theme.colors.textSubtle}>Esc back · J/K switch device · T test · U upgrade · G open Grafana · X remove</text>
+        </box>
+
+        <box flexDirection="row" gap={1}>
+          <box flexBasis="52%" flexGrow={1} flexDirection="column" gap={1}>
+            <DeviceOverviewPane
+              devices={fleetDevice ? [fleetDevice] : []}
+              history={props.controller.fleetHistory}
+              panelWidth={52}
+              selectedDeviceId={fleetDevice?.id}
+              selectedService={null}
+            />
+          </box>
+          <box width={44} minWidth={38} border borderStyle="single" borderColor={theme.colors.border} backgroundColor={theme.colors.panelMuted} padding={1} flexDirection="column" gap={1}>
+            <text fg={theme.colors.text}><strong>Details</strong></text>
+            <DetailLine label="ID" value={device.id} />
+            <DetailLine label="Host" value={device.host} />
+            <DetailLine label="SSH User" value={device.ssh_user || "-"} />
+            <DetailLine label="SSH Key" value={device.ssh_key || "-"} />
+            <DetailLine label="SSH Port" value={`${device.ssh_port ?? 22}`} />
+            <DetailLine label="Agent Port" value={`${device.agent_port}`} />
+            <DetailLine label="Tags" value={device.tags?.join(", ") || "-"} />
+            <DetailLine label="Services" value={`${services.length}`} />
+            <DetailLine label="AI" value={`${aiServices.length}`} />
+            <DetailLine label="Monitoring" value={`${monitoringServices.length}`} />
+            {device.tunnel_error ? <DetailError title="Tunnel Error" value={device.tunnel_error} /> : null}
+            {monitoringServices.some((service) => service.name.includes("grafana") || service.image.includes("grafana")) ? (
+              <ActionText keys="G" onSelect={props.controller.openGrafana}>Open Grafana</ActionText>
+            ) : null}
+          </box>
+        </box>
+
+        <ServiceCategoryPane
+          title="AI Services"
+          services={aiServices}
+          rowWidth={88}
+          selectedContainerId={undefined}
+          emptyText="No AI services are running on this device."
+          maxRows={Math.max(4, Math.min(8, aiServices.length || 4))}
+        />
+        <ServiceCategoryPane
+          title="Monitoring Services"
+          services={monitoringServices}
+          rowWidth={88}
+          selectedContainerId={undefined}
+          emptyText="No monitoring services are running on this device."
+          maxRows={Math.max(4, Math.min(8, monitoringServices.length || 4))}
+        />
+
+        <DeviceSetupOverlays controller={props.controller} />
+      </box>
+    </scrollbox>
+  )
+}
+
+function scrollboxStyle(theme: ReturnType<typeof useTheme>) {
+  return {
+    rootOptions: { backgroundColor: theme.colors.panel },
+    wrapperOptions: { backgroundColor: theme.colors.panel },
+    viewportOptions: { backgroundColor: theme.colors.panel },
+    contentOptions: { backgroundColor: theme.colors.panel },
+    scrollbarOptions: {
+      trackOptions: {
+        foregroundColor: theme.colors.borderStrong,
+        backgroundColor: theme.colors.panelMuted,
+      },
+    },
+  }
 }
 
 function Banner(props: { children: string; color: string }) {
@@ -153,6 +224,15 @@ function DetailError(props: { title: string; value: string }) {
       <text fg={theme.colors.warning}><strong>{props.title}</strong></text>
       <text fg={theme.colors.textMuted}>{truncate(props.value, 110)}</text>
     </box>
+  )
+}
+
+function ActionText(props: { children: string; keys: string; onSelect: () => void }) {
+  const theme = useTheme()
+  return (
+    <text fg={theme.colors.accent} onMouseDown={props.onSelect}>
+      [{props.keys}] {props.children}
+    </text>
   )
 }
 

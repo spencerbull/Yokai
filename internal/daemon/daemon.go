@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"reflect"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -56,9 +57,15 @@ func Run(version string) error {
 	mux.HandleFunc("GET /discovery/tailscale/peers", d.handleTailscalePeers)
 	mux.HandleFunc("POST /bootstrap/device", d.handleBootstrapDevice)
 	mux.HandleFunc("GET /devices", d.handleDevices)
+	mux.HandleFunc("GET /hf/models", d.handleHFModels)
+	mux.HandleFunc("GET /deploy/bkc", d.handleDeployBKC)
+	mux.HandleFunc("POST /deploy/vllm-memory-estimate", d.handleVLLMMemoryEstimate)
 	mux.HandleFunc("POST /devices", d.handleCreateDevice)
 	mux.HandleFunc("PUT /devices/{deviceID}", d.handleUpdateDevice)
 	mux.HandleFunc("POST /devices/{deviceID}/test", d.handleTestDevice)
+	mux.HandleFunc("POST /devices/{deviceID}/upgrade", d.handleUpgradeDevice)
+	mux.HandleFunc("POST /devices/test-all", d.handleTestAllDevices)
+	mux.HandleFunc("POST /devices/upgrade-all", d.handleUpgradeAllDevices)
 	mux.HandleFunc("DELETE /devices/{deviceID}", d.handleDeleteDevice)
 	mux.HandleFunc("GET /metrics", d.handleMetrics)
 	mux.HandleFunc("GET /metrics/{deviceID}", d.handleDeviceMetrics)
@@ -71,9 +78,12 @@ func Run(version string) error {
 	mux.HandleFunc("GET /images/tags", d.handleImageTags)
 	mux.HandleFunc("GET /settings", d.handleGetSettings)
 	mux.HandleFunc("PATCH /settings", d.handlePatchSettings)
+	mux.HandleFunc("POST /settings/hf-token/validate", d.handleValidateHFToken)
 	mux.HandleFunc("PUT /settings/hf-token", d.handlePutHFToken)
 	mux.HandleFunc("GET /history/deploy", d.handleGetDeployHistory)
 	mux.HandleFunc("PUT /history/deploy", d.handlePutDeployHistory)
+	mux.HandleFunc("GET /integrations/openai-endpoints", d.handleGetOpenAIEndpoints)
+	mux.HandleFunc("POST /integrations/configure", d.handleConfigureIntegrations)
 	mux.HandleFunc("POST /reload", d.handleReload)
 
 	addr := cfg.Daemon.Listen
@@ -151,6 +161,14 @@ func (d *Daemon) handleDeploy(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{
 			"error":   "deploy_failed",
+			"message": err.Error(),
+		})
+		return
+	}
+
+	if err := d.persistDeployResult(req, result); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"error":   "config_save_failed",
 			"message": err.Error(),
 		})
 		return
@@ -406,4 +424,71 @@ func (d *Daemon) removeServiceByContainerID(containerID string) (int, error) {
 	}
 
 	return removed, nil
+}
+
+func (d *Daemon) persistDeployResult(req DeployRequest, result *DeployResult) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	serviceType := strings.TrimSpace(req.ServiceType)
+	if serviceType == "" {
+		serviceType = inferServiceType(req.Image, req.Name)
+	}
+
+	port := externalPortFromDeploy(req.Ports)
+	service := config.Service{
+		ID:          strings.TrimSpace(req.Name),
+		DeviceID:    strings.TrimSpace(req.DeviceID),
+		Type:        serviceType,
+		Image:       strings.TrimSpace(req.Image),
+		Model:       strings.TrimSpace(req.Model),
+		Port:        port,
+		ExtraArgs:   strings.TrimSpace(req.ExtraArgs),
+		Env:         cloneStringMap(req.Env),
+		Volumes:     cloneStringMap(req.Volumes),
+		Plugins:     append([]string(nil), req.Plugins...),
+		Runtime:     req.Runtime,
+		ContainerID: strings.TrimSpace(result.ContainerID),
+	}
+	if service.ID == "" {
+		service.ID = strings.TrimSpace(result.ContainerID)
+	}
+
+	d.cfg.UpsertService(service)
+	return config.Save(d.cfg)
+}
+
+func inferServiceType(image, name string) string {
+	haystack := strings.ToLower(strings.TrimSpace(image + " " + name))
+	switch {
+	case strings.Contains(haystack, "vllm"):
+		return "vllm"
+	case strings.Contains(haystack, "llama"):
+		return "llamacpp"
+	case strings.Contains(haystack, "comfy"):
+		return "comfyui"
+	default:
+		return "service"
+	}
+}
+
+func externalPortFromDeploy(ports map[string]string) int {
+	for _, external := range ports {
+		var port int
+		if _, err := fmt.Sscanf(external, "%d", &port); err == nil && port > 0 {
+			return port
+		}
+	}
+	return 0
+}
+
+func cloneStringMap(src map[string]string) map[string]string {
+	if len(src) == 0 {
+		return map[string]string{}
+	}
+	dst := make(map[string]string, len(src))
+	for key, value := range src {
+		dst[key] = value
+	}
+	return dst
 }

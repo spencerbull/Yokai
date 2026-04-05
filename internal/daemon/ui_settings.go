@@ -6,7 +6,10 @@ import (
 	"os"
 	"strings"
 
+	"github.com/spencerbull/yokai/internal/claudecode"
+	"github.com/spencerbull/yokai/internal/codex"
 	"github.com/spencerbull/yokai/internal/config"
+	"github.com/spencerbull/yokai/internal/hf"
 	"github.com/spencerbull/yokai/internal/openclaw"
 	"github.com/spencerbull/yokai/internal/opencode"
 	"github.com/spencerbull/yokai/internal/vscode"
@@ -26,15 +29,18 @@ type hfSettingsStatus struct {
 }
 
 type integrationsStatus struct {
-	VSCode   integrationToolStatus `json:"vscode"`
-	OpenCode integrationToolStatus `json:"opencode"`
-	OpenClaw integrationToolStatus `json:"openclaw"`
+	VSCode     integrationToolStatus `json:"vscode"`
+	OpenCode   integrationToolStatus `json:"opencode"`
+	OpenClaw   integrationToolStatus `json:"openclaw"`
+	ClaudeCode integrationToolStatus `json:"claudecode"`
+	Codex      integrationToolStatus `json:"codex"`
 }
 
 type integrationToolStatus struct {
 	Available  bool   `json:"available"`
 	Configured bool   `json:"configured"`
 	Path       string `json:"path,omitempty"`
+	Note       string `json:"note,omitempty"`
 }
 
 type settingsPatchRequest struct {
@@ -50,6 +56,11 @@ type preferencesPatch struct {
 
 type hfTokenRequest struct {
 	Token string `json:"token"`
+}
+
+type hfTokenValidationResponse struct {
+	Valid    bool   `json:"valid"`
+	Username string `json:"username,omitempty"`
 }
 
 type deployHistoryRequest struct {
@@ -143,6 +154,37 @@ func (d *Daemon) handlePutHFToken(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, currentHFSettings(token))
 }
 
+func (d *Daemon) handleValidateHFToken(w http.ResponseWriter, r *http.Request) {
+	var req hfTokenRequest
+	if err := decodeJSONBody(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error":   "bad_request",
+			"message": err.Error(),
+		})
+		return
+	}
+
+	token := strings.TrimSpace(req.Token)
+	if token == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error":   "bad_request",
+			"message": "token is required",
+		})
+		return
+	}
+
+	username, err := hf.NewClient(token).ValidateToken()
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{
+			"error":   "token_validation_failed",
+			"message": err.Error(),
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, hfTokenValidationResponse{Valid: true, Username: username})
+}
+
 func (d *Daemon) handleGetDeployHistory(w http.ResponseWriter, r *http.Request) {
 	history, err := config.LoadHistory()
 	if err != nil {
@@ -198,9 +240,11 @@ func (d *Daemon) buildSettingsResponse() (uiSettingsResponse, error) {
 		Preferences: preferences,
 		History:     *history,
 		Integrations: integrationsStatus{
-			VSCode:   detectIntegrationStatus(vscode.DetectSettingsPath, hasVSCodeEndpoints),
-			OpenCode: detectIntegrationStatus(opencode.DetectConfigPath, opencode.HasYokaiEndpoints),
-			OpenClaw: detectIntegrationStatus(openclaw.DetectConfigPath, openclaw.HasYokaiEndpoints),
+			VSCode:     detectIntegrationStatus(vscode.DetectSettingsPath, hasVSCodeEndpoints),
+			OpenCode:   detectIntegrationStatus(opencode.DetectConfigPath, opencode.HasYokaiEndpoints),
+			OpenClaw:   detectIntegrationStatus(openclaw.DetectConfigPath, openclaw.HasYokaiEndpoints),
+			ClaudeCode: detectStaticIntegrationStatus(claudecode.DetectSettingsPath, claudecode.HasYokaiConfig, claudecode.UnsupportedMessage),
+			Codex:      detectIntegrationStatus(codex.DetectConfigPath, codex.HasYokaiConfig),
 		},
 	}, nil
 }
@@ -255,6 +299,15 @@ func detectIntegrationStatus(detect func() (string, error), hasYokaiEndpoints fu
 		Configured: hasYokaiEndpoints(path),
 		Path:       path,
 	}
+}
+
+func detectStaticIntegrationStatus(detect func() (string, error), hasYokaiEndpoints func(string) bool, note string) integrationToolStatus {
+	status := detectIntegrationStatus(detect, hasYokaiEndpoints)
+	status.Note = note
+	if status.Path != "" || status.Available {
+		status.Available = true
+	}
+	return status
 }
 
 func hasVSCodeEndpoints(settingsPath string) bool {

@@ -648,6 +648,12 @@ Use this section to keep a short running log as work lands.
 - 2026-04-03: Added daemon-backed Tailscale discovery APIs and an OpenTUI Tailscale import modal with AI GPU tag highlighting and fuzzy peer filtering.
 - 2026-04-03: Reworked device add into a guided wizard flow that routes users through Manual, SSH Config, or Tailscale instead of separate top-level import keybinds.
 - 2026-04-03: Changed add-device create mode to bootstrap the remote Yokai agent by default, with manual existing-agent add still available when an agent token is supplied.
+- 2026-04-03: Added a first-run OpenTUI onboarding route that appears automatically when no devices are configured and reuses the shared bootstrap/device setup flow.
+- 2026-04-03: Restored the optional monitoring install prompt in the shared bootstrap flow so onboarding and device add can deploy Prometheus/Grafana during bootstrap.
+- 2026-04-03: Restored SSH auth selection in the shared setup flow with SSH agent, key-file passphrase, and password-based bootstrap support.
+- 2026-04-03: Replaced the placeholder Settings route with a daemon-backed settings screen for HF token validation/save, deploy defaults, integration status, and AI tool configuration.
+- 2026-04-03: Replaced the placeholder Deploy route with a daemon-backed deploy wizard using defaults/history, Hugging Face model search, and backend-owned service persistence.
+- 2026-04-03: Added daemon-backed selected-device upgrade plus bulk test/upgrade actions to the Devices route, and fixed clickable route tabs plus non-conflicting Settings shortcuts.
 
 ## Immediate Next Steps
 
@@ -663,4 +669,7 @@ Use this section to keep a short running log as work lands.
 - [ ] Add richer dashboard history/sparkline views.
 - [x] Port device manager mutation flows after dashboard service actions settle.
 - [ ] Add true onboarding/bootstrap flows in OpenTUI.
-- [ ] Connect Tailscale discovery into the future onboarding/bootstrap flow.
+- [x] Add true onboarding/bootstrap flows in OpenTUI.
+- [x] Connect Tailscale discovery into the future onboarding/bootstrap flow.
+- [x] Implement a real OpenTUI deploy route with daemon-backed deploy submission and useful defaults/history.
+- [x] Add daemon and OpenTUI support for selected-device upgrade plus bulk test/upgrade flows.

@@ -6,6 +6,7 @@ import { isAlertService } from "./normalizeFleet"
 type ServiceCategoryPaneProps = {
   onSelect?: (containerId: string) => void
   rowWidth?: number
+  sectionFocused?: boolean
   services: FleetService[]
   selectedContainerId?: string
   title: string
@@ -25,8 +26,8 @@ export function ServiceCategoryPane(props: ServiceCategoryPaneProps) {
   return (
     <box
       border
-      borderStyle="single"
-      borderColor={theme.colors.border}
+      borderStyle={props.sectionFocused ? "double" : "single"}
+      borderColor={props.sectionFocused ? theme.colors.borderStrong : theme.colors.border}
       backgroundColor={theme.colors.panelMuted}
       padding={1}
       flexDirection="column"

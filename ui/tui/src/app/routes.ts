@@ -14,14 +14,14 @@ export const APP_ROUTES = [
   {
     id: "deploy",
     label: "Deploy",
-    status: "Planned",
-    summary: "Workload selection, model search, config review, and progress.",
+    status: "Wizard slice",
+    summary: "Workload selection, daemon-backed model search, defaults/history, and deploy submission.",
   },
   {
     id: "settings",
     label: "Settings",
-    status: "Planned",
-    summary: "Integrations, Hugging Face token, and deploy defaults.",
+    status: "Daemon-backed slice",
+    summary: "Integrations, Hugging Face token, deploy defaults, and endpoint discovery.",
   },
 ] as const
 

@@ -82,6 +82,8 @@ export type FleetDevice = {
   gpuMemoryUsedMB: number
   gpuMemoryTotalMB: number
   cpuPercent: number
+  ramUsedMB: number
+  ramTotalMB: number
   ramPercent: number
   serviceCount: number
 }
@@ -121,6 +123,8 @@ export type FleetSnapshot = {
     gpuMemoryTotalMB: number
     avgGpuUtilPercent: number
     avgCpuPercent: number
+    ramUsedMB: number
+    ramTotalMB: number
     avgRamPercent: number
   }
   updatedAt?: string

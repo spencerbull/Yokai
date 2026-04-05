@@ -8,13 +8,17 @@ type DeviceOverviewPaneProps = {
   devices: FleetDevice[]
   history: FleetHistory
   panelWidth?: number
+  selectedDeviceId?: string
   selectedService: FleetService | null
 }
 
 export function DeviceOverviewPane(props: DeviceOverviewPaneProps) {
   const theme = useTheme()
   const selectedDevice =
-    props.devices.find((device) => device.id === props.selectedService?.deviceId) ?? props.devices[0] ?? null
+    props.devices.find((device) => device.id === props.selectedDeviceId)
+      ?? props.devices.find((device) => device.id === props.selectedService?.deviceId)
+      ?? props.devices[0]
+      ?? null
   const selectedHistory = selectedDevice ? seriesForDevice(props.history.devices, selectedDevice.id) : null
   const compact = props.compact ?? false
   const panelWidth = Math.max(22, props.panelWidth ?? (compact ? 38 : 64))
@@ -82,12 +86,12 @@ export function DeviceOverviewPane(props: DeviceOverviewPaneProps) {
               )}
               <box flexDirection="row" gap={1}>
                 <box flexDirection="column" flexGrow={1} gap={1}>
-                  {selectedHistory ? <MetricViz compact height={2} history={selectedHistory.cpu} label="CPU" value={selectedDevice.cpuPercent} width={compactVizWidth} /> : null}
-                  {selectedHistory ? <MetricViz compact height={2} history={selectedHistory.ram} label="RAM" value={selectedDevice.ramPercent} width={compactVizWidth} /> : null}
+                  {selectedHistory ? <MetricViz compact height={3} history={selectedHistory.cpu} label="CPU" value={selectedDevice.cpuPercent} width={compactVizWidth} /> : null}
+                  {selectedHistory ? <MetricViz compact detail={memoryDetail(selectedDevice.ramUsedMB, selectedDevice.ramTotalMB)} height={3} history={selectedHistory.ram} label="RAM" value={selectedDevice.ramPercent} width={compactVizWidth} /> : null}
                 </box>
                 <box flexDirection="column" flexGrow={1} gap={1}>
-                  {selectedDevice.gpuCount > 0 && selectedHistory ? <MetricViz compact height={2} history={selectedHistory.gpu} label="GPU" value={selectedDevice.gpuUtilPercent} width={compactVizWidth} /> : null}
-                  {selectedDevice.gpuCount > 0 && selectedHistory ? <MetricViz compact height={2} history={selectedHistory.vram} label="VRAM" value={memoryPercent(selectedDevice.gpuMemoryUsedMB, selectedDevice.gpuMemoryTotalMB)} width={compactVizWidth} /> : null}
+                  {selectedDevice.gpuCount > 0 && selectedHistory ? <MetricViz compact height={3} history={selectedHistory.gpu} label="GPU" value={selectedDevice.gpuUtilPercent} width={compactVizWidth} /> : null}
+                  {selectedDevice.gpuCount > 0 && selectedHistory ? <MetricViz compact detail={memoryDetail(selectedDevice.gpuMemoryUsedMB, selectedDevice.gpuMemoryTotalMB)} height={3} history={selectedHistory.vram} label="VRAM" value={memoryPercent(selectedDevice.gpuMemoryUsedMB, selectedDevice.gpuMemoryTotalMB)} width={compactVizWidth} /> : null}
                 </box>
               </box>
               <text fg={theme.colors.textSubtle}>
@@ -97,9 +101,9 @@ export function DeviceOverviewPane(props: DeviceOverviewPaneProps) {
           ) : (
             <>
               {selectedHistory ? <MetricViz history={selectedHistory.cpu} label="CPU" value={selectedDevice.cpuPercent} width={fullVizWidth} /> : null}
-              {selectedHistory ? <MetricViz history={selectedHistory.ram} label="RAM" value={selectedDevice.ramPercent} width={fullVizWidth} /> : null}
+              {selectedHistory ? <MetricViz detail={memoryDetail(selectedDevice.ramUsedMB, selectedDevice.ramTotalMB)} history={selectedHistory.ram} label="RAM" value={selectedDevice.ramPercent} width={fullVizWidth} /> : null}
               {selectedDevice.gpuCount > 0 && selectedHistory ? <MetricViz history={selectedHistory.gpu} label="GPU" value={selectedDevice.gpuUtilPercent} width={fullVizWidth} /> : null}
-              {selectedDevice.gpuCount > 0 && selectedHistory ? <MetricViz history={selectedHistory.vram} label="VRAM" value={memoryPercent(selectedDevice.gpuMemoryUsedMB, selectedDevice.gpuMemoryTotalMB)} width={fullVizWidth} /> : null}
+              {selectedDevice.gpuCount > 0 && selectedHistory ? <MetricViz detail={memoryDetail(selectedDevice.gpuMemoryUsedMB, selectedDevice.gpuMemoryTotalMB)} history={selectedHistory.vram} label="VRAM" value={memoryPercent(selectedDevice.gpuMemoryUsedMB, selectedDevice.gpuMemoryTotalMB)} width={fullVizWidth} /> : null}
               <DeviceLine label="GPU" value={selectedDevice.gpuName || "none"} marquee />
               <DeviceLine label="GUtil" value={selectedDevice.gpuCount > 0 ? `${selectedDevice.gpuUtilPercent.toFixed(0)}%` : "-"} />
               <DeviceLine label="VRAM" value={formatMemoryPair(selectedDevice.gpuMemoryUsedMB, selectedDevice.gpuMemoryTotalMB)} />
@@ -157,6 +161,17 @@ function memoryPercent(usedMB: number, totalMB: number) {
     return 0
   }
   return (usedMB / totalMB) * 100
+}
+
+function memoryDetail(usedMB: number, totalMB: number) {
+  if (totalMB <= 0) {
+    return "-"
+  }
+  return `${roundGiB(usedMB)} / ${roundGiB(totalMB)} GiB`
+}
+
+function roundGiB(valueMB: number) {
+  return Math.round(valueMB / 1024)
 }
 
 function truncate(value: string, width: number) {

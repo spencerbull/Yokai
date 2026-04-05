@@ -5,7 +5,7 @@ type AddDeviceSourceModalProps = {
   selectedIndex: number
 }
 
-const SOURCES = [
+export const ADD_DEVICE_SOURCES = [
   {
     title: "Manual",
     description: "Type the host, SSH details, and agent port yourself.",
@@ -48,7 +48,7 @@ export function AddDeviceSourceModal(props: AddDeviceSourceModalProps) {
         </text>
         <text fg={theme.colors.textSubtle}>Choose how you want to add the device. Up/Down move, Enter continues, Esc cancels.</text>
 
-        {SOURCES.map((source, index) => {
+        {ADD_DEVICE_SOURCES.map((source, index) => {
           const selected = index === props.selectedIndex
           return (
             <box
