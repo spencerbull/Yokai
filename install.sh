@@ -8,6 +8,7 @@ REPO="spencerbull/Yokai"
 INSTALL_DIR="/usr/local/bin"
 FALLBACK_INSTALL_DIR="$HOME/.local/bin"
 BINARY="yokai"
+TUI_BINARY="yokai-tui"
 PROJECT_NAME="Yokai"
 
 # Colors
@@ -102,7 +103,9 @@ fi
 if [ "$TARGET_DIR" = "$FALLBACK_INSTALL_DIR" ]; then
   mkdir -p "$TARGET_DIR"
   mv "${TMP_DIR}/${BINARY}" "${TARGET_DIR}/${BINARY}"
+  mv "${TMP_DIR}/${TUI_BINARY}" "${TARGET_DIR}/${TUI_BINARY}"
   chmod +x "${TARGET_DIR}/${BINARY}"
+  chmod +x "${TARGET_DIR}/${TUI_BINARY}"
 
   # Add to PATH in shell rc files
   PATH_ADDED=0
@@ -125,10 +128,14 @@ else
   if [ "$USE_SUDO" -eq 1 ]; then
     info "Using sudo for ${TARGET_DIR}"
     sudo mv "${TMP_DIR}/${BINARY}" "${TARGET_DIR}/${BINARY}"
+    sudo mv "${TMP_DIR}/${TUI_BINARY}" "${TARGET_DIR}/${TUI_BINARY}"
     sudo chmod +x "${TARGET_DIR}/${BINARY}"
+    sudo chmod +x "${TARGET_DIR}/${TUI_BINARY}"
   else
     mv "${TMP_DIR}/${BINARY}" "${TARGET_DIR}/${BINARY}"
+    mv "${TMP_DIR}/${TUI_BINARY}" "${TARGET_DIR}/${TUI_BINARY}"
     chmod +x "${TARGET_DIR}/${BINARY}"
+    chmod +x "${TARGET_DIR}/${TUI_BINARY}"
   fi
   success "Installed to ${TARGET_DIR}/${BINARY}"
 fi
@@ -150,5 +157,5 @@ printf "\n${GREEN}${BOLD}  ⚡ yokai v${VERSION} is ready!${NC}\n\n"
 printf "${DIM}  Quick start:${NC}\n"
 printf "    ${CYAN}yokai agent 7474${NC}      ${DIM}# Start an agent on a GPU node${NC}\n"
 printf "    ${CYAN}yokai daemon${NC}           ${DIM}# Start the daemon on your workstation${NC}\n"
-printf "    ${CYAN}yokai${NC}                  ${DIM}# Launch the TUI${NC}\n"
+printf "    ${CYAN}yokai${NC}                  ${DIM}# Launch OpenTUI (auto-starts daemon)${NC}\n"
 printf "\n${DIM}  Docs: https://github.com/${REPO}${NC}\n\n"

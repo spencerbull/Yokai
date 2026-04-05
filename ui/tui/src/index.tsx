@@ -3,9 +3,16 @@ import { createRoot } from "@opentui/react"
 
 import { App } from "./app/App"
 
-const renderer = await createCliRenderer({
-  exitOnCtrlC: false,
-  useMouse: true,
-})
+async function main() {
+  const renderer = await createCliRenderer({
+    exitOnCtrlC: false,
+    useMouse: true,
+  })
 
-createRoot(renderer).render(<App />)
+  createRoot(renderer).render(<App />)
+}
+
+main().catch((error) => {
+  console.error(error)
+  process.exitCode = 1
+})

@@ -2,6 +2,7 @@ package upgrade
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"compress/gzip"
 	"encoding/json"
 	"fmt"
@@ -16,7 +17,9 @@ import (
 )
 
 const (
-	githubAPI = "https://api.github.com/repos/spencerbull/yokai/releases/latest"
+	githubAPI   = "https://api.github.com/repos/spencerbull/yokai/releases/latest"
+	projectName = "Yokai"
+	tuiBinary   = "yokai-tui"
 )
 
 // Release represents a GitHub release.
@@ -84,10 +87,18 @@ func Run(currentVersion string) error {
 
 	fmt.Printf("Update available: %s -> %s\n", currentVersion, release.TagName)
 
-	// 2. Find the correct asset for current OS/arch
-	//    Asset naming: yokai_{version}_{os}_{arch}.tar.gz
-	expectedAssetName := fmt.Sprintf("yokai_%s_%s_%s.tar.gz",
-		strings.TrimPrefix(release.TagName, "v"), runtime.GOOS, runtime.GOARCH)
+	// 2. Find the correct asset for current OS/arch.
+	archiveExt := ".tar.gz"
+	if runtime.GOOS == "windows" {
+		archiveExt = ".zip"
+	}
+	expectedAssetName := fmt.Sprintf("%s_%s_%s_%s%s",
+		projectName,
+		strings.TrimPrefix(release.TagName, "v"),
+		runtime.GOOS,
+		runtime.GOARCH,
+		archiveExt,
+	)
 
 	var downloadURL string
 	for _, asset := range release.Assets {
@@ -143,7 +154,7 @@ func Run(currentVersion string) error {
 		_ = os.RemoveAll(tempDir) // Best-effort cleanup of extraction directory.
 	}()
 
-	if err := extractTarGz(tempFile.Name(), tempDir); err != nil {
+	if err := extractArchive(tempFile.Name(), tempDir); err != nil {
 		return fmt.Errorf("failed to extract archive: %w", err)
 	}
 
@@ -152,6 +163,7 @@ func Run(currentVersion string) error {
 	if _, err := os.Stat(newBinaryPath); os.IsNotExist(err) {
 		return fmt.Errorf("yokai binary not found in archive")
 	}
+	newTUIBinaryPath := filepath.Join(tempDir, companionBinaryName())
 
 	// 5. Replace current binary
 	currentBinaryPath, err := os.Executable()
@@ -166,11 +178,22 @@ func Run(currentVersion string) error {
 	}
 
 	fmt.Println("Installing update...")
+	currentDir := filepath.Dir(currentBinaryPath)
+	currentTUIBinaryPath := filepath.Join(currentDir, companionBinaryName())
 
 	// Rename current binary to .old
 	oldBinaryPath := currentBinaryPath + ".old"
 	if err := os.Rename(currentBinaryPath, oldBinaryPath); err != nil {
 		return fmt.Errorf("failed to backup current binary: %w", err)
+	}
+	oldTUIBinaryPath := currentTUIBinaryPath + ".old"
+	hasNewTUIBinary := false
+	if _, err := os.Stat(newTUIBinaryPath); err == nil {
+		hasNewTUIBinary = true
+		if err := backupCompanionBinary(currentTUIBinaryPath, oldTUIBinaryPath); err != nil {
+			_ = os.Rename(oldBinaryPath, currentBinaryPath)
+			return err
+		}
 	}
 
 	// Move new binary to current path
@@ -179,14 +202,30 @@ func Run(currentVersion string) error {
 		_ = os.Rename(oldBinaryPath, currentBinaryPath) // Best-effort rollback to previous binary.
 		return fmt.Errorf("failed to install new binary: %w", err)
 	}
+	if hasNewTUIBinary {
+		if err := os.Rename(newTUIBinaryPath, currentTUIBinaryPath); err != nil {
+			_ = os.Remove(currentBinaryPath)
+			_ = os.Rename(oldBinaryPath, currentBinaryPath)
+			_ = restoreCompanionBinary(currentTUIBinaryPath, oldTUIBinaryPath)
+			return fmt.Errorf("failed to install yokai-tui binary: %w", err)
+		}
+	}
 
 	// Make it executable
 	if err := platform.ChmodIfSupported(currentBinaryPath, 0755); err != nil {
 		return fmt.Errorf("failed to make binary executable: %w", err)
 	}
+	if hasNewTUIBinary {
+		if err := platform.ChmodIfSupported(currentTUIBinaryPath, 0755); err != nil {
+			return fmt.Errorf("failed to make yokai-tui executable: %w", err)
+		}
+	}
 
 	// Remove .old
 	_ = os.Remove(oldBinaryPath) // Best-effort cleanup of backup binary.
+	if hasNewTUIBinary {
+		_ = os.Remove(oldTUIBinaryPath)
+	}
 
 	// 6. Print success message
 	fmt.Printf("✅ Successfully updated to %s!\n", release.TagName)
@@ -195,7 +234,42 @@ func Run(currentVersion string) error {
 	return nil
 }
 
-// extractTarGz extracts a tar.gz file to the specified directory
+func companionBinaryName() string {
+	if runtime.GOOS == "windows" {
+		return tuiBinary + ".exe"
+	}
+	return tuiBinary
+}
+
+func backupCompanionBinary(currentPath, backupPath string) error {
+	if err := os.Rename(currentPath, backupPath); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to backup yokai-tui binary: %w", err)
+	}
+	return nil
+}
+
+func restoreCompanionBinary(currentPath, backupPath string) error {
+	if err := os.Rename(backupPath, currentPath); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+// extractArchive extracts a release archive to the specified directory.
+func extractArchive(src, dst string) error {
+	if strings.HasSuffix(src, ".zip") {
+		return extractZip(src, dst)
+	}
+	return extractTarGz(src, dst)
+}
+
+// extractTarGz extracts a tar.gz file to the specified directory.
 func extractTarGz(src, dst string) error {
 	file, err := os.Open(src)
 	if err != nil {
@@ -257,6 +331,64 @@ func extractTarGz(src, dst string) error {
 			if err := platform.ChmodIfSupported(path, header.FileInfo().Mode()); err != nil {
 				return err
 			}
+		}
+	}
+
+	return nil
+}
+
+func extractZip(src, dst string) error {
+	reader, err := zip.OpenReader(src)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = reader.Close()
+	}()
+
+	for _, file := range reader.File {
+		path := filepath.Join(dst, file.Name)
+		if !strings.HasPrefix(path, filepath.Clean(dst)+string(os.PathSeparator)) {
+			return fmt.Errorf("invalid file path: %s", file.Name)
+		}
+
+		if file.FileInfo().IsDir() {
+			if err := os.MkdirAll(path, file.Mode()); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			return err
+		}
+
+		in, err := file.Open()
+		if err != nil {
+			return err
+		}
+
+		out, err := os.Create(path)
+		if err != nil {
+			_ = in.Close()
+			return err
+		}
+
+		_, copyErr := io.Copy(out, in)
+		closeInErr := in.Close()
+		closeOutErr := out.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if closeInErr != nil {
+			return closeInErr
+		}
+		if closeOutErr != nil {
+			return closeOutErr
+		}
+
+		if err := platform.ChmodIfSupported(path, file.Mode()); err != nil {
+			return err
 		}
 	}
 

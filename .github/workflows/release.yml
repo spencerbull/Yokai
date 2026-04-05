@@ -40,6 +40,10 @@ jobs:
           go-version: '1.25'
           cache: true
 
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
       # Determine next version from commits since last tag
       - name: Determine version bump
         id: version

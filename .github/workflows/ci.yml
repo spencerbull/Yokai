@@ -59,3 +59,5 @@ jobs:
         run: bun test
       - name: Build
         run: bun run build
+      - name: Compile standalone OpenTUI
+        run: bun build --compile --format=esm --minify --bytecode src/index.tsx --outfile=../../bin/yokai-tui

@@ -4,9 +4,11 @@ before:
   hooks:
     - go mod tidy
     - go generate ./...
+    - bun --cwd ui/tui install --frozen-lockfile
 
 builds:
-  - main: ./cmd/yokai
+  - id: yokai
+    main: ./cmd/yokai
     binary: yokai
     env:
       - CGO_ENABLED=0 # Static binary for easier distribution
@@ -21,12 +23,34 @@ builds:
       # Strip debug info and inject version/build time
       - -s -w -X main.version={{.Version}} -X main.buildTime={{.Date}}
 
+  - id: yokai-tui
+    builder: bun
+    binary: yokai-tui
+    dir: ui/tui
+    main: src/index.tsx
+    targets:
+      - linux-x64
+      - linux-arm64
+      - darwin-x64
+      - darwin-arm64
+      - windows-x64
+    flags:
+      - --format=esm
+      - --minify
+      - --bytecode
+
 archives:
-  - format: tar.gz
+  - formats:
+      - tar.gz
+    allow_different_binary_count: true
+    ids:
+      - yokai
+      - yokai-tui
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     format_overrides:
       - goos: windows
-        format: zip
+        formats:
+          - zip
 
 checksum:
   name_template: 'checksums.txt'

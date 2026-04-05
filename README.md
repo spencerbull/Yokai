@@ -103,7 +103,7 @@ make build
 ### First Run
 
 ```bash
-# 1. Launch yokai -- the onboarding wizard starts automatically
+# 1. Launch yokai -- OpenTUI starts and auto-starts the local daemon if needed
 yokai
 
 # 2. Select how to connect (LAN / Tailscale / Manual IP)
@@ -115,13 +115,13 @@ yokai
 
 ### Running the Daemon
 
-The daemon is a background process on your local machine that maintains SSH tunnels to your devices and polls agents for live metrics. Start it before (or alongside) the TUI:
+The daemon is a background process on your local machine that maintains SSH tunnels to your devices and polls agents for live metrics. `yokai` now auto-starts it on first launch, but you can still run it manually:
 
 ```bash
 # Start the daemon in the background
 yokai daemon &
 
-# Launch the TUI (connects to daemon automatically)
+# Launch OpenTUI (auto-starts daemon if needed)
 yokai
 ```
 
@@ -133,7 +133,7 @@ yokai
 
 | Command | Description |
 |---|---|
-| `yokai` | Launch the TUI (default) |
+| `yokai` | Launch OpenTUI (default) |
 | `yokai agent [port]` | Run the agent on a target device (default port: 7474) |
 | `yokai daemon` | Start the local background daemon |
 | `yokai upgrade` | Update to the latest release |

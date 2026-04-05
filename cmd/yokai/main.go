@@ -7,7 +7,7 @@ import (
 	"github.com/spencerbull/yokai/internal/agent"
 	"github.com/spencerbull/yokai/internal/cli"
 	"github.com/spencerbull/yokai/internal/daemon"
-	"github.com/spencerbull/yokai/internal/tui"
+	"github.com/spencerbull/yokai/internal/opentui"
 	"github.com/spencerbull/yokai/internal/upgrade"
 )
 
@@ -58,8 +58,8 @@ func main() {
 		}
 	}
 
-	// Default: launch TUI
-	if err := tui.Run(version); err != nil {
+	// Default: launch OpenTUI
+	if err := opentui.Run(version); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
@@ -87,7 +87,7 @@ func printUsage() {
 	fmt.Printf(`yokai %s — GPU Fleet Manager
 
 Usage:
-  yokai                    Launch the TUI (default)
+  yokai                    Launch OpenTUI (default; auto-starts daemon)
   yokai agent [port]       Run the agent on a target device (default port: 7474)
   yokai daemon             Run the local background daemon
   yokai upgrade            Update to the latest version
