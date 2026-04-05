@@ -4,7 +4,7 @@ before:
   hooks:
     - go mod tidy
     - go generate ./...
-    - bun --cwd ui/tui install --frozen-lockfile
+    - bun install --cwd ui/tui --frozen-lockfile --os='*' --cpu='*'
 
 builds:
   - id: yokai
@@ -29,12 +29,13 @@ builds:
     dir: ui/tui
     main: src/index.tsx
     targets:
-      - linux-x64
-      - linux-arm64
-      - darwin-x64
-      - darwin-arm64
-      - windows-x64
+      - bun-linux-x64
+      - bun-linux-arm64
+      - bun-darwin-x64
+      - bun-darwin-arm64
+      - bun-windows-x64
     flags:
+      - --compile
       - --format=esm
       - --minify
       - --bytecode

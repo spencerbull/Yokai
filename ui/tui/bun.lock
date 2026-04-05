@@ -14,6 +14,13 @@
         "@types/react": ">=19.0.0",
         "typescript": "latest",
       },
+      "optionalDependencies": {
+        "@opentui/core-darwin-arm64": "latest",
+        "@opentui/core-darwin-x64": "latest",
+        "@opentui/core-linux-arm64": "latest",
+        "@opentui/core-linux-x64": "latest",
+        "@opentui/core-windows-x64": "latest",
+      },
     },
   },
   "packages": {
