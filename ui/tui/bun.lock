@@ -19,7 +19,7 @@
         "@opentui/core-darwin-x64": "latest",
         "@opentui/core-linux-arm64": "latest",
         "@opentui/core-linux-x64": "latest",
-        "@opentui/core-windows-x64": "latest",
+        "@opentui/core-win32-x64": "latest",
       },
     },
   },
