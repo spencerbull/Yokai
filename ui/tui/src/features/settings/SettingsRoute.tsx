@@ -96,8 +96,6 @@ export function SettingsRoute(props: SettingsRouteProps) {
           />
         </box>
 
-        {settings.integrations.claudecode.note ? <text fg={theme.colors.warning}>Claude Code: {settings.integrations.claudecode.note}</text> : null}
-
         <text fg={theme.colors.textSubtle}>OpenAI-compatible endpoints discovered: {props.controller.endpoints.length}</text>
         {endpointLines.map((endpoint) => (
           <text key={endpoint.service_id} fg={theme.colors.textMuted}>

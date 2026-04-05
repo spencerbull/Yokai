@@ -243,7 +243,7 @@ func (d *Daemon) buildSettingsResponse() (uiSettingsResponse, error) {
 			VSCode:     detectIntegrationStatus(vscode.DetectSettingsPath, hasVSCodeEndpoints),
 			OpenCode:   detectIntegrationStatus(opencode.DetectConfigPath, opencode.HasYokaiEndpoints),
 			OpenClaw:   detectIntegrationStatus(openclaw.DetectConfigPath, openclaw.HasYokaiEndpoints),
-			ClaudeCode: detectStaticIntegrationStatus(claudecode.DetectSettingsPath, claudecode.HasYokaiConfig, claudecode.UnsupportedMessage),
+			ClaudeCode: detectIntegrationStatus(claudecode.DetectSettingsPath, claudecode.HasYokaiConfig),
 			Codex:      detectIntegrationStatus(codex.DetectConfigPath, codex.HasYokaiConfig),
 		},
 	}, nil
@@ -299,15 +299,6 @@ func detectIntegrationStatus(detect func() (string, error), hasYokaiEndpoints fu
 		Configured: hasYokaiEndpoints(path),
 		Path:       path,
 	}
-}
-
-func detectStaticIntegrationStatus(detect func() (string, error), hasYokaiEndpoints func(string) bool, note string) integrationToolStatus {
-	status := detectIntegrationStatus(detect, hasYokaiEndpoints)
-	status.Note = note
-	if status.Path != "" || status.Available {
-		status.Available = true
-	}
-	return status
 }
 
 func hasVSCodeEndpoints(settingsPath string) bool {
