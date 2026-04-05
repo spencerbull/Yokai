@@ -62,6 +62,17 @@ func Run(version string) error {
 	mux.HandleFunc("GET /images/tags", d.handleImageTags)
 	mux.HandleFunc("POST /reload", d.handleReload)
 
+	// Device management endpoints
+	mux.HandleFunc("GET /devices/{deviceID}/hardware", d.handleDeviceHardware)
+	mux.HandleFunc("GET /devices/{deviceID}/sudo-check", d.handleDeviceSudoCheck)
+	mux.HandleFunc("GET /devices/{deviceID}/packages", d.handleDevicePackages)
+	mux.HandleFunc("GET /devices/{deviceID}/packages/upgrade", d.handleDevicePackagesUpgrade)
+	mux.HandleFunc("GET /devices/{deviceID}/drivers", d.handleDeviceDrivers)
+	mux.HandleFunc("GET /devices/{deviceID}/drivers/upgrade", d.handleDeviceDriversUpgrade)
+	mux.HandleFunc("GET /devices/{deviceID}/firmware", d.handleDeviceFirmware)
+	mux.HandleFunc("GET /devices/{deviceID}/firmware/upgrade", d.handleDeviceFirmwareUpgrade)
+	mux.HandleFunc("POST /devices/{deviceID}/agent/upgrade", d.handleDeviceAgentUpgrade)
+
 	addr := cfg.Daemon.Listen
 	if addr == "" {
 		addr = "127.0.0.1:7473"

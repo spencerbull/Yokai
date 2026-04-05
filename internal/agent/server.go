@@ -56,6 +56,16 @@ func Run(port string, version string) error {
 	mux.HandleFunc("POST /images/pull", requireAuth(handleImagePull))
 	mux.HandleFunc("GET /images/tags/{image...}", requireAuth(handleImageTags))
 
+	// Device management endpoints
+	mux.HandleFunc("GET /hardware", requireAuth(handleHardware))
+	mux.HandleFunc("GET /sudo-check", requireAuth(handleSudoCheck))
+	mux.HandleFunc("GET /packages", requireAuth(handlePackages))
+	mux.HandleFunc("GET /packages/upgrade", requireAuth(handlePackagesUpgrade))
+	mux.HandleFunc("GET /drivers", requireAuth(handleDrivers))
+	mux.HandleFunc("GET /drivers/upgrade", requireAuth(handleDriversUpgrade))
+	mux.HandleFunc("GET /firmware", requireAuth(handleFirmware))
+	mux.HandleFunc("GET /firmware/upgrade", requireAuth(handleFirmwareUpgrade))
+
 	addr := ":" + port
 	log.Printf("yokai agent %s starting on %s", version, addr)
 	return http.ListenAndServe(addr, mux)
