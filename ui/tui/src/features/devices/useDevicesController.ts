@@ -23,9 +23,13 @@ import {
   getSSHConfigHosts,
   getTailscalePeers,
   getTailscaleStatus,
+  testAllDevices,
   testDevice,
   updateDevice,
+  upgradeAllDevices,
+  upgradeDevice,
 } from "../../services/daemon-client"
+import { useFleetSnapshot } from "../dashboard/useFleetSnapshot"
 import { visibleTailscalePeers } from "./tailscale-search"
 
 type DevicesNotice = {
@@ -58,6 +62,10 @@ type AddSourceState = {
   selectedIndex: number
 }
 
+type MonitoringPromptState = {
+  form: DeviceEditorForm
+}
+
 type KeyLike = {
   name: string
   shift?: boolean
@@ -67,7 +75,10 @@ const FORM_FIELDS: DeviceFormField[] = [
   "label",
   "host",
   "sshUser",
+  "authMethod",
   "sshKey",
+  "sshKeyPassphrase",
+  "sshPassword",
   "sshPort",
   "agentPort",
   "agentToken",
@@ -75,14 +86,18 @@ const FORM_FIELDS: DeviceFormField[] = [
 ]
 
 export function useDevicesController(active: boolean) {
+  const fleet = useFleetSnapshot(active)
+  const [status, setStatus] = useState<"loading" | "ready" | "error">("loading")
   const [addSource, setAddSource] = useState<AddSourceState | null>(null)
   const [devices, setDevices] = useState<DeviceRecord[]>([])
   const [error, setError] = useState<string>()
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null)
   const [notice, setNotice] = useState<DevicesNotice | null>(null)
   const [pendingAction, setPendingAction] = useState<string | null>(null)
+  const [viewMode, setViewMode] = useState<"list" | "detail">("list")
   const [editor, setEditor] = useState<DeviceEditorState | null>(null)
   const [importer, setImporter] = useState<SSHImportState | null>(null)
+  const [monitoringPrompt, setMonitoringPrompt] = useState<MonitoringPromptState | null>(null)
   const [tailscaleImporter, setTailscaleImporter] = useState<TailscaleImportState | null>(null)
   const [deleteCandidateId, setDeleteCandidateId] = useState<string | null>(null)
 
@@ -103,6 +118,7 @@ export function useDevicesController(active: boolean) {
         startTransition(() => {
           setDevices(response.devices)
           setError(undefined)
+          setStatus("ready")
         })
       } catch (cause) {
         if (cancelled) {
@@ -110,6 +126,7 @@ export function useDevicesController(active: boolean) {
         }
 
         setError(cause instanceof Error ? cause.message : "failed to load devices")
+        setStatus("error")
       }
     }
 
@@ -150,6 +167,7 @@ export function useDevicesController(active: boolean) {
   }, [devices, selectedDeviceId])
 
   const selectedDevice = devices.find((device) => device.id === selectedDeviceId) ?? null
+  const selectedFleetDevice = fleet.snapshot.devices.find((device) => device.id === selectedDeviceId) ?? null
   const deleteCandidate = devices.find((device) => device.id === deleteCandidateId) ?? null
   const visiblePeers = useMemo(
     () => (tailscaleImporter ? visibleTailscalePeers(tailscaleImporter.peers, tailscaleImporter.query) : []),
@@ -179,12 +197,39 @@ export function useDevicesController(active: boolean) {
     devices,
     editor,
     error,
+    fleetHistory: fleet.history,
+    fleetSnapshot: fleet.snapshot,
+    hasOverlayOpen: Boolean(addSource || importer || tailscaleImporter || editor || deleteCandidate || monitoringPrompt),
     importer,
+    monitoringPrompt,
     notice,
+    openAddWizard() {
+      setAddSource({ selectedIndex: 0 })
+    },
     pendingAction,
     selectedDevice,
+    selectedFleetDevice,
+    selectedServices: fleet.snapshot.services.filter((service) => service.deviceId === selectedDeviceId),
+    selectDevice(deviceId: string) {
+      setSelectedDeviceId(deviceId)
+    },
+    openDeviceView(deviceId?: string) {
+      const nextId = deviceId ?? selectedDeviceId
+      if (!nextId) {
+        return false
+      }
+      setSelectedDeviceId(nextId)
+      setViewMode("detail")
+      return true
+    },
+    closeDeviceView() {
+      setViewMode("list")
+    },
+    openGrafana: () => void openGrafana(),
+    status,
     tailscaleImporter,
     visiblePeers,
+    viewMode,
     handleKey(key: KeyLike) {
       if (deleteCandidate) {
         switch (key.name) {
@@ -196,6 +241,25 @@ export function useDevicesController(active: boolean) {
           case "n":
           case "escape":
             setDeleteCandidateId(null)
+            return true
+          default:
+            return true
+        }
+      }
+
+      if (monitoringPrompt) {
+        switch (key.name) {
+          case "y":
+            void submitBootstrapWithMonitoring(true)
+            return true
+          case "n":
+          case "return":
+          case "enter":
+            void submitBootstrapWithMonitoring(false)
+            return true
+          case "escape":
+            setMonitoringPrompt(null)
+            setEditor({ field: "agentToken", form: monitoringPrompt.form })
             return true
           default:
             return true
@@ -324,6 +388,53 @@ export function useDevicesController(active: boolean) {
         }
       }
 
+      if (viewMode === "detail") {
+        switch (key.name) {
+          case "escape":
+            setViewMode("list")
+            return true
+          case "up":
+          case "k":
+            moveSelection(-1)
+            return true
+          case "down":
+          case "j":
+            moveSelection(1)
+            return true
+          case "T":
+            void runBulkTest()
+            return true
+          case "t":
+            if (key.shift) {
+              void runBulkTest()
+            } else {
+              void runTest()
+            }
+            return true
+          case "U":
+            void runBulkUpgrade()
+            return true
+          case "u":
+            if (key.shift) {
+              void runBulkUpgrade()
+            } else {
+              void runUpgrade()
+            }
+            return true
+          case "x":
+            if (selectedDevice) {
+              setDeleteCandidateId(selectedDevice.id)
+              return true
+            }
+            return false
+          case "g":
+            void openGrafana()
+            return true
+          default:
+            return false
+        }
+      }
+
       switch (key.name) {
         case "up":
         case "k":
@@ -333,6 +444,9 @@ export function useDevicesController(active: boolean) {
         case "j":
           moveSelection(1)
           return true
+        case "return":
+        case "enter":
+          return Boolean(selectedDevice) && (setViewMode("detail"), true)
         case "a":
           setAddSource({ selectedIndex: 0 })
           return true
@@ -342,8 +456,25 @@ export function useDevicesController(active: boolean) {
             return true
           }
           return false
+        case "T":
+          void runBulkTest()
+          return true
         case "t":
-          void runTest()
+          if (key.shift) {
+            void runBulkTest()
+          } else {
+            void runTest()
+          }
+          return true
+        case "U":
+          void runBulkUpgrade()
+          return true
+        case "u":
+          if (key.shift) {
+            void runBulkUpgrade()
+          } else {
+            void runUpgrade()
+          }
           return true
         case "x":
           if (selectedDevice) {
@@ -359,17 +490,40 @@ export function useDevicesController(active: boolean) {
       }
     },
     setEditorValue(field: DeviceFormField, value: string) {
-      setEditor((current) =>
-        current
-          ? {
-              ...current,
-              form: {
-                ...current.form,
-                [field]: value,
-              },
-            }
-          : current,
-      )
+      setEditor((current) => {
+        if (!current) {
+          return current
+        }
+
+        const nextForm = {
+          ...current.form,
+          [field]: value,
+        }
+
+        if (field === "authMethod") {
+          const nextMethod = value as DeviceEditorForm["authMethod"]
+          nextForm.authMethod = nextMethod
+          if (nextMethod !== "key") {
+            nextForm.sshKeyPassphrase = ""
+          }
+          if (nextMethod !== "password") {
+            nextForm.sshPassword = ""
+          }
+          if (nextMethod === "agent") {
+            nextForm.sshKey = ""
+          }
+
+          return {
+            field: nextMethod === "key" ? "sshKey" : nextMethod === "password" ? "sshPassword" : "sshPort",
+            form: nextForm,
+          }
+        }
+
+        return {
+          ...current,
+          form: nextForm,
+        }
+      })
     },
     setTailscaleQuery(value: string) {
       setTailscaleImporter((current) =>
@@ -402,11 +556,12 @@ export function useDevicesController(active: boolean) {
       if (!current) {
         return current
       }
-      const currentIndex = FORM_FIELDS.findIndex((field) => field === current.field)
-      const nextIndex = (currentIndex + delta + FORM_FIELDS.length) % FORM_FIELDS.length
+      const fields = visibleFormFields(current.form)
+      const currentIndex = fields.findIndex((field) => field === current.field)
+      const nextIndex = (currentIndex + delta + fields.length) % fields.length
       return {
         ...current,
-        field: FORM_FIELDS[nextIndex],
+        field: fields[nextIndex],
       }
     })
   }
@@ -506,8 +661,10 @@ export function useDevicesController(active: boolean) {
       const response = await getDevices()
       setDevices(response.devices)
       setError(undefined)
+      setStatus("ready")
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "failed to load devices")
+      setStatus("error")
     }
   }
 
@@ -522,17 +679,22 @@ export function useDevicesController(active: boolean) {
       return
     }
 
-    setPendingAction(editor.form.mode === "create" ? "creating device" : "saving device")
     setNotice(null)
 
     const request = requestFromForm(editor.form)
 
     try {
+      if (editor.form.mode === "create" && (!request.agent_token || request.agent_token.trim() === "")) {
+        setMonitoringPrompt({ form: editor.form })
+        setEditor(null)
+        return
+      }
+
+      setPendingAction(editor.form.mode === "create" ? "creating device" : "saving device")
+
       const saved =
         editor.form.mode === "create"
-          ? request.agent_token && request.agent_token.trim() !== ""
-            ? await createDevice(request)
-            : (await bootstrapDevice(request)).device
+          ? await createDevice(request)
           : await updateDevice(editor.form.id!, request)
 
       setEditor(null)
@@ -543,9 +705,7 @@ export function useDevicesController(active: boolean) {
         level: "success",
         message:
           editor.form.mode === "create"
-            ? request.agent_token && request.agent_token.trim() !== ""
-              ? `Added ${saved.label || saved.id}`
-              : `Bootstrapped and added ${saved.label || saved.id}`
+            ? `Added ${saved.label || saved.id}`
             : `Saved ${saved.label || saved.id}`,
       })
     } catch (cause) {
@@ -577,6 +737,102 @@ export function useDevicesController(active: boolean) {
     }
   }
 
+  async function runUpgrade() {
+    if (!selectedDevice || pendingAction) {
+      return
+    }
+
+    setPendingAction("upgrading device")
+    setNotice(null)
+
+    try {
+      const result = await upgradeDevice(selectedDevice.id)
+      await refreshDevices()
+      setNotice({
+        level: result.ok ? "success" : "error",
+        message: result.message,
+      })
+    } catch (cause) {
+      setNotice({ level: "error", message: cause instanceof Error ? cause.message : "failed to upgrade device" })
+    } finally {
+      setPendingAction(null)
+    }
+  }
+
+  async function runBulkTest() {
+    if (pendingAction) {
+      return
+    }
+
+    setPendingAction("testing all devices")
+    setNotice(null)
+
+    try {
+      const response = await testAllDevices()
+      await refreshDevices()
+      const online = response.results.filter((result) => result.agent_ok).length
+      const sshOnly = response.results.filter((result) => result.ssh_ok && !result.agent_ok).length
+      const failed = response.results.length - online - sshOnly
+      setNotice({
+        level: failed > 0 ? "warning" : "success",
+        message: `Bulk test complete: ${online} online, ${sshOnly} SSH-only, ${failed} failed`,
+      })
+    } catch (cause) {
+      setNotice({ level: "error", message: cause instanceof Error ? cause.message : "failed to test all devices" })
+    } finally {
+      setPendingAction(null)
+    }
+  }
+
+  async function runBulkUpgrade() {
+    if (pendingAction) {
+      return
+    }
+
+    setPendingAction("upgrading all devices")
+    setNotice(null)
+
+    try {
+      const response = await upgradeAllDevices()
+      await refreshDevices()
+      const succeeded = response.results.filter((result) => result.ok).length
+      const failed = response.results.length - succeeded
+      setNotice({
+        level: failed > 0 ? "warning" : "success",
+        message: `Bulk upgrade complete: ${succeeded} succeeded, ${failed} failed`,
+      })
+    } catch (cause) {
+      setNotice({ level: "error", message: cause instanceof Error ? cause.message : "failed to upgrade all devices" })
+    } finally {
+      setPendingAction(null)
+    }
+  }
+
+  async function openGrafana() {
+    if (!selectedDevice) {
+      return
+    }
+
+    const grafanaService = fleet.snapshot.services.find(
+      (service) => service.deviceId === selectedDevice.id && (service.name.includes("grafana") || service.image.includes("grafana")),
+    )
+    if (!grafanaService || grafanaService.port <= 0) {
+      setNotice({ level: "warning", message: "No Grafana service detected on this device." })
+      return
+    }
+
+    const url = `http://${selectedDevice.host}:${grafanaService.port}`
+    try {
+      Bun.spawn(["xdg-open", url], {
+        stdout: "ignore",
+        stderr: "ignore",
+      })
+      setNotice({ level: "info", message: `Opening Grafana at ${url}` })
+    } catch (cause) {
+      setNotice({ level: "error", message: cause instanceof Error ? cause.message : "failed to open Grafana" })
+    }
+  }
+
   async function confirmDelete() {
     if (!deleteCandidate || pendingAction) {
       return
@@ -602,6 +858,39 @@ export function useDevicesController(active: boolean) {
       setPendingAction(null)
     }
   }
+
+  async function submitBootstrapWithMonitoring(installMonitoring: boolean) {
+    if (!monitoringPrompt || pendingAction) {
+      return
+    }
+
+    setPendingAction(installMonitoring ? "bootstrapping device + monitoring" : "bootstrapping device")
+    setNotice(null)
+
+    const form = monitoringPrompt.form
+    const request = bootstrapRequestFromForm(form)
+
+    try {
+      const response = await bootstrapDevice({
+        ...request,
+        install_monitoring: installMonitoring,
+      })
+
+      setMonitoringPrompt(null)
+      setAddSource(null)
+      setSelectedDeviceId(response.device.id)
+      await refreshDevices()
+      setNotice({
+        level: "success",
+        message: response.message,
+      })
+    } catch (cause) {
+      setNotice({ level: "error", message: cause instanceof Error ? cause.message : "failed to bootstrap device" })
+      setMonitoringPrompt({ form })
+    } finally {
+      setPendingAction(null)
+    }
+  }
 }
 
 function validateForm(form: DeviceEditorForm) {
@@ -611,6 +900,15 @@ function validateForm(form: DeviceEditorForm) {
 
   if (form.agentToken.trim() === "" && form.sshUser.trim() === "") {
     return "SSH user is required to bootstrap a new device."
+  }
+
+  if (form.agentToken.trim() === "") {
+    if (form.authMethod === "key" && form.sshKey.trim() === "") {
+      return "SSH key path is required for key-file auth."
+    }
+    if (form.authMethod === "password" && form.sshPassword.trim() === "") {
+      return "SSH password is required for password auth."
+    }
   }
 
   const sshPort = Number.parseInt(form.sshPort.trim(), 10)
@@ -627,11 +925,13 @@ function validateForm(form: DeviceEditorForm) {
 }
 
 function requestFromForm(form: DeviceEditorForm): DeviceRequest {
+  const usingExistingAgent = form.agentToken.trim() !== ""
+
   return {
     label: form.label.trim(),
     host: form.host.trim(),
     ssh_user: form.sshUser.trim(),
-    ssh_key: form.sshKey.trim(),
+    ssh_key: form.authMethod === "key" || usingExistingAgent ? form.sshKey.trim() : "",
     ssh_port: Number.parseInt(form.sshPort.trim(), 10),
     connection_type: form.connectionType,
     agent_port: Number.parseInt(form.agentPort.trim(), 10),
@@ -643,7 +943,29 @@ function requestFromForm(form: DeviceEditorForm): DeviceRequest {
   }
 }
 
+function bootstrapRequestFromForm(form: DeviceEditorForm) {
+  return {
+    ...requestFromForm(form),
+    ssh_key_passphrase: form.authMethod === "key" ? form.sshKeyPassphrase : "",
+    ssh_password: form.authMethod === "password" ? form.sshPassword : "",
+  }
+}
+
 export type DevicesController = ReturnType<typeof useDevicesController>
+
+function visibleFormFields(form: DeviceEditorForm) {
+  const fields: DeviceFormField[] = ["label", "host", "sshUser", "authMethod"]
+
+  if (form.authMethod === "key") {
+    fields.push("sshKey", "sshKeyPassphrase")
+  }
+  if (form.authMethod === "password") {
+    fields.push("sshPassword")
+  }
+
+  fields.push("sshPort", "agentPort", "agentToken", "tagsText")
+  return fields
+}
 
 function sourceIndexForConnectionType(connectionType: string) {
   switch (connectionType) {

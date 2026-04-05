@@ -5,30 +5,35 @@ import { MetricViz } from "./UtilizationViz"
 import { useTheme } from "../../theme/context"
 
 type FleetOverviewPanelsProps = {
+  contentWidth: number
   history: FleetHistory
   snapshot: FleetSnapshot
-  terminalWidth: number
 }
 
 export function FleetOverviewPanels(props: FleetOverviewPanelsProps) {
-  const wide = props.terminalWidth >= 120
+  const wide = props.contentWidth >= 96
   const panelWidth = wide
-    ? Math.max(30, Math.floor((props.terminalWidth - 26) / 2))
-    : Math.max(28, props.terminalWidth - 18)
-  const vizWidth = Math.max(22, panelWidth - 8)
+    ? Math.max(28, Math.floor((props.contentWidth - 1) / 2) - 2)
+    : Math.max(24, props.contentWidth - 6)
+  const wideVizWidth = Math.max(12, Math.floor((panelWidth - 7) / 2))
+  const stackedVizWidth = Math.max(18, panelWidth - 8)
 
   if (wide) {
     return (
       <box flexDirection="row" gap={1}>
         <FleetPanel title="AI Fleet">
-          <MetricViz history={props.history.fleet.gpu} label="GPU" value={props.snapshot.totals.avgGpuUtilPercent} width={vizWidth} />
-          <MetricViz history={props.history.fleet.vram} label="VRAM" value={memoryPercent(props.snapshot.totals.gpuMemoryUsedMB, props.snapshot.totals.gpuMemoryTotalMB)} width={vizWidth} />
+          <box flexDirection="row" gap={1}>
+            <MetricViz compact height={3} history={props.history.fleet.gpu} label="GPU" value={props.snapshot.totals.avgGpuUtilPercent} width={wideVizWidth} />
+            <MetricViz compact detail={memoryDetail(props.snapshot.totals.gpuMemoryUsedMB, props.snapshot.totals.gpuMemoryTotalMB)} height={3} history={props.history.fleet.vram} label="VRAM" value={memoryPercent(props.snapshot.totals.gpuMemoryUsedMB, props.snapshot.totals.gpuMemoryTotalMB)} width={wideVizWidth} />
+          </box>
           <OverviewLine label="GPUs" value={`${props.snapshot.totals.activeGpuCount} active / ${props.snapshot.totals.gpuCount} total`} />
           <OverviewLine label="Free" value={`${formatMemory(Math.max(0, props.snapshot.totals.gpuMemoryTotalMB - props.snapshot.totals.gpuMemoryUsedMB))} available`} />
         </FleetPanel>
         <FleetPanel title="Fleet Runtime">
-          <MetricViz history={props.history.fleet.cpu} label="CPU" value={props.snapshot.totals.avgCpuPercent} width={vizWidth} />
-          <MetricViz history={props.history.fleet.ram} label="RAM" value={props.snapshot.totals.avgRamPercent} width={vizWidth} />
+          <box flexDirection="row" gap={1}>
+            <MetricViz compact height={3} history={props.history.fleet.cpu} label="CPU" value={props.snapshot.totals.avgCpuPercent} width={wideVizWidth} />
+            <MetricViz compact detail={memoryDetail(props.snapshot.totals.ramUsedMB, props.snapshot.totals.ramTotalMB)} height={3} history={props.history.fleet.ram} label="RAM" value={props.snapshot.totals.avgRamPercent} width={wideVizWidth} />
+          </box>
           <OverviewLine label="Nodes" value={`${props.snapshot.totals.onlineDevices} online · ${Math.max(0, props.snapshot.totals.devices - props.snapshot.totals.onlineDevices)} offline`} />
           <OverviewLine label="Svc" value={`${props.snapshot.totals.services} total · ${props.snapshot.totals.alertServices} alert(s)`} />
         </FleetPanel>
@@ -39,13 +44,13 @@ export function FleetOverviewPanels(props: FleetOverviewPanelsProps) {
   return (
     <box flexDirection="column" gap={1}>
       <FleetPanel title="AI Fleet">
-        <MetricViz history={props.history.fleet.gpu} label="GPU" value={props.snapshot.totals.avgGpuUtilPercent} width={vizWidth} />
-        <MetricViz history={props.history.fleet.vram} label="VRAM" value={memoryPercent(props.snapshot.totals.gpuMemoryUsedMB, props.snapshot.totals.gpuMemoryTotalMB)} width={vizWidth} />
+        <MetricViz history={props.history.fleet.gpu} label="GPU" value={props.snapshot.totals.avgGpuUtilPercent} width={stackedVizWidth} />
+        <MetricViz detail={memoryDetail(props.snapshot.totals.gpuMemoryUsedMB, props.snapshot.totals.gpuMemoryTotalMB)} history={props.history.fleet.vram} label="VRAM" value={memoryPercent(props.snapshot.totals.gpuMemoryUsedMB, props.snapshot.totals.gpuMemoryTotalMB)} width={stackedVizWidth} />
         <OverviewLine label="GPUs" value={`${props.snapshot.totals.activeGpuCount} active / ${props.snapshot.totals.gpuCount} total`} />
       </FleetPanel>
       <FleetPanel title="Fleet Runtime">
-        <MetricViz history={props.history.fleet.cpu} label="CPU" value={props.snapshot.totals.avgCpuPercent} width={vizWidth} />
-        <MetricViz history={props.history.fleet.ram} label="RAM" value={props.snapshot.totals.avgRamPercent} width={vizWidth} />
+        <MetricViz history={props.history.fleet.cpu} label="CPU" value={props.snapshot.totals.avgCpuPercent} width={stackedVizWidth} />
+        <MetricViz detail={memoryDetail(props.snapshot.totals.ramUsedMB, props.snapshot.totals.ramTotalMB)} history={props.history.fleet.ram} label="RAM" value={props.snapshot.totals.avgRamPercent} width={stackedVizWidth} />
         <OverviewLine label="Nodes" value={`${props.snapshot.totals.onlineDevices} online · ${Math.max(0, props.snapshot.totals.devices - props.snapshot.totals.onlineDevices)} offline`} />
         <OverviewLine label="Svc" value={`${props.snapshot.totals.services} total · ${props.snapshot.totals.alertServices} alert(s)`} />
       </FleetPanel>
@@ -59,14 +64,14 @@ function FleetPanel(props: { title: string; children: ReactNode }) {
   return (
     <box
       flexGrow={1}
-      minHeight={7}
       border
       borderStyle="single"
       borderColor={theme.colors.border}
       backgroundColor={theme.colors.panelMuted}
-      padding={1}
+      paddingX={1}
+      paddingY={0}
       flexDirection="column"
-      gap={1}
+      gap={0}
     >
       <text fg={theme.colors.text}>
         <strong>{props.title}</strong>
@@ -101,4 +106,15 @@ function memoryPercent(usedMB: number, totalMB: number) {
     return 0
   }
   return (usedMB / totalMB) * 100
+}
+
+function memoryDetail(usedMB: number, totalMB: number) {
+  if (totalMB <= 0) {
+    return "-"
+  }
+  return `${roundGiB(usedMB)} / ${roundGiB(totalMB)} GiB`
+}
+
+function roundGiB(valueMB: number) {
+  return Math.round(valueMB / 1024)
 }

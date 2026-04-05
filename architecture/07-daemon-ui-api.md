@@ -435,6 +435,7 @@ Current behavior:
 - run preflight checks
 - build a target-specific `yokai` binary locally
 - deploy the remote Yokai agent and generate/store an agent token
+- optionally deploy the monitoring stack (Prometheus, Grafana, Node Exporter, and GPU monitoring when applicable)
 - persist the device in local config
 - hot-reload daemon runtime state so tunnels and polling start automatically
 
@@ -472,6 +473,8 @@ Response:
     "GPUDetected": true
   },
   "agent_token": "generated-token",
+  "install_monitoring": true,
+  "monitoring_installed": true,
   "message": "Bootstrapped gaming-rig and deployed the Yokai agent"
 }
 ```
@@ -505,6 +508,8 @@ Response:
 
 Returns the frontend-facing settings document.
 
+Implemented in the current migration slice.
+
 #### `PATCH /settings`
 
 Supports partial updates for UI-owned settings sections.
@@ -528,6 +533,19 @@ Response:
 }
 ```
 
+#### `POST /settings/hf-token/validate`
+
+Validates a Hugging Face token without persisting it.
+
+Response:
+
+```json
+{
+  "valid": true,
+  "username": "sbull"
+}
+```
+
 #### `GET /history/deploy`
 
 Response:
@@ -543,11 +561,33 @@ Response:
 
 Used to persist updated deploy history.
 
+### Deploy Helpers
+
+#### `GET /hf/models?query=<q>&workload=<type>`
+
+Searches Hugging Face models through the daemon so the deploy wizard can stay on the backend boundary.
+
+Implemented in the current migration slice.
+
+#### `POST /deploy`
+
+Deploys the selected service to the target device agent.
+
+Current behavior in the new daemon-owned flow:
+
+- forwards the deploy request to the remote Yokai agent
+- persists the deployed service in local config on success
+- stores container ID, model, image, port, env, volumes, plugins, runtime, and service type
+
+Implemented in the current migration slice.
+
 ### Integrations
 
 #### `GET /integrations/openai-endpoints`
 
 Returns normalized candidate endpoints derived from configured running services.
+
+Implemented in the current migration slice.
 
 Response:
 
@@ -570,16 +610,19 @@ Response:
 
 Returns current integration configuration state.
 
+Current status is exposed inside `GET /settings` via the `integrations` object.
+
 #### `POST /integrations/configure`
 
-Starts a configuration operation for selected tools.
+Configures selected tools directly using the currently discovered OpenAI-compatible endpoints.
+
+Implemented in the current migration slice.
 
 Request:
 
 ```json
 {
-  "tools": ["vscode", "opencode", "openclaw"],
-  "endpoint_service_id": "svc-123"
+  "tools": ["vscode", "opencode", "openclaw"]
 }
 ```
 
@@ -587,7 +630,11 @@ Response:
 
 ```json
 {
-  "operation_id": "op-integrations-123"
+  "results": [
+    { "name": "VS Code Copilot", "ok": true },
+    { "name": "OpenCode", "ok": true },
+    { "name": "OpenClaw", "ok": false, "err": "..." }
+  ]
 }
 ```
 

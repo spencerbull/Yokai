@@ -8,8 +8,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/spencerbull/yokai/internal/config"
+	"github.com/spencerbull/yokai/internal/docker"
 	sshpkg "github.com/spencerbull/yokai/internal/ssh"
 )
 
@@ -21,10 +23,12 @@ type bootstrapDeviceRequest struct {
 }
 
 type bootstrapDeviceResponse struct {
-	Device     deviceStatus            `json:"device"`
-	Preflight  *sshpkg.PreflightResult `json:"preflight,omitempty"`
-	AgentToken string                  `json:"agent_token"`
-	Message    string                  `json:"message"`
+	Device              deviceStatus            `json:"device"`
+	Preflight           *sshpkg.PreflightResult `json:"preflight,omitempty"`
+	AgentToken          string                  `json:"agent_token"`
+	InstallMonitoring   bool                    `json:"install_monitoring"`
+	MonitoringInstalled bool                    `json:"monitoring_installed"`
+	Message             string                  `json:"message"`
 }
 
 func (d *Daemon) handleBootstrapDevice(w http.ResponseWriter, r *http.Request) {
@@ -89,6 +93,15 @@ func (d *Daemon) handleBootstrapDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	monitoringInstalled := false
+	if req.InstallMonitoring {
+		if err := deployMonitoringStack(client, req.Host, req.AgentPort, preflight); err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "monitoring_deploy_failed", "message": err.Error()})
+			return
+		}
+		monitoringInstalled = true
+	}
+
 	nextCfg := cloneConfigCurrent(d)
 	device := buildDeviceFromRequest(req.deviceUpsertRequest, req.ID)
 	device.AgentToken = agentToken
@@ -103,11 +116,17 @@ func (d *Daemon) handleBootstrapDevice(w http.ResponseWriter, r *http.Request) {
 	}
 
 	d.applyConfigUpdate(nextCfg)
+	message := fmt.Sprintf("Bootstrapped %s and deployed the Yokai agent", device.Label)
+	if monitoringInstalled {
+		message += " plus monitoring"
+	}
 	writeJSON(w, http.StatusCreated, bootstrapDeviceResponse{
-		Device:     d.deviceStatus(device.ID),
-		Preflight:  preflight,
-		AgentToken: agentToken,
-		Message:    fmt.Sprintf("Bootstrapped %s and deployed the Yokai agent", device.Label),
+		Device:              d.deviceStatus(device.ID),
+		Preflight:           preflight,
+		AgentToken:          agentToken,
+		InstallMonitoring:   req.InstallMonitoring,
+		MonitoringInstalled: monitoringInstalled,
+		Message:             message,
 	})
 }
 
@@ -129,4 +148,56 @@ func cloneConfigCurrent(d *Daemon) *config.Config {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	return cloneConfig(d.cfg)
+}
+
+func deployMonitoringStack(client *sshpkg.Client, host string, agentPort int, preflight *sshpkg.PreflightResult) error {
+	monitoringCfg := docker.MonitoringConfig{
+		AgentHost:      host,
+		AgentPort:      agentPort,
+		PrometheusPort: 9090,
+		GrafanaPort:    3001,
+		HasNvidiaGPU:   preflight != nil && preflight.GPUDetected,
+	}
+
+	composeYAML := docker.GenerateMonitoringCompose(monitoringCfg)
+	prometheusYAML := docker.GeneratePrometheusConfig(monitoringCfg)
+
+	tmpDir := "/tmp/yokai-monitoring"
+	if _, err := client.Exec(fmt.Sprintf("mkdir -p %s", tmpDir)); err != nil {
+		return fmt.Errorf("creating monitoring dir: %w", err)
+	}
+
+	writeComposeCmd := fmt.Sprintf(`cat > %s/docker-compose.yml << 'EOF'
+%s
+EOF`, tmpDir, composeYAML)
+	if _, err := client.Exec(writeComposeCmd); err != nil {
+		return fmt.Errorf("writing compose file: %w", err)
+	}
+
+	writePrometheusCmd := fmt.Sprintf(`cat > %s/prometheus.yml << 'EOF'
+%s
+EOF`, tmpDir, prometheusYAML)
+	if _, err := client.Exec(writePrometheusCmd); err != nil {
+		return fmt.Errorf("writing prometheus config: %w", err)
+	}
+
+	mkdirCmd := fmt.Sprintf("mkdir -p %s/grafana/provisioning %s/grafana/dashboards", tmpDir, tmpDir)
+	if _, err := client.Exec(mkdirCmd); err != nil {
+		return fmt.Errorf("creating grafana dirs: %w", err)
+	}
+
+	pullCmd := fmt.Sprintf("cd %s && docker compose pull 2>&1", tmpDir)
+	if out, err := client.Exec(pullCmd); err != nil {
+		return fmt.Errorf("pulling monitoring images: %w — stderr: %s", err, out)
+	}
+
+	deployCmd := fmt.Sprintf("cd %s && docker compose up -d 2>&1", tmpDir)
+	if out, err := client.Exec(deployCmd); err != nil {
+		time.Sleep(3 * time.Second)
+		if out2, err2 := client.Exec(deployCmd); err2 != nil {
+			return fmt.Errorf("starting monitoring stack: %w — stderr: %s %s", err2, out, out2)
+		}
+	}
+
+	return nil
 }

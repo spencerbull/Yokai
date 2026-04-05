@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -53,6 +55,16 @@ type deviceDeleteResponse struct {
 	RemovedDeviceID  string `json:"removed_device_id"`
 	RemovedServices  int    `json:"removed_services"`
 	CleanupRequested bool   `json:"cleanup_requested"`
+}
+
+type deviceUpgradeResult struct {
+	DeviceID string `json:"device_id"`
+	OK       bool   `json:"ok"`
+	Message  string `json:"message"`
+}
+
+type bulkDeviceActionResponse struct {
+	Results []interface{} `json:"results"`
 }
 
 func (d *Daemon) handleSSHConfigHosts(w http.ResponseWriter, r *http.Request) {
@@ -161,14 +173,62 @@ func (d *Daemon) handleDeleteDevice(w http.ResponseWriter, r *http.Request) {
 
 func (d *Daemon) handleTestDevice(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.PathValue("deviceID")
-	d.mu.RLock()
-	device := d.cfg.FindDevice(deviceID)
-	d.mu.RUnlock()
+	device := d.lookupDevice(deviceID)
 	if device == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "device_not_found", "message": fmt.Sprintf("device %q was not found", deviceID)})
 		return
 	}
 
+	writeJSON(w, http.StatusOK, testSingleDevice(*device))
+}
+
+func (d *Daemon) handleUpgradeDevice(w http.ResponseWriter, r *http.Request) {
+	deviceID := r.PathValue("deviceID")
+	device := d.lookupDevice(deviceID)
+	if device == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "device_not_found", "message": fmt.Sprintf("device %q was not found", deviceID)})
+		return
+	}
+
+	result := upgradeSingleDevice(*device)
+	status := http.StatusOK
+	if !result.OK {
+		status = http.StatusBadGateway
+	}
+	writeJSON(w, status, result)
+}
+
+func (d *Daemon) handleTestAllDevices(w http.ResponseWriter, r *http.Request) {
+	devices := d.allDevices()
+	results := make([]interface{}, 0, len(devices))
+	for _, device := range devices {
+		results = append(results, testSingleDevice(device))
+	}
+	writeJSON(w, http.StatusOK, bulkDeviceActionResponse{Results: results})
+}
+
+func (d *Daemon) handleUpgradeAllDevices(w http.ResponseWriter, r *http.Request) {
+	devices := d.allDevices()
+	results := make([]interface{}, 0, len(devices))
+	for _, device := range devices {
+		results = append(results, upgradeSingleDevice(device))
+	}
+	writeJSON(w, http.StatusOK, bulkDeviceActionResponse{Results: results})
+}
+
+func (d *Daemon) lookupDevice(deviceID string) *config.Device {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.cfg.FindDevice(deviceID)
+}
+
+func (d *Daemon) allDevices() []config.Device {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return append([]config.Device(nil), d.cfg.Devices...)
+}
+
+func testSingleDevice(device config.Device) deviceTestResult {
 	client, err := sshpkg.Connect(sshpkg.ClientConfig{
 		Host:           device.Host,
 		Port:           fmt.Sprintf("%d", device.SSHPortOrDefault()),
@@ -177,13 +237,12 @@ func (d *Daemon) handleTestDevice(w http.ResponseWriter, r *http.Request) {
 		KeyPath:        device.SSHKey,
 	})
 	if err != nil {
-		writeJSON(w, http.StatusOK, deviceTestResult{
+		return deviceTestResult{
 			DeviceID: device.ID,
 			SSHOK:    false,
 			AgentOK:  false,
 			Message:  compactSSHTestError(err),
-		})
-		return
+		}
 	}
 	defer func() { _ = client.Close() }()
 
@@ -197,15 +256,13 @@ func (d *Daemon) handleTestDevice(w http.ResponseWriter, r *http.Request) {
 	healthURL := fmt.Sprintf("http://%s:%d/health", device.Host, device.AgentPort)
 	resp, err := (&http.Client{Timeout: 5 * time.Second}).Get(healthURL)
 	if err != nil {
-		writeJSON(w, http.StatusOK, result)
-		return
+		return result
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		result.Message = fmt.Sprintf("Agent returned status %d", resp.StatusCode)
-		writeJSON(w, http.StatusOK, result)
-		return
+		return result
 	}
 
 	var payload struct {
@@ -219,7 +276,38 @@ func (d *Daemon) handleTestDevice(w http.ResponseWriter, r *http.Request) {
 	if payload.Version != "" {
 		result.Message = fmt.Sprintf("Device online (v%s)", payload.Version)
 	}
-	writeJSON(w, http.StatusOK, result)
+	return result
+}
+
+func upgradeSingleDevice(device config.Device) deviceUpgradeResult {
+	client, err := sshpkg.Connect(sshpkg.ClientConfig{
+		Host:           device.Host,
+		Port:           fmt.Sprintf("%d", device.SSHPortOrDefault()),
+		User:           device.SSHUser,
+		ConnectionType: device.ConnectionType,
+		KeyPath:        device.SSHKey,
+	})
+	if err != nil {
+		return deviceUpgradeResult{DeviceID: device.ID, OK: false, Message: fmt.Sprintf("SSH: %s", compactSSHTestError(err))}
+	}
+	defer func() { _ = client.Close() }()
+
+	preflight, err := sshpkg.Preflight(client)
+	if err != nil {
+		return deviceUpgradeResult{DeviceID: device.ID, OK: false, Message: fmt.Sprintf("preflight failed: %s", err.Error())}
+	}
+
+	localBinary, err := sshpkg.BuildLocalBinaryForTarget(preflight.KernelOS, preflight.Arch)
+	if err != nil {
+		return deviceUpgradeResult{DeviceID: device.ID, OK: false, Message: fmt.Sprintf("build failed: %s", err.Error())}
+	}
+	defer func() { _ = os.RemoveAll(filepath.Dir(localBinary)) }()
+
+	if err := sshpkg.UpgradeAgent(client, localBinary, device.AgentPort); err != nil {
+		return deviceUpgradeResult{DeviceID: device.ID, OK: false, Message: err.Error()}
+	}
+
+	return deviceUpgradeResult{DeviceID: device.ID, OK: true, Message: "Agent upgraded successfully"}
 }
 
 func (d *Daemon) deviceStatuses() []deviceStatus {

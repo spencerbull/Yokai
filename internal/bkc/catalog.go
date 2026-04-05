@@ -1,6 +1,8 @@
 package bkc
 
 import (
+	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/spencerbull/yokai/internal/config"
@@ -92,4 +94,116 @@ func Lookup(workload Workload, modelID string) (Config, bool) {
 		}
 	}
 	return Config{}, false
+}
+
+type MatchType string
+
+const (
+	MatchExact     MatchType = "exact"
+	MatchSuggested MatchType = "suggested"
+)
+
+func LookupBest(workload Workload, modelID string) (Config, MatchType, bool) {
+	if cfg, ok := Lookup(workload, modelID); ok {
+		return cfg, MatchExact, true
+	}
+
+	modelID = strings.TrimSpace(modelID)
+	if modelID == "" {
+		return Config{}, "", false
+	}
+
+	owner, tokens := normalizedModelParts(modelID)
+	if owner == "" || len(tokens) == 0 {
+		return Config{}, "", false
+	}
+
+	type scored struct {
+		cfg   Config
+		score int
+	}
+	var matches []scored
+	for _, cfg := range catalog {
+		if cfg.Workload != workload {
+			continue
+		}
+		cfgOwner, cfgTokens := normalizedModelParts(cfg.ModelID)
+		if cfgOwner == "" || cfgOwner != owner {
+			continue
+		}
+		overlap := tokenOverlap(tokens, cfgTokens)
+		if overlap < 3 {
+			continue
+		}
+		score := overlap*10 - abs(len(tokens)-len(cfgTokens))
+		matches = append(matches, scored{cfg: cfg, score: score})
+	}
+
+	if len(matches) == 0 {
+		return Config{}, "", false
+	}
+
+	sort.Slice(matches, func(i, j int) bool {
+		if matches[i].score != matches[j].score {
+			return matches[i].score > matches[j].score
+		}
+		return matches[i].cfg.Name < matches[j].cfg.Name
+	})
+
+	return matches[0].cfg, MatchSuggested, true
+}
+
+var splitNonAlphaNum = regexp.MustCompile(`[^a-z0-9]+`)
+
+func normalizedModelParts(modelID string) (string, []string) {
+	modelID = strings.TrimSpace(strings.ToLower(modelID))
+	if modelID == "" {
+		return "", nil
+	}
+	owner := ""
+	rest := modelID
+	if slash := strings.Index(modelID, "/"); slash >= 0 {
+		owner = modelID[:slash]
+		rest = modelID[slash+1:]
+	}
+	parts := splitNonAlphaNum.Split(rest, -1)
+	tokens := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		tokens = append(tokens, part)
+	}
+	return owner, tokens
+}
+
+func tokenOverlap(a, b []string) int {
+	if len(a) == 0 || len(b) == 0 {
+		return 0
+	}
+	set := make(map[string]struct{}, len(a))
+	for _, token := range a {
+		set[token] = struct{}{}
+	}
+	overlap := 0
+	seen := make(map[string]struct{})
+	for _, token := range b {
+		if _, ok := set[token]; !ok {
+			continue
+		}
+		if _, dup := seen[token]; dup {
+			continue
+		}
+		seen[token] = struct{}{}
+		overlap++
+	}
+	return overlap
+}
+
+func abs(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
 }

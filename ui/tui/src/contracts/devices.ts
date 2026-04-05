@@ -59,12 +59,32 @@ export type DeviceRequest = {
   tags?: string[]
 }
 
+export type BootstrapDeviceRequest = DeviceRequest & {
+  install_monitoring?: boolean
+  ssh_key_passphrase?: string
+  ssh_password?: string
+}
+
 export type DeviceTestResult = {
   device_id: string
   ssh_ok: boolean
   agent_ok: boolean
   version?: string
   message: string
+}
+
+export type DeviceUpgradeResult = {
+  device_id: string
+  ok: boolean
+  message: string
+}
+
+export type BulkDeviceTestResponse = {
+  results: DeviceTestResult[]
+}
+
+export type BulkDeviceUpgradeResponse = {
+  results: DeviceUpgradeResult[]
 }
 
 export type DeviceDeleteResult = {
@@ -89,17 +109,22 @@ export type BootstrapDeviceResponse = {
     DiskFreeGB: number
   }
   agent_token: string
+  install_monitoring: boolean
+  monitoring_installed: boolean
   message: string
 }
 
 export type DeviceEditorForm = {
   mode: "create" | "edit"
   connectionType: string
+  authMethod: "agent" | "key" | "password"
   id?: string
   label: string
   host: string
   sshUser: string
   sshKey: string
+  sshKeyPassphrase: string
+  sshPassword: string
   sshPort: string
   agentPort: string
   agentToken: string
@@ -110,7 +135,10 @@ export type DeviceFormField =
   | "label"
   | "host"
   | "sshUser"
+  | "authMethod"
   | "sshKey"
+  | "sshKeyPassphrase"
+  | "sshPassword"
   | "sshPort"
   | "agentPort"
   | "agentToken"
@@ -120,11 +148,14 @@ export function editorFormFromDevice(device: DeviceRecord): DeviceEditorForm {
   return {
     mode: "edit",
     connectionType: device.connection_type || "manual",
+    authMethod: device.ssh_key ? "key" : "agent",
     id: device.id,
     label: device.label || "",
     host: device.host,
     sshUser: device.ssh_user || "",
     sshKey: device.ssh_key || "",
+    sshKeyPassphrase: "",
+    sshPassword: "",
     sshPort: `${device.ssh_port ?? 22}`,
     agentPort: `${device.agent_port ?? 7474}`,
     agentToken: device.agent_token || "",
@@ -136,10 +167,13 @@ export function emptyDeviceEditorForm(): DeviceEditorForm {
   return {
     mode: "create",
     connectionType: "manual",
+    authMethod: "agent",
     label: "",
     host: "",
     sshUser: "",
     sshKey: "",
+    sshKeyPassphrase: "",
+    sshPassword: "",
     sshPort: "22",
     agentPort: "7474",
     agentToken: "",
@@ -151,10 +185,13 @@ export function editorFormFromSSHHost(host: SSHConfigHost): DeviceEditorForm {
   return {
     mode: "create",
     connectionType: "ssh-config",
+    authMethod: host.identity_file ? "key" : "agent",
     label: host.alias,
     host: host.host,
     sshUser: host.user || "",
     sshKey: host.identity_file || "",
+    sshKeyPassphrase: "",
+    sshPassword: "",
     sshPort: `${host.port || 22}`,
     agentPort: "7474",
     agentToken: "",
@@ -166,10 +203,13 @@ export function editorFormFromTailscalePeer(peer: TailscalePeer): DeviceEditorFo
   return {
     mode: "create",
     connectionType: "tailscale",
+    authMethod: "agent",
     label: peer.hostname,
     host: peer.ip,
     sshUser: "",
     sshKey: "",
+    sshKeyPassphrase: "",
+    sshPassword: "",
     sshPort: "22",
     agentPort: "7474",
     agentToken: "",

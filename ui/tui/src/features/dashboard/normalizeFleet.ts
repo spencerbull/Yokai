@@ -41,6 +41,8 @@ export function normalizeFleetSnapshot(devices: DeviceRecord[], metrics: Metrics
       avgCpuPercent: averageOf(
         fleetDevices.filter((device) => device.online).map((device) => device.cpuPercent),
       ),
+      ramUsedMB: fleetDevices.reduce((sum, device) => sum + device.ramUsedMB, 0),
+      ramTotalMB: fleetDevices.reduce((sum, device) => sum + device.ramTotalMB, 0),
       avgRamPercent: averageOf(
         fleetDevices.filter((device) => device.online).map((device) => device.ramPercent),
       ),
@@ -66,6 +68,8 @@ function toFleetDevice(device: DeviceRecord, metrics: DeviceMetrics | undefined)
     gpuMemoryUsedMB: gpuStats.memoryUsedMB,
     gpuMemoryTotalMB: gpuStats.memoryTotalMB,
     cpuPercent: metrics?.cpu?.percent ?? 0,
+    ramUsedMB: metrics?.ram?.used_mb ?? 0,
+    ramTotalMB: metrics?.ram?.total_mb ?? 0,
     ramPercent: metrics?.ram?.percent ?? 0,
     serviceCount: metrics?.containers?.length ?? 0,
   }

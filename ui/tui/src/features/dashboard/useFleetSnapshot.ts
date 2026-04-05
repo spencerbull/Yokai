@@ -26,6 +26,8 @@ const EMPTY_SNAPSHOT: FleetSnapshot = {
     gpuMemoryTotalMB: 0,
     avgGpuUtilPercent: 0,
     avgCpuPercent: 0,
+    ramUsedMB: 0,
+    ramTotalMB: 0,
     avgRamPercent: 0,
   },
 }

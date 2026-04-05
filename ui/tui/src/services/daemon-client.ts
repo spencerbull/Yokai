@@ -1,7 +1,8 @@
 import { DAEMON_URL } from "../config"
-import type { BootstrapDeviceResponse, DeviceDeleteResult, DeviceRequest, DeviceTestResult, SSHConfigHostsResponse, TailscalePeersResponse, TailscaleStatus } from "../contracts/devices"
+import type { BootstrapDeviceRequest, BootstrapDeviceResponse, BulkDeviceTestResponse, BulkDeviceUpgradeResponse, DeviceDeleteResult, DeviceRequest, DeviceTestResult, DeviceUpgradeResult, SSHConfigHostsResponse, TailscalePeersResponse, TailscaleStatus } from "../contracts/devices"
+import type { DeployBKC, DeployRequest, DeployResult, HFModel, VLLMMemoryEstimate, WorkloadType } from "../contracts/deploy"
 import type { DevicesResponse, LogTarget, MetricsResponse } from "../contracts/fleet"
-import type { DeployHistory, HFSettings, SettingsDocument, SettingsPatch } from "../contracts/settings"
+import type { DeployHistory, HFSettings, HFTokenValidation, IntegrationsConfigureRequest, IntegrationsConfigureResponse, OpenAIEndpoint, SettingsDocument, SettingsPatch } from "../contracts/settings"
 import { readSSEStream } from "./sse"
 
 type StatusResult = {
@@ -55,6 +56,29 @@ export async function getMetrics() {
   return daemonRequest<MetricsResponse>("/metrics")
 }
 
+export async function getHFModels(query: string, workload: WorkloadType) {
+  const response = await daemonRequest<{ models: HFModel[] }>(`/hf/models?query=${encodeURIComponent(query)}&workload=${encodeURIComponent(workload)}`)
+  return response.models ?? []
+}
+
+export async function getDeployBKC(workload: WorkloadType, model: string) {
+  const response = await daemonRequest<{ config?: DeployBKC }>(`/deploy/bkc?workload=${encodeURIComponent(workload)}&model=${encodeURIComponent(model)}`)
+  return response.config ?? null
+}
+
+export async function getVLLMMemoryEstimate(request: {
+  context_length: number
+  device_id: string
+  model: string
+  overhead_gb: string
+  extra_args?: string
+}) {
+  return daemonRequest<VLLMMemoryEstimate>("/deploy/vllm-memory-estimate", {
+    method: "POST",
+    body: JSON.stringify(request),
+  })
+}
+
 export async function patchSettings(patch: SettingsPatch) {
   return daemonRequest<SettingsDocument>("/settings", {
     method: "PATCH",
@@ -69,6 +93,13 @@ export async function putHFToken(token: string) {
   })
 }
 
+export async function validateHFToken(token: string) {
+  return daemonRequest<HFTokenValidation>("/settings/hf-token/validate", {
+    method: "POST",
+    body: JSON.stringify({ token }),
+  })
+}
+
 export async function getDeployHistory() {
   return daemonRequest<DeployHistory>("/history/deploy")
 }
@@ -77,6 +108,18 @@ export async function putDeployHistory(history: DeployHistory) {
   return daemonRequest<DeployHistory>("/history/deploy", {
     method: "PUT",
     body: JSON.stringify(history),
+  })
+}
+
+export async function getOpenAIEndpoints() {
+  const response = await daemonRequest<{ endpoints: OpenAIEndpoint[] }>("/integrations/openai-endpoints")
+  return response.endpoints ?? []
+}
+
+export async function configureIntegrations(request: IntegrationsConfigureRequest) {
+  return daemonRequest<IntegrationsConfigureResponse>("/integrations/configure", {
+    method: "POST",
+    body: JSON.stringify(request),
   })
 }
 
@@ -154,16 +197,41 @@ export async function testDevice(deviceId: string) {
   })
 }
 
+export async function upgradeDevice(deviceId: string) {
+  return daemonRequest<DeviceUpgradeResult>(`/devices/${encodeURIComponent(deviceId)}/upgrade`, {
+    method: "POST",
+  })
+}
+
+export async function testAllDevices() {
+  return daemonRequest<BulkDeviceTestResponse>("/devices/test-all", {
+    method: "POST",
+  })
+}
+
+export async function upgradeAllDevices() {
+  return daemonRequest<BulkDeviceUpgradeResponse>("/devices/upgrade-all", {
+    method: "POST",
+  })
+}
+
 export async function deleteDevice(deviceId: string) {
   return daemonRequest<DeviceDeleteResult>(`/devices/${encodeURIComponent(deviceId)}`, {
     method: "DELETE",
   })
 }
 
-export async function bootstrapDevice(device: DeviceRequest) {
+export async function bootstrapDevice(device: BootstrapDeviceRequest) {
   return daemonRequest<BootstrapDeviceResponse>("/bootstrap/device", {
     method: "POST",
     body: JSON.stringify(device),
+  })
+}
+
+export async function deployService(request: DeployRequest) {
+  return daemonRequest<DeployResult>("/deploy", {
+    method: "POST",
+    body: JSON.stringify(request),
   })
 }
 
