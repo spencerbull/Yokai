@@ -96,7 +96,7 @@ func (d *Daemon) handleConfigureIntegrations(w http.ResponseWriter, r *http.Requ
 		case "vscode":
 			results = append(results, configureVSCode(endpoints))
 		case "claudecode":
-			results = append(results, configureClaudeCode())
+			results = append(results, configureClaudeCode(endpoints))
 		case "codex":
 			results = append(results, configureCodex(endpoints))
 		case "opencode":
@@ -243,8 +243,20 @@ func configureOpenCode(endpoints []openAIEndpointRecord) configureIntegrationRes
 	return configureIntegrationResult{Name: "OpenCode", OK: true}
 }
 
-func configureClaudeCode() configureIntegrationResult {
-	return configureIntegrationResult{Name: "Claude Code", OK: false, Err: claudecode.UnsupportedMessage}
+func configureClaudeCode(endpoints []openAIEndpointRecord) configureIntegrationResult {
+	if len(endpoints) == 0 {
+		return configureIntegrationResult{Name: "Claude Code", OK: false, Err: "no OpenAI-compatible endpoints available"}
+	}
+	chosen := endpoints[0]
+	modelID := firstModelID(chosen.ModelIDs, chosen.ServiceType)
+	if err := claudecode.AddEndpoints([]claudecode.Endpoint{{
+		BaseURL:   chosen.BaseURL,
+		ModelID:   modelID,
+		ModelName: fmt.Sprintf("%s (yokai)", modelID),
+	}}); err != nil {
+		return configureIntegrationResult{Name: "Claude Code", OK: false, Err: err.Error()}
+	}
+	return configureIntegrationResult{Name: "Claude Code", OK: true}
 }
 
 func configureCodex(endpoints []openAIEndpointRecord) configureIntegrationResult {
