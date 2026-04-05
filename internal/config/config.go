@@ -311,3 +311,26 @@ func (c *Config) RemoveServiceByID(serviceID string) int {
 	c.Services = filtered
 	return removed
 }
+
+// UpsertService inserts or replaces a service by ID.
+func (c *Config) UpsertService(s Service) {
+	filtered := c.Services[:0]
+	replaced := false
+
+	for _, existing := range c.Services {
+		if existing.ID == s.ID {
+			if !replaced {
+				filtered = append(filtered, s)
+				replaced = true
+			}
+			continue
+		}
+		filtered = append(filtered, existing)
+	}
+
+	if !replaced {
+		filtered = append(filtered, s)
+	}
+
+	c.Services = filtered
+}

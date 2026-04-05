@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+
+	"github.com/tailscale/hujson"
 )
 
 // Endpoint represents an OpenAI-compatible model endpoint.
@@ -67,7 +69,7 @@ func AddEndpoints(endpoints []Endpoint) error {
 			return fmt.Errorf("reading settings: %w", err)
 		}
 	} else {
-		if err := json.Unmarshal(data, &settings); err != nil {
+		if settings, err = parseSettingsJSONC(data); err != nil {
 			return fmt.Errorf("parsing settings: %w", err)
 		}
 	}
@@ -174,4 +176,17 @@ func endpointExists(models []interface{}, url string) bool {
 		}
 	}
 	return false
+}
+
+func parseSettingsJSONC(data []byte) (map[string]interface{}, error) {
+	ast, err := hujson.Parse(data)
+	if err != nil {
+		return nil, err
+	}
+	ast.Standardize()
+	var settings map[string]interface{}
+	if err := json.Unmarshal(ast.Pack(), &settings); err != nil {
+		return nil, err
+	}
+	return settings, nil
 }

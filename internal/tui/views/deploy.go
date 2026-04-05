@@ -1238,7 +1238,7 @@ func (d *Deploy) triggerVLLMMemoryEstimate() tea.Cmd {
 	token := d.cfg.HFToken
 
 	return func() tea.Msg {
-		estimate, err := hfmem.EstimateModel(modelID, token, contextLen)
+		estimate, err := hfmem.EstimateModel(modelID, token, contextLen, "")
 		if err != nil {
 			return vllmMemoryEstimateMsg{requestID: requestID, err: err}
 		}

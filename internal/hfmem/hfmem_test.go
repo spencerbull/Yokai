@@ -21,7 +21,7 @@ func TestBuildCommandArgsFallsBackToUvx(t *testing.T) {
 		}
 	}
 
-	args, err := buildCommandArgs("meta-llama/Llama-3.1-8B-Instruct", "hf_x", 32768)
+	args, err := buildCommandArgs("meta-llama/Llama-3.1-8B-Instruct", "hf_x", 32768, "")
 	if err != nil {
 		t.Fatal(err)
 	}

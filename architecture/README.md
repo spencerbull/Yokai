@@ -12,6 +12,7 @@ This directory contains multi-level architecture documentation for yokai, a TUI 
 | L4 | [Network Topology](04-network-topology.md) | SSH tunnels, Tailscale mesh, ports, auth |
 | L5 | [TUI Screen Map](05-tui-screen-map.md) | View hierarchy, navigation state machine, keybinds |
 | L6 | [Agent API](06-agent-api.md) | REST API contract, request/response schemas, SSE streaming |
+| L7 | [Daemon UI API](07-daemon-ui-api.md) | UI-neutral daemon contract for the OpenTUI frontend and future clients |
 
 ## How to Read
 
@@ -21,5 +22,6 @@ This directory contains multi-level architecture documentation for yokai, a TUI 
 - **L4** covers networking, security, and connectivity
 - **L5** maps every TUI screen and how users navigate between them
 - **L6** is the API reference for the agent service
+- **L7** defines the daemon-facing API used by the new OpenTUI frontend and any future UI
 
 All diagrams are rendered in markdown using ASCII art — no external tools required.

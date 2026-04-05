@@ -2,18 +2,24 @@ BINARY_NAME := yokai
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 BUILD_TIME := $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 LDFLAGS := -ldflags "-s -w -X main.version=$(VERSION) -X main.buildTime=$(BUILD_TIME)"
+GO_VERSION ?= 1.25
+GO := $(shell if command -v mise >/dev/null 2>&1; then printf 'mise exec go@$(GO_VERSION) -- go'; elif command -v go >/dev/null 2>&1; then printf 'go'; fi)
+GOLANGCI_LINT_VERSION ?= v2.4.0
 
 # Remote agent hosts — space-separated list of ssh host aliases or user@host
 # Override with: make dev-restart AGENTS="finn kyber"
 AGENTS ?= finn
 AGENT_PORT ?= 7474
 AGENT_PATH ?= /usr/local/bin/yokai
+TUI_DIR ?= ui/tui
 
-.PHONY: build run clean uninstall test lint agent daemon
-.PHONY: dev dev-restart dev-daemon dev-agents dev-tui dev-push
+.PHONY: build run clean uninstall test lint check agent daemon
+.PHONY: dev dev-restart dev-daemon dev-agents dev-tui dev-legacy-tui dev-push
+.PHONY: dev-opentui tui-install tui-build tui-dev tui-test
 
 build:
-	go build $(LDFLAGS) -o bin/$(BINARY_NAME) ./cmd/yokai
+	@test -n "$(GO)" || (echo "go is required; install Go or make sure mise is available" && exit 1)
+	$(GO) build $(LDFLAGS) -o bin/$(BINARY_NAME) ./cmd/yokai
 
 run: build
 	./bin/$(BINARY_NAME)
@@ -39,28 +45,34 @@ uninstall:
 	fi
 
 test:
-	go test ./...
+	@test -n "$(GO)" || (echo "go is required; install Go or make sure mise is available" && exit 1)
+	$(GO) test ./...
 
 lint:
-	go tool golangci-lint run
+	@test -n "$(GO)" || (echo "go is required; install Go or make sure mise is available" && exit 1)
+	$(GO) run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run
+
+check: test lint tui-test tui-build
 
 tidy:
-	go mod tidy
+	@test -n "$(GO)" || (echo "go is required; install Go or make sure mise is available" && exit 1)
+	$(GO) mod tidy
 
 cross:
-	GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o bin/$(BINARY_NAME)-linux-amd64 ./cmd/yokai
-	GOOS=linux GOARCH=arm64 go build $(LDFLAGS) -o bin/$(BINARY_NAME)-linux-arm64 ./cmd/yokai
-	GOOS=darwin GOARCH=arm64 go build $(LDFLAGS) -o bin/$(BINARY_NAME)-darwin-arm64 ./cmd/yokai
+	@test -n "$(GO)" || (echo "go is required; install Go or make sure mise is available" && exit 1)
+	GOOS=linux GOARCH=amd64 $(GO) build $(LDFLAGS) -o bin/$(BINARY_NAME)-linux-amd64 ./cmd/yokai
+	GOOS=linux GOARCH=arm64 $(GO) build $(LDFLAGS) -o bin/$(BINARY_NAME)-linux-arm64 ./cmd/yokai
+	GOOS=darwin GOARCH=arm64 $(GO) build $(LDFLAGS) -o bin/$(BINARY_NAME)-darwin-arm64 ./cmd/yokai
 
 # ---------- Local dev workflow ----------
 
-# Full local dev loop: rebuild, restart daemon, then launch TUI
-dev: build dev-daemon dev-tui
+# Full local dev loop: rebuild, restart daemon, then launch the OpenTUI frontend
+dev: build dev-daemon tui-dev
 	@echo "skipped remote agent deploy; run 'make dev-agents' when you want to push to $(AGENTS)"
 
 # Rebuild and restart the local daemon, but don't launch TUI
 dev-restart: build dev-daemon
-	@echo "daemon restarted locally — run 'make dev-tui' when ready"
+	@echo "daemon restarted locally — run 'make dev' or 'make tui-dev' when ready"
 	@echo "skipped remote agent deploy; run 'make dev-agents' when you want to push to $(AGENTS)"
 
 # Kill old daemon and start a new one (backgrounded)
@@ -93,9 +105,35 @@ dev-push: build
 		echo "  $$host done" || echo "  $$host FAILED"; \
 	done
 
-# Launch the TUI (foreground)
-dev-tui: build
+# Launch the legacy Bubble Tea TUI (foreground)
+dev-legacy-tui: build
 	./bin/$(BINARY_NAME)
+
+# Backward-compatible alias during the frontend migration
+dev-tui: dev-legacy-tui
+
+# Launch the OpenTUI frontend against the local daemon
+dev-opentui: dev
+
+# Install OpenTUI frontend dependencies
+tui-install:
+	@command -v bun >/dev/null 2>&1 || (echo "bun is required for the OpenTUI frontend" && exit 1)
+	@cd $(TUI_DIR) && bun install
+
+# Build the OpenTUI frontend bundle
+tui-build: tui-install
+	@command -v bun >/dev/null 2>&1 || (echo "bun is required for the OpenTUI frontend" && exit 1)
+	@cd $(TUI_DIR) && bun run build
+
+# Run the OpenTUI frontend directly
+tui-dev: tui-install
+	@command -v bun >/dev/null 2>&1 || (echo "bun is required for the OpenTUI frontend" && exit 1)
+	@cd $(TUI_DIR) && bun run dev
+
+# Run frontend tests
+tui-test: tui-install
+	@command -v bun >/dev/null 2>&1 || (echo "bun is required for the OpenTUI frontend" && exit 1)
+	@cd $(TUI_DIR) && bun test
 
 # Tail daemon logs
 dev-logs:

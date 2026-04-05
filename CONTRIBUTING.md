@@ -177,7 +177,7 @@ Every pull request runs:
 
 1. **Build** -- `go build ./...` across Go 1.22 and 1.23
 2. **Test** -- `go test -v -race -coverprofile=coverage.out ./...`
-3. **Lint** -- `golangci-lint run`
+3. **Lint** -- `make lint`
 
 All three must pass before merge.
 

@@ -25,6 +25,7 @@ type tunnel struct {
 	sshClient *ssh.Client // from internal/ssh
 	localPort int         // local port for forwarded agent connection
 	connected bool
+	lastError string
 	cancel    context.CancelFunc
 	listener  net.Listener
 }
@@ -70,6 +71,9 @@ func (tp *TunnelPool) connectDevice(device config.Device) {
 			return
 		default:
 			if err := tp.establishTunnel(t, device); err != nil {
+				tp.mu.Lock()
+				t.lastError = err.Error()
+				tp.mu.Unlock()
 				log.Printf("tunnel to %s failed: %v, retrying in %ds", device.ID, err, tp.cfg.Daemon.ReconnectInterval)
 				time.Sleep(time.Duration(tp.cfg.Daemon.ReconnectInterval) * time.Second)
 				continue
@@ -120,6 +124,7 @@ func (tp *TunnelPool) establishTunnel(t *tunnel, device config.Device) error {
 	t.localPort = localPort
 	t.listener = listener
 	t.connected = true
+	t.lastError = ""
 	tp.mu.Unlock()
 
 	log.Printf("tunnel established: %s -> localhost:%d -> %s:%d", device.ID, localPort, device.Host, device.AgentPort)
@@ -204,6 +209,7 @@ func (tp *TunnelPool) keepAlive(t *tunnel, ctx context.Context) {
 				log.Printf("tunnel %s: keepalive failed: %v", t.deviceID, err)
 				tp.mu.Lock()
 				t.connected = false
+				t.lastError = err.Error()
 				tp.mu.Unlock()
 				return
 			}
@@ -284,6 +290,18 @@ func (tp *TunnelPool) LocalPort(deviceID string) int {
 		return 0
 	}
 	return t.localPort
+}
+
+// LastError returns the most recent tunnel error for a device.
+func (tp *TunnelPool) LastError(deviceID string) string {
+	tp.mu.RLock()
+	defer tp.mu.RUnlock()
+
+	t, exists := tp.tunnels[deviceID]
+	if !exists {
+		return ""
+	}
+	return t.lastError
 }
 
 // Reconnect reconnects a specific device tunnel

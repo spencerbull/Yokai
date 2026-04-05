@@ -24,8 +24,10 @@ type cliResult struct {
 var lookPath = exec.LookPath
 var command = exec.Command
 
-func EstimateModel(modelID, token string, maxModelLen int) (*Estimate, error) {
-	args, err := buildCommandArgs(modelID, token, maxModelLen)
+const defaultUVVersion = "0.11.3"
+
+func EstimateModel(modelID, token string, maxModelLen int, kvCacheDType string) (*Estimate, error) {
+	args, err := buildCommandArgs(modelID, token, maxModelLen, kvCacheDType)
 	if err != nil {
 		return nil, err
 	}
@@ -59,8 +61,11 @@ func EstimateModel(modelID, token string, maxModelLen int) (*Estimate, error) {
 	return &Estimate{WeightsBytes: weights, KVCacheBytes: kvCache, TotalBytes: total}, nil
 }
 
-func buildCommandArgs(modelID, token string, maxModelLen int) ([]string, error) {
+func buildCommandArgs(modelID, token string, maxModelLen int, kvCacheDType string) ([]string, error) {
 	base := []string{"hf-mem", "--model-id", modelID, "--experimental", "--max-model-len", strconv.Itoa(maxModelLen), "--json-output"}
+	if strings.TrimSpace(kvCacheDType) != "" {
+		base = append(base, "--kv-cache-dtype", strings.TrimSpace(kvCacheDType))
+	}
 	if token != "" {
 		base = append(base, "--hf-token", token)
 	}
@@ -71,8 +76,11 @@ func buildCommandArgs(modelID, token string, maxModelLen int) ([]string, error) 
 	if _, err := lookPath("uvx"); err == nil {
 		return append([]string{"uvx"}, base...), nil
 	}
+	if _, err := lookPath("mise"); err == nil {
+		return append([]string{"mise", "exec", "uv@" + defaultUVVersion, "--", "uvx"}, base...), nil
+	}
 
-	return nil, fmt.Errorf("hf-mem not installed (tried 'hf-mem' and 'uvx hf-mem')")
+	return nil, fmt.Errorf("hf-mem not installed (tried 'hf-mem', 'uvx hf-mem', and 'mise exec uv@%s -- uvx hf-mem')", defaultUVVersion)
 }
 
 func formatRunError(err error, stderr string) error {
@@ -88,6 +96,8 @@ func formatRunError(err error, stderr string) error {
 		return fmt.Errorf("running hf-mem: Hugging Face returned 403 Forbidden; request access to the selected model and verify your HF token")
 	case strings.Contains(stderr, "404 Not Found"):
 		return fmt.Errorf("running hf-mem: Hugging Face returned 404 Not Found; verify the selected model ID")
+	case strings.Contains(stderr, "quant_method different than `fp8`"):
+		return fmt.Errorf("running hf-mem: this model needs an explicit --kv-cache-dtype (for example from the BKC preset); apply BKC first or add the kv-cache dtype manually")
 	}
 
 	lines := strings.Split(stderr, "\n")
