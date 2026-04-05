@@ -15,7 +15,7 @@ TUI_DIR ?= ui/tui
 
 .PHONY: build run clean uninstall test lint check agent daemon
 .PHONY: dev dev-restart dev-daemon dev-agents dev-tui dev-legacy-tui dev-push
-.PHONY: dev-opentui tui-install tui-build tui-dev tui-test
+.PHONY: dev-opentui tui-install tui-build tui-compile tui-dev tui-test
 
 build:
 	@test -n "$(GO)" || (echo "go is required; install Go or make sure mise is available" && exit 1)
@@ -52,7 +52,7 @@ lint:
 	@test -n "$(GO)" || (echo "go is required; install Go or make sure mise is available" && exit 1)
 	$(GO) run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run
 
-check: test lint tui-test tui-build
+check: test lint tui-test tui-build tui-compile
 
 tidy:
 	@test -n "$(GO)" || (echo "go is required; install Go or make sure mise is available" && exit 1)
@@ -124,6 +124,12 @@ tui-install:
 tui-build: tui-install
 	@command -v bun >/dev/null 2>&1 || (echo "bun is required for the OpenTUI frontend" && exit 1)
 	@cd $(TUI_DIR) && bun run build
+
+# Build the packaged OpenTUI executable for the current platform
+tui-compile: tui-install
+	@command -v bun >/dev/null 2>&1 || (echo "bun is required for the OpenTUI frontend" && exit 1)
+	@mkdir -p bin
+	@cd $(TUI_DIR) && bun build --compile --format=esm --minify --bytecode src/index.tsx --outfile=../../bin/yokai-tui
 
 # Run the OpenTUI frontend directly
 tui-dev: tui-install
