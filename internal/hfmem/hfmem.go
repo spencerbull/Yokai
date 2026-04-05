@@ -96,7 +96,7 @@ func formatRunError(err error, stderr string) error {
 		return fmt.Errorf("running hf-mem: Hugging Face returned 403 Forbidden; request access to the selected model and verify your HF token")
 	case strings.Contains(stderr, "404 Not Found"):
 		return fmt.Errorf("running hf-mem: Hugging Face returned 404 Not Found; verify the selected model ID")
-	case strings.Contains(stderr, "quant_method different than `fp8`") || strings.Contains(stderr, "quant_method different than `fp8`"):
+	case strings.Contains(stderr, "quant_method different than `fp8`"):
 		return fmt.Errorf("running hf-mem: this model needs an explicit --kv-cache-dtype (for example from the BKC preset); apply BKC first or add the kv-cache dtype manually")
 	}
 

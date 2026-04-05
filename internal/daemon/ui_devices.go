@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -73,7 +74,9 @@ func (d *Daemon) handleSSHConfigHosts(w http.ResponseWriter, r *http.Request) {
 	for _, host := range hosts {
 		port := 22
 		if host.Port != "" {
-			fmt.Sscanf(host.Port, "%d", &port)
+			if parsedPort, err := strconv.Atoi(host.Port); err == nil {
+				port = parsedPort
+			}
 		}
 		records = append(records, sshConfigHostRecord{
 			Alias:                 host.Alias,

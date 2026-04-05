@@ -4,6 +4,7 @@ BUILD_TIME := $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 LDFLAGS := -ldflags "-s -w -X main.version=$(VERSION) -X main.buildTime=$(BUILD_TIME)"
 GO_VERSION ?= 1.25
 GO := $(shell if command -v mise >/dev/null 2>&1; then printf 'mise exec go@$(GO_VERSION) -- go'; elif command -v go >/dev/null 2>&1; then printf 'go'; fi)
+GOLANGCI_LINT_VERSION ?= v2.4.0
 
 # Remote agent hosts — space-separated list of ssh host aliases or user@host
 # Override with: make dev-restart AGENTS="finn kyber"
@@ -12,7 +13,7 @@ AGENT_PORT ?= 7474
 AGENT_PATH ?= /usr/local/bin/yokai
 TUI_DIR ?= ui/tui
 
-.PHONY: build run clean uninstall test lint agent daemon
+.PHONY: build run clean uninstall test lint check agent daemon
 .PHONY: dev dev-restart dev-daemon dev-agents dev-tui dev-legacy-tui dev-push
 .PHONY: dev-opentui tui-install tui-build tui-dev tui-test
 
@@ -49,7 +50,9 @@ test:
 
 lint:
 	@test -n "$(GO)" || (echo "go is required; install Go or make sure mise is available" && exit 1)
-	$(GO) tool golangci-lint run
+	$(GO) run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run
+
+check: test lint tui-test tui-build
 
 tidy:
 	@test -n "$(GO)" || (echo "go is required; install Go or make sure mise is available" && exit 1)
