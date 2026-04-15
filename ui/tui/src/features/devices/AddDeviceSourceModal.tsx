@@ -57,15 +57,15 @@ export function AddDeviceSourceModal(props: AddDeviceSourceModalProps) {
               border
               borderStyle={selected ? "double" : "single"}
               borderColor={selected ? theme.colors.borderStrong : theme.colors.border}
-              backgroundColor={selected ? theme.colors.selectionBackground : theme.colors.panelMuted}
+              backgroundColor={theme.colors.panelMuted}
               padding={1}
               flexDirection="column"
               onMouseDown={() => props.onSelect(index)}
             >
-              <text fg={selected ? theme.colors.selectionText : theme.colors.text}>
-                <strong>{source.title}</strong>
+              <text fg={selected ? theme.colors.accent : theme.colors.text}>
+                <strong>{selected ? `▸ ${source.title}` : source.title}</strong>
               </text>
-              <text fg={selected ? theme.colors.selectionText : theme.colors.textMuted}>{source.description}</text>
+              <text fg={theme.colors.textMuted}>{source.description}</text>
             </box>
           )
         })}

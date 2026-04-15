@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/spencerbull/yokai/internal/config"
-	legacytui "github.com/spencerbull/yokai/internal/tui"
 )
 
 const (
@@ -19,9 +18,11 @@ const (
 )
 
 // Run launches the packaged OpenTUI client, auto-starting the daemon first.
-// It falls back to source-mode Bun execution in a checkout, and finally to the
-// legacy Go TUI if no OpenTUI runtime is available.
+// It falls back to source-mode Bun execution in a checkout when no bundled
+// OpenTUI sidecar is available.
 func Run(version string) error {
+	_ = version
+
 	daemonURL := os.Getenv("YOKAI_DAEMON_URL")
 	if daemonURL == "" {
 		addr, err := ensureDaemonRunning()
@@ -41,8 +42,7 @@ func Run(version string) error {
 		return runCommand(cmd)
 	}
 
-	_, _ = fmt.Fprintln(os.Stderr, "warning: yokai-tui runtime not found; falling back to legacy TUI")
-	return legacytui.Run(version)
+	return fmt.Errorf("OpenTUI runtime not found: install the bundled yokai-tui sidecar or run from a checkout with Bun available")
 }
 
 func ensureDaemonRunning() (string, error) {
@@ -181,9 +181,12 @@ func sourceTUICommand(daemonURL string) (*exec.Cmd, bool) {
 }
 
 func sourceTUICandidates() []string {
-	candidates := make([]string, 0, 2)
+	candidates := make([]string, 0, 3)
 	if cwd, err := os.Getwd(); err == nil {
 		candidates = append(candidates, filepath.Join(cwd, "ui", "tui"))
+	}
+	if _, file, _, ok := runtime.Caller(0); ok {
+		candidates = append(candidates, filepath.Join(filepath.Dir(file), "..", "..", "ui", "tui"))
 	}
 	if binaryPath, err := executablePath(); err == nil {
 		candidates = append(candidates, filepath.Join(filepath.Dir(binaryPath), "..", "ui", "tui"))

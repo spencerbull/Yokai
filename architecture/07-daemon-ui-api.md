@@ -1,8 +1,8 @@
 # Daemon UI API
 
-This document defines the UI-neutral daemon API contract for Yokai's next frontend.
+This document defines the UI-neutral daemon API contract for Yokai's OpenTUI frontend and any future clients.
 
-The goal is to keep the Go backend reusable across multiple interfaces while the Bubble Tea frontend is replaced by a new OpenTUI React client under `ui/tui`.
+The goal is to keep the Go backend reusable across multiple interfaces while the OpenTUI React client under `ui/tui` remains a thin shell over daemon-owned behavior.
 
 ## Scope
 

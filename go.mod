@@ -3,12 +3,6 @@ module github.com/spencerbull/yokai
 go 1.25.5
 
 require (
-	github.com/NimbleMarkets/ntcharts v0.4.0
-	github.com/charmbracelet/bubbles v0.20.0
-	github.com/charmbracelet/bubbletea v1.3.10
-	github.com/charmbracelet/lipgloss v1.1.0
-	github.com/charmbracelet/x/ansi v0.11.6
-	github.com/lrstanley/bubblezone v1.0.0
 	github.com/pelletier/go-toml/v2 v2.2.3
 	github.com/tailscale/hujson v0.0.0-20260302212456-ecc657c15afd
 	golang.org/x/crypto v0.48.0

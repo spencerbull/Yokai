@@ -13,36 +13,52 @@ export type DashboardConfirm = {
   message: string
 }
 
-export async function runDashboardAction(action: DashboardActionKind, service: FleetService) {
+type DashboardActionClient = {
+  removeContainer: typeof removeContainer
+  restartContainer: typeof restartContainer
+  stopContainer: typeof stopContainer
+  testContainer: typeof testContainer
+}
+
+const defaultClient: DashboardActionClient = {
+  removeContainer,
+  restartContainer,
+  stopContainer,
+  testContainer,
+}
+
+export async function runDashboardAction(action: DashboardActionKind, service: FleetService, client: DashboardActionClient = defaultClient) {
   switch (action) {
     case "stop": {
-      await stopContainer(service.deviceId, service.containerId)
+      await client.stopContainer(service.deviceId, service.containerId)
       return {
         level: "success" as const,
         message: `Stopped ${service.name}`,
       }
     }
     case "restart": {
-      await restartContainer(service.deviceId, service.containerId)
+      await client.restartContainer(service.deviceId, service.containerId)
       return {
         level: "info" as const,
         message: `Restarting ${service.name}`,
       }
     }
     case "test": {
-      const result = await testContainer(service.deviceId, service.containerId)
+      const result = await client.testContainer(service.deviceId, service.containerId)
       return {
         level: "success" as const,
         message: result.message?.trim() || `Service test passed for ${service.name}`,
       }
     }
     case "delete": {
-      const result = await removeContainer(service.deviceId, service.containerId)
+      const result = await client.removeContainer(service.deviceId, service.containerId)
+      const removedServices = result.removed_services ?? 0
+      const removedLabel = removedServices === 1 ? "config entry" : "config entries"
       return {
         level: "success" as const,
         message:
-          result.removed_services && result.removed_services > 0
-            ? `Deleted ${service.name} and removed ${result.removed_services} config entry`
+          removedServices > 0
+            ? `Deleted ${service.name} and removed ${removedServices} ${removedLabel}`
             : `Deleted ${service.name}`,
       }
     }

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 
 import type { FleetService } from "../../contracts/fleet"
-import { compactActionError, confirmForAction } from "./dashboard-actions"
+import { compactActionError, confirmForAction, runDashboardAction } from "./dashboard-actions"
 
 const SERVICE: FleetService = {
   containerId: "cont-1",
@@ -44,5 +44,83 @@ describe("compactActionError", () => {
     const message = compactActionError("delete", new Error("x".repeat(200)))
     expect(message.length).toBeLessThanOrEqual(120)
     expect(message.endsWith("...")).toBeTrue()
+  })
+})
+
+describe("runDashboardAction", () => {
+  test("calls stop and returns a success notice", async () => {
+    const calls: string[] = []
+    const result = await runDashboardAction("stop", SERVICE, {
+      stopContainer: async (deviceId, containerId) => {
+        calls.push(`stop:${deviceId}:${containerId}`)
+        return { status: "stopped" }
+      },
+      restartContainer: async () => ({ status: "restarting" }),
+      testContainer: async () => ({ message: "ok", service_type: "vllm" }),
+      removeContainer: async () => ({ status: "removed" }),
+    })
+
+    expect(calls).toEqual(["stop:dev-1:cont-1"])
+    expect(result).toEqual({ level: "success", message: "Stopped llama-serve" })
+  })
+
+  test("calls restart and returns an info notice", async () => {
+    const calls: string[] = []
+    const result = await runDashboardAction("restart", SERVICE, {
+      stopContainer: async () => ({ status: "stopped" }),
+      restartContainer: async (deviceId, containerId) => {
+        calls.push(`restart:${deviceId}:${containerId}`)
+        return { status: "restarting" }
+      },
+      testContainer: async () => ({ message: "ok", service_type: "vllm" }),
+      removeContainer: async () => ({ status: "removed" }),
+    })
+
+    expect(calls).toEqual(["restart:dev-1:cont-1"])
+    expect(result).toEqual({ level: "info", message: "Restarting llama-serve" })
+  })
+
+  test("uses daemon test message when present", async () => {
+    const result = await runDashboardAction("test", SERVICE, {
+      stopContainer: async () => ({ status: "stopped" }),
+      restartContainer: async () => ({ status: "restarting" }),
+      testContainer: async () => ({ message: "Health check passed", service_type: "vllm" }),
+      removeContainer: async () => ({ status: "removed" }),
+    })
+
+    expect(result).toEqual({ level: "success", message: "Health check passed" })
+  })
+
+  test("falls back to a default test message when the daemon response is blank", async () => {
+    const result = await runDashboardAction("test", SERVICE, {
+      stopContainer: async () => ({ status: "stopped" }),
+      restartContainer: async () => ({ status: "restarting" }),
+      testContainer: async () => ({ message: "   ", service_type: "vllm" }),
+      removeContainer: async () => ({ status: "removed" }),
+    })
+
+    expect(result).toEqual({ level: "success", message: "Service test passed for llama-serve" })
+  })
+
+  test("reports removed config entries on delete", async () => {
+    const result = await runDashboardAction("delete", SERVICE, {
+      stopContainer: async () => ({ status: "stopped" }),
+      restartContainer: async () => ({ status: "restarting" }),
+      testContainer: async () => ({ message: "ok", service_type: "vllm" }),
+      removeContainer: async () => ({ status: "removed", removed_services: 2 }),
+    })
+
+    expect(result).toEqual({ level: "success", message: "Deleted llama-serve and removed 2 config entries" })
+  })
+
+  test("reports plain delete success when no config entries were removed", async () => {
+    const result = await runDashboardAction("delete", SERVICE, {
+      stopContainer: async () => ({ status: "stopped" }),
+      restartContainer: async () => ({ status: "restarting" }),
+      testContainer: async () => ({ message: "ok", service_type: "vllm" }),
+      removeContainer: async () => ({ status: "removed", removed_services: 0 }),
+    })
+
+    expect(result).toEqual({ level: "success", message: "Deleted llama-serve" })
   })
 })

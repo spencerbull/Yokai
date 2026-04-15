@@ -8,13 +8,14 @@ import { useFleetSnapshot } from "./useFleetSnapshot"
 
 type KeyLike = {
   name: string
+  shift?: boolean
 }
 
 type OverviewSection = "ai" | "monitoring"
-type ServiceSection = "device" | "inspector" | "actions"
+type ServiceSection = "actions" | "inspector" | "device"
 type ServiceAction = "logs" | DashboardActionKind
 
-const SERVICE_ACTIONS: ServiceAction[] = ["logs", "stop", "restart", "test", "delete"]
+const SERVICE_ACTIONS: ServiceAction[] = ["logs", "restart", "stop", "test", "delete"]
 
 export function useDashboardController(active: boolean, terminalWidth: number, terminalHeight: number) {
   const fleet = useFleetSnapshot(active)
@@ -74,7 +75,7 @@ export function useDashboardController(active: boolean, terminalWidth: number, t
 
   useEffect(() => {
     if (viewMode !== "service") {
-      setServiceSection("device")
+      setServiceSection("actions")
       setServiceActionIndex(0)
     }
   }, [viewMode])
@@ -130,6 +131,8 @@ export function useDashboardController(active: boolean, terminalWidth: number, t
 
       setSelectedContainerId(service.containerId)
       setViewMode("service")
+      setServiceSection("actions")
+      setServiceActionIndex(0)
       setLogsTarget(null)
       setOverviewSection(isMonitoringService(service) ? "monitoring" : "ai")
       return true
@@ -214,6 +217,10 @@ export function useDashboardController(active: boolean, terminalWidth: number, t
   }
 
   function handleServiceKey(key: KeyLike) {
+    if (key.name === "L" || (key.shift && key.name === "l")) {
+      return openLogsForSelectedService()
+    }
+
     switch (key.name) {
       case "escape":
         setViewMode("overview")
@@ -221,14 +228,6 @@ export function useDashboardController(active: boolean, terminalWidth: number, t
         return true
       case "tab":
         setServiceSection((current) => nextServiceSection(current, key.shift ? -1 : 1))
-        return true
-      case "up":
-      case "k":
-        moveSelection(-1)
-        return true
-      case "down":
-      case "j":
-        moveSelection(1)
         return true
       case "left":
       case "h":
@@ -347,11 +346,13 @@ export function useDashboardController(active: boolean, terminalWidth: number, t
 
     try {
       const result = await runDashboardAction(action, service)
-      if (action === "delete" && logsTarget?.containerId === service.containerId) {
+      if (action === "delete") {
+        setSelectedContainerId(null)
         setLogsTarget(null)
         setViewMode("overview")
       }
       setNotice(result)
+      fleet.refresh()
     } catch (error) {
       setNotice({
         level: "error",
@@ -368,7 +369,7 @@ export function useDashboardController(active: boolean, terminalWidth: number, t
     }
 
     setViewMode("service")
-    setServiceSection("device")
+    setServiceSection("actions")
     setServiceActionIndex(0)
     setLogsTarget(null)
     return true
@@ -422,7 +423,7 @@ function nextOverviewSection(current: OverviewSection, aiCount: number, monitori
 }
 
 function nextServiceSection(current: ServiceSection, delta: number) {
-  const sections: ServiceSection[] = ["device", "inspector", "actions"]
+  const sections: ServiceSection[] = ["actions", "inspector", "device"]
   const index = sections.findIndex((section) => section === current)
   return sections[(index + delta + sections.length) % sections.length]
 }

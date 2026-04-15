@@ -60,7 +60,7 @@ export function LandingRoute(props: LandingRouteProps) {
               </text>
             ))}
             <box top={1} bottom={1}>
-              <text fg={theme.colors.selectionText}>Deploy, monitor, and manage AI inference devices from a single terminal.</text>
+              <text fg={theme.colors.text}>Deploy, monitor, and manage AI inference devices from a single terminal.</text>
             </box> 
           </box>
 
@@ -84,10 +84,10 @@ export function LandingRoute(props: LandingRouteProps) {
                 <box
                   key={route.id}
                   focusable
-                  backgroundColor={selected ? theme.colors.selectionBackground : theme.colors.panel}
+                  backgroundColor={theme.colors.panel}
                   onMouseDown={() => props.onActivate(route.id)}
                 >
-                  <text fg={selected ? theme.colors.selectionText : theme.colors.textMuted}>
+                  <text fg={selected ? theme.colors.accent : theme.colors.textMuted}>
                     {selected ? "▌ " : "  "}{index + 1}. {route.label}
                   </text>
                 </box>

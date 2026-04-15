@@ -43,11 +43,11 @@ export function DevicesRoute(props: DevicesRouteProps) {
               const selected = device.id === props.controller.selectedDevice?.id
               const color = device.online ? theme.colors.success : theme.colors.warning
               return (
-                <box key={device.id} focusable backgroundColor={selected ? theme.colors.selectionBackground : theme.colors.panelMuted} onMouseDown={() => props.controller.openDeviceView(device.id)}>
-                  <text fg={selected ? theme.colors.selectionText : theme.colors.textMuted} bg={selected ? theme.colors.selectionBackground : theme.colors.panelMuted}>
-                    <span fg={selected ? theme.colors.selectionText : color}>{selected ? "▌" : device.online ? "●" : "○"}</span>{" "}
+                <box key={device.id} focusable backgroundColor={theme.colors.panelMuted} onMouseDown={() => props.controller.openDeviceView(device.id)}>
+                  <text fg={selected ? theme.colors.text : theme.colors.textMuted}>
+                    <span fg={selected ? theme.colors.accent : color}>{selected ? "▌" : device.online ? "●" : "○"}</span>{" "}
                     {truncate(device.label || device.id, 18)}
-                    <span fg={selected ? theme.colors.selectionText : theme.colors.textSubtle}> · {truncate(device.connection_type || "manual", 10)} · {device.agent_port}</span>
+                    <span fg={theme.colors.textSubtle}> · {truncate(device.connection_type || "manual", 10)} · {device.agent_port}</span>
                   </text>
                 </box>
               )

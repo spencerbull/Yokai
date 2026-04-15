@@ -184,9 +184,9 @@ function Card(props: { children: ReactNode; title: string }) {
 function ThemeChoice(props: { active: boolean; description: string; keys: string; label: string; onSelect: () => void }) {
   const theme = useTheme()
   return (
-    <box border borderStyle={props.active ? "double" : "single"} borderColor={props.active ? theme.colors.borderStrong : theme.colors.border} backgroundColor={props.active ? theme.colors.selectionBackground : theme.colors.panel} padding={1} flexDirection="column" onMouseDown={props.onSelect}>
-      <text fg={props.active ? theme.colors.selectionText : theme.colors.text}><strong>{props.label}</strong> <span fg={props.active ? theme.colors.selectionText : theme.colors.textSubtle}>[{props.keys}]</span></text>
-      <text fg={props.active ? theme.colors.selectionText : theme.colors.textMuted}>{props.description}</text>
+    <box border borderStyle={props.active ? "double" : "single"} borderColor={props.active ? theme.colors.borderStrong : theme.colors.border} backgroundColor={theme.colors.panel} padding={1} flexDirection="column" onMouseDown={props.onSelect}>
+      <text fg={props.active ? theme.colors.accent : theme.colors.text}><strong>{props.active ? `▸ ${props.label}` : props.label}</strong> <span fg={theme.colors.textSubtle}>[{props.keys}]</span></text>
+      <text fg={theme.colors.textMuted}>{props.description}</text>
     </box>
   )
 }
@@ -194,9 +194,9 @@ function ThemeChoice(props: { active: boolean; description: string; keys: string
 function ToolToggle(props: { active: boolean; configured: boolean; keys: string; label: string; onSelect: () => void }) {
   const theme = useTheme()
   return (
-    <box border borderStyle={props.active ? "double" : "single"} borderColor={props.active ? theme.colors.borderStrong : theme.colors.border} backgroundColor={props.active ? theme.colors.selectionBackground : theme.colors.panel} padding={1} flexDirection="column" onMouseDown={props.onSelect}>
-      <text fg={props.active ? theme.colors.selectionText : theme.colors.text}><strong>{props.label}</strong> <span fg={props.active ? theme.colors.selectionText : theme.colors.textSubtle}>[{props.keys}]</span></text>
-      <text fg={props.active ? theme.colors.selectionText : theme.colors.textMuted}>{props.configured ? "configured" : "not configured"}</text>
+    <box border borderStyle={props.active ? "double" : "single"} borderColor={props.active ? theme.colors.borderStrong : theme.colors.border} backgroundColor={theme.colors.panel} padding={1} flexDirection="column" onMouseDown={props.onSelect}>
+      <text fg={props.active ? theme.colors.accent : theme.colors.text}><strong>{props.active ? `▸ ${props.label}` : props.label}</strong> <span fg={theme.colors.textSubtle}>[{props.keys}]</span></text>
+      <text fg={theme.colors.textMuted}>{props.configured ? "configured" : "not configured"}</text>
     </box>
   )
 }

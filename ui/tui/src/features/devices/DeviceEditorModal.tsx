@@ -65,11 +65,11 @@ export function DeviceEditorModal(props: DeviceEditorModalProps) {
                   border
                   borderStyle={selected ? "double" : "single"}
                   borderColor={selected ? theme.colors.borderStrong : theme.colors.border}
-                  backgroundColor={selected ? theme.colors.selectionBackground : theme.colors.panelMuted}
+                  backgroundColor={theme.colors.panelMuted}
                   paddingX={1}
                   onMouseDown={() => props.onChange("authMethod", method.id)}
                 >
-                  <text fg={selected ? theme.colors.selectionText : active ? theme.colors.text : theme.colors.textMuted}>{method.label}</text>
+                  <text fg={selected ? theme.colors.accent : active ? theme.colors.text : theme.colors.textMuted}>{selected ? `▸ ${method.label}` : method.label}</text>
                 </box>
               )
             })}

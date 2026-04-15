@@ -33,10 +33,10 @@ export function DeployRoute(props: DeployRouteProps) {
               border
               borderStyle={active ? "double" : "single"}
               borderColor={active ? theme.colors.borderStrong : complete ? theme.colors.success : theme.colors.border}
-              backgroundColor={active ? theme.colors.selectionBackground : theme.colors.panelMuted}
+              backgroundColor={theme.colors.panelMuted}
               paddingX={1}
             >
-              <text fg={active ? theme.colors.selectionText : complete ? theme.colors.success : theme.colors.textMuted}>{index + 1}. {label}</text>
+              <text fg={active ? theme.colors.accent : complete ? theme.colors.success : theme.colors.textMuted}>{active ? `▸ ${index + 1}. ${label}` : `${index + 1}. ${label}`}</text>
             </box>
           )
         })}
@@ -96,9 +96,9 @@ function WorkloadStep(props: { controller: DeployController }) {
         const highlighted = index === props.controller.cursor
         const selected = props.controller.form.workload === option.id
         return (
-          <box key={option.id} border borderStyle={selected ? "double" : "single"} borderColor={selected ? theme.colors.borderStrong : highlighted ? theme.colors.accent : theme.colors.border} backgroundColor={selected ? theme.colors.selectionBackground : highlighted ? theme.colors.panel : theme.colors.panel} padding={1} flexDirection="column" onMouseDown={() => props.controller.selectWorkload(option.id)}>
-            <text fg={selected ? theme.colors.selectionText : theme.colors.text}><strong>{index + 1}. {option.label}</strong></text>
-            <text fg={selected ? theme.colors.selectionText : highlighted ? theme.colors.textMuted : theme.colors.textSubtle}>{option.description}</text>
+          <box key={option.id} border borderStyle={selected ? "double" : "single"} borderColor={selected ? theme.colors.borderStrong : highlighted ? theme.colors.accent : theme.colors.border} backgroundColor={theme.colors.panel} padding={1} flexDirection="column" onMouseDown={() => props.controller.selectWorkload(option.id)}>
+            <text fg={selected ? theme.colors.accent : theme.colors.text}><strong>{selected ? `▸ ${index + 1}. ${option.label}` : `${index + 1}. ${option.label}`}</strong></text>
+            <text fg={highlighted ? theme.colors.textMuted : theme.colors.textSubtle}>{option.description}</text>
           </box>
         )
       })}
@@ -119,9 +119,9 @@ function DeviceStep(props: { controller: DeployController }) {
         const selected = device.id === props.controller.form.deviceId
         const highlighted = index === props.controller.cursor
         return (
-          <box key={device.id} border borderStyle={selected ? "double" : "single"} borderColor={selected ? theme.colors.borderStrong : highlighted ? theme.colors.accent : theme.colors.border} backgroundColor={selected ? theme.colors.selectionBackground : highlighted ? theme.colors.panel : theme.colors.panel} padding={1} flexDirection="column" onMouseDown={() => props.controller.selectDevice(device.id)}>
-            <text fg={selected ? theme.colors.selectionText : theme.colors.text}><strong>{device.label}</strong></text>
-            <text fg={selected ? theme.colors.selectionText : highlighted ? theme.colors.textMuted : theme.colors.textSubtle}>{device.secondary}</text>
+          <box key={device.id} border borderStyle={selected ? "double" : "single"} borderColor={selected ? theme.colors.borderStrong : highlighted ? theme.colors.accent : theme.colors.border} backgroundColor={theme.colors.panel} padding={1} flexDirection="column" onMouseDown={() => props.controller.selectDevice(device.id)}>
+            <text fg={selected ? theme.colors.accent : theme.colors.text}><strong>{selected ? `▸ ${device.label}` : device.label}</strong></text>
+            <text fg={highlighted ? theme.colors.textMuted : theme.colors.textSubtle}>{device.secondary}</text>
           </box>
         )
       })}
@@ -182,7 +182,7 @@ function ConfigStep(props: { controller: DeployController }) {
   return (
     <box flexDirection="column" gap={1}>
       <Field label="Port" active={props.controller.configField === "port"}>
-        <input value={props.controller.form.port} onInput={(value) => props.controller.setValue("port", value)} focused={props.controller.configField === "port"} width={12} backgroundColor={theme.colors.panel} textColor={theme.colors.text} focusedBackgroundColor={theme.colors.selectionBackground} cursorColor={theme.colors.selectionText} placeholder="8000" />
+        <input value={props.controller.form.port} onInput={(value) => props.controller.setValue("port", value)} focused={props.controller.configField === "port"} width={12} backgroundColor={theme.colors.panel} textColor={theme.colors.text} focusedBackgroundColor={theme.colors.panel} cursorColor={theme.colors.accent} placeholder="8000" />
       </Field>
       <Field label="Extra args" active={props.controller.configField === "extraArgs"}>
         <box minHeight={6} paddingY={0} flexDirection="column" justifyContent="center">
@@ -222,10 +222,10 @@ function ConfigStep(props: { controller: DeployController }) {
           <text fg={theme.colors.textMuted}>Estimate `--gpu-memory-utilization` and related flags using `hf-mem` plus the selected device GPU VRAM.</text>
           <box flexDirection="row" gap={1}>
             <Field label="Context length" active={props.controller.configField === "contextLength"}>
-              <input value={helper.contextLength} onInput={(value) => props.controller.updateVLLMHelper("contextLength", value)} focused={props.controller.configField === "contextLength"} width={14} backgroundColor={theme.colors.panel} textColor={theme.colors.text} focusedBackgroundColor={theme.colors.selectionBackground} cursorColor={theme.colors.selectionText} placeholder="32768" />
+              <input value={helper.contextLength} onInput={(value) => props.controller.updateVLLMHelper("contextLength", value)} focused={props.controller.configField === "contextLength"} width={14} backgroundColor={theme.colors.panel} textColor={theme.colors.text} focusedBackgroundColor={theme.colors.panel} cursorColor={theme.colors.accent} placeholder="32768" />
             </Field>
             <Field label="Overhead (GB)" active={props.controller.configField === "overheadGB"}>
-              <input value={helper.overheadGB} onInput={(value) => props.controller.updateVLLMHelper("overheadGB", value)} focused={props.controller.configField === "overheadGB"} width={10} backgroundColor={theme.colors.panel} textColor={theme.colors.text} focusedBackgroundColor={theme.colors.selectionBackground} cursorColor={theme.colors.selectionText} placeholder="1.5" />
+              <input value={helper.overheadGB} onInput={(value) => props.controller.updateVLLMHelper("overheadGB", value)} focused={props.controller.configField === "overheadGB"} width={10} backgroundColor={theme.colors.panel} textColor={theme.colors.text} focusedBackgroundColor={theme.colors.panel} cursorColor={theme.colors.accent} placeholder="1.5" />
             </Field>
           </box>
           <box flexDirection="row" gap={1}>
@@ -351,8 +351,8 @@ function Line(props: { label: string; value: string }) {
 function ActionChip(props: { active?: boolean; children: string; onSelect: () => void }) {
   const theme = useTheme()
   return (
-    <box border borderStyle={props.active ? "double" : "single"} borderColor={props.active ? theme.colors.borderStrong : theme.colors.border} backgroundColor={props.active ? theme.colors.selectionBackground : theme.colors.panel} paddingX={1} onMouseDown={props.onSelect}>
-      <text fg={props.active ? theme.colors.selectionText : theme.colors.textMuted}>{props.children}</text>
+    <box border borderStyle={props.active ? "double" : "single"} borderColor={props.active ? theme.colors.borderStrong : theme.colors.border} backgroundColor={theme.colors.panel} paddingX={1} onMouseDown={props.onSelect}>
+      <text fg={props.active ? theme.colors.accent : theme.colors.textMuted}>{props.active ? `▸ ${props.children}` : props.children}</text>
     </box>
   )
 }

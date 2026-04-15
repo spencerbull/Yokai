@@ -76,13 +76,13 @@ export function ShellFrame(props: ShellFrameProps) {
                 border
                 borderStyle={selected ? "double" : "single"}
                 borderColor={selected ? theme.colors.borderStrong : theme.colors.border}
-                backgroundColor={selected ? theme.colors.selectionBackground : theme.colors.panelMuted}
+                backgroundColor={theme.colors.panelMuted}
                 paddingX={2}
                 paddingY={0}
                 onMouseDown={() => props.onSelectRoute(route.id)}
               >
-                <text fg={selected ? theme.colors.selectionText : theme.colors.textMuted}>
-                  {index + 1}. {route.label}
+                <text fg={selected ? theme.colors.accent : theme.colors.textMuted}>
+                  {selected ? `▸ ${index + 1}. ${route.label}` : `${index + 1}. ${route.label}`}
                 </text>
               </box>
             )

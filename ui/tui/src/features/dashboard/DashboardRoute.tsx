@@ -78,7 +78,7 @@ export function DashboardRoute(props: DashboardRouteProps) {
             <box width={rightColumnWidth} minWidth={34} border borderStyle="single" borderColor={theme.colors.border} backgroundColor={theme.colors.panelMuted} padding={1} flexDirection="column" justifyContent="center" gap={1}>
               <text fg={theme.colors.text}><strong>Service View</strong></text>
               <text fg={theme.colors.textMuted}>Tab selects AI vs Monitoring sections. J/K moves within that section. Enter or click opens the dedicated service view.</text>
-              <text fg={theme.colors.textSubtle}>The service view shows device utilization charts, inspector details, actions, and a full-screen logs view.</text>
+              <text fg={theme.colors.textSubtle}>The service view opens with a top action bar, followed by inspector details, device context, and a full-screen logs route.</text>
             </box>
           </box>
         </box>
@@ -115,7 +115,7 @@ export function DashboardRoute(props: DashboardRouteProps) {
         />
         <box border borderStyle="single" borderColor={theme.colors.border} backgroundColor={theme.colors.panelMuted} padding={1} flexDirection="column" gap={1}>
           <text fg={theme.colors.text}><strong>Service View</strong></text>
-          <text fg={theme.colors.textMuted}>Tab switches between sections. Enter on a selected service opens the dedicated service view.</text>
+          <text fg={theme.colors.textMuted}>Tab switches between sections. Enter on a selected service opens the dedicated service view with actions first.</text>
         </box>
       </box>
     </scrollbox>

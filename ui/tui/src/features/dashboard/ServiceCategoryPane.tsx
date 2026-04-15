@@ -50,23 +50,23 @@ export function ServiceCategoryPane(props: ServiceCategoryPaneProps) {
               key={service.containerId}
               focusable
               flexDirection="row"
-              backgroundColor={selected ? theme.colors.selectionBackground : theme.colors.panelMuted}
+              backgroundColor={theme.colors.panelMuted}
               onMouseDown={() => props.onSelect?.(service.containerId)}
             >
-              <text fg={selected ? theme.colors.selectionText : color} bg={selected ? theme.colors.selectionBackground : theme.colors.panelMuted}>
+              <text fg={selected ? theme.colors.accent : color}>
                 {selected ? "▌" : service.deviceOnline ? "●" : "○"}
               </text>
-              <text fg={selected ? theme.colors.selectionText : theme.colors.textMuted} bg={selected ? theme.colors.selectionBackground : theme.colors.panelMuted}>
+              <text fg={selected ? theme.colors.accent : theme.colors.textMuted}>
                 {" "}
               </text>
               <MarqueeText
                 active={selected}
-                bg={selected ? theme.colors.selectionBackground : theme.colors.panelMuted}
-                fg={selected ? theme.colors.selectionText : theme.colors.textMuted}
+                bg={theme.colors.panelMuted}
+                fg={selected ? theme.colors.text : theme.colors.textMuted}
                 text={service.name}
                 width={Math.max(10, rowWidth - 28)}
               />
-              <text fg={selected ? theme.colors.selectionText : theme.colors.textSubtle} bg={selected ? theme.colors.selectionBackground : theme.colors.panelMuted}>
+              <text fg={theme.colors.textSubtle}>
                 {` · ${truncate(service.deviceLabel, 12)} · ${truncate(service.health || service.status, 10)}`}
               </text>
             </box>

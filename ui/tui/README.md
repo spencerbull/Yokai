@@ -1,23 +1,23 @@
 # Yokai OpenTUI Frontend
 
-This package is the new terminal frontend for Yokai.
+This package is the terminal frontend for Yokai.
 
 ## Purpose
 
-- replace the current Bubble Tea client
 - talk only to the local Yokai daemon over REST and SSE
 - keep backend behavior reusable for future frontends
 
 ## Current Status
 
-This is the initial scaffold for the migration.
+This is the active Yokai frontend.
 
-Planned first implementation slice:
+Implemented here:
 
-- shell frame
-- dashboard layout
-- logs viewer
-- daemon client and polling hooks
+- shell frame and route navigation
+- dashboard, service detail, and logs views
+- deploy wizard
+- devices and settings routes
+- daemon REST and SSE clients
 
 ## Development
 

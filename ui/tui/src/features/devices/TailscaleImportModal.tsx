@@ -53,8 +53,8 @@ export function TailscaleImportModal(props: TailscaleImportModalProps) {
               width={58}
               backgroundColor={theme.colors.panelMuted}
               textColor={theme.colors.text}
-              focusedBackgroundColor={theme.colors.selectionBackground}
-              cursorColor={theme.colors.selectionText}
+              focusedBackgroundColor={theme.colors.panelMuted}
+              cursorColor={theme.colors.accent}
               placeholder="Filter hostname, IP, OS, or tag"
             />
 
@@ -65,10 +65,10 @@ export function TailscaleImportModal(props: TailscaleImportModalProps) {
                 const selected = index === props.selectedIndex
                 return (
                   <box key={`${peer.hostname}-${peer.ip}`} flexDirection="column">
-                    <text fg={selected ? theme.colors.selectionText : theme.colors.textMuted} bg={selected ? theme.colors.selectionBackground : theme.colors.panel}>
-                      {selected ? "▌" : " "} {peer.recommended ? recommendedBadge() + " " : ""}{truncate(peer.hostname, 18)}
+                    <text fg={selected ? theme.colors.text : theme.colors.textMuted}>
+                      <span fg={selected ? theme.colors.accent : theme.colors.textSubtle}>{selected ? "▌" : " "}</span> {peer.recommended ? recommendedBadge() + " " : ""}{truncate(peer.hostname, 18)}
                     </text>
-                    <text fg={selected ? theme.colors.selectionText : theme.colors.textSubtle} bg={selected ? theme.colors.selectionBackground : theme.colors.panel}>
+                    <text fg={theme.colors.textSubtle}>
                       {truncate(renderPeerMeta(peer), 74)}
                     </text>
                   </box>
