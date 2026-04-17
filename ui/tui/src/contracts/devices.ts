@@ -205,7 +205,7 @@ export function editorFormFromTailscalePeer(peer: TailscalePeer): DeviceEditorFo
     connectionType: "tailscale",
     authMethod: "agent",
     label: peer.hostname,
-    host: peer.ip,
+    host: peer.dns_name || peer.ip,
     sshUser: "",
     sshKey: "",
     sshKeyPassphrase: "",

@@ -22,8 +22,23 @@ import (
 
 // VLLMMetrics holds vLLM inference throughput metrics.
 type VLLMMetrics struct {
-	GenerationTokPerSec float64 `json:"generation_tok_per_s"`
-	PromptTokPerSec     float64 `json:"prompt_tok_per_s"`
+	Model                 string             `json:"model,omitempty"`
+	GenerationTokPerSec   float64            `json:"generation_tok_per_s"`
+	PromptTokPerSec       float64            `json:"prompt_tok_per_s"`
+	RequestsRunning       float64            `json:"requests_running,omitempty"`
+	RequestsWaiting       float64            `json:"requests_waiting,omitempty"`
+	PromptTokensTotal     float64            `json:"prompt_tokens_total,omitempty"`
+	GenerationTokensTotal float64            `json:"generation_tokens_total,omitempty"`
+	TTFTBuckets           map[string]float64 `json:"-"`
+	TTFTSum               float64            `json:"-"`
+	TTFTCount             float64            `json:"-"`
+	HasGenerationTokPerSec   bool `json:"-"`
+	HasPromptTokPerSec       bool `json:"-"`
+	HasRequestsRunning       bool `json:"-"`
+	HasRequestsWaiting       bool `json:"-"`
+	HasPromptTokensTotal     bool `json:"-"`
+	HasGenerationTokensTotal bool `json:"-"`
+	HasTTFT                  bool `json:"-"`
 }
 
 // Container represents a running container.
@@ -637,22 +652,101 @@ func scrapeVLLMMetrics(port string) (*VLLMMetrics, error) {
 
 	m := &VLLMMetrics{}
 	for _, line := range strings.Split(string(body), "\n") {
+		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "#") || line == "" {
 			continue
 		}
-		if strings.HasPrefix(line, "vllm:avg_generation_throughput_toks_per_s") {
-			parts := strings.Fields(line)
-			if len(parts) >= 2 {
-				m.GenerationTokPerSec, _ = strconv.ParseFloat(parts[len(parts)-1], 64)
+
+		name, labels, value, ok := parsePrometheusMetricLine(line)
+		if !ok {
+			continue
+		}
+
+		if m.Model == "" {
+			if model := firstMetricLabel(labels, "model_name", "model"); model != "" {
+				m.Model = model
 			}
-		} else if strings.HasPrefix(line, "vllm:avg_prompt_throughput_toks_per_s") {
-			parts := strings.Fields(line)
-			if len(parts) >= 2 {
-				m.PromptTokPerSec, _ = strconv.ParseFloat(parts[len(parts)-1], 64)
+		}
+
+		switch name {
+		case "vllm:avg_generation_throughput_toks_per_s":
+			m.GenerationTokPerSec += value
+			m.HasGenerationTokPerSec = true
+		case "vllm:avg_prompt_throughput_toks_per_s":
+			m.PromptTokPerSec += value
+			m.HasPromptTokPerSec = true
+		case "vllm:num_requests_running":
+			m.RequestsRunning += value
+			m.HasRequestsRunning = true
+		case "vllm:num_requests_waiting":
+			m.RequestsWaiting += value
+			m.HasRequestsWaiting = true
+		case "vllm:prompt_tokens_total", "vllm:prompt_tokens":
+			m.PromptTokensTotal += value
+			m.HasPromptTokensTotal = true
+		case "vllm:generation_tokens_total", "vllm:generation_tokens":
+			m.GenerationTokensTotal += value
+			m.HasGenerationTokensTotal = true
+		case "vllm:time_to_first_token_seconds_bucket":
+			le := labels["le"]
+			if le == "" {
+				continue
 			}
+			if m.TTFTBuckets == nil {
+				m.TTFTBuckets = make(map[string]float64)
+			}
+			m.TTFTBuckets[le] += value
+			m.HasTTFT = true
+		case "vllm:time_to_first_token_seconds_sum":
+			m.TTFTSum += value
+			m.HasTTFT = true
+		case "vllm:time_to_first_token_seconds_count":
+			m.TTFTCount += value
+			m.HasTTFT = true
 		}
 	}
 	return m, nil
+}
+
+var prometheusMetricLinePattern = regexp.MustCompile(`^([^\s{]+)(?:\{([^}]*)\})?\s+([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)$`)
+
+func parsePrometheusMetricLine(line string) (string, map[string]string, float64, bool) {
+	matches := prometheusMetricLinePattern.FindStringSubmatch(line)
+	if len(matches) != 4 {
+		return "", nil, 0, false
+	}
+
+	value, err := strconv.ParseFloat(matches[3], 64)
+	if err != nil {
+		return "", nil, 0, false
+	}
+
+	return matches[1], parsePrometheusLabels(matches[2]), value, true
+}
+
+func parsePrometheusLabels(raw string) map[string]string {
+	labels := make(map[string]string)
+	if raw == "" {
+		return labels
+	}
+
+	for _, match := range regexp.MustCompile(`([a-zA-Z_][a-zA-Z0-9_]*)="((?:\\.|[^"])*)"`).FindAllStringSubmatch(raw, -1) {
+		if len(match) != 3 {
+			continue
+		}
+		labels[match[1]] = strings.ReplaceAll(match[2], `\"`, `"`)
+	}
+
+	return labels
+}
+
+func firstMetricLabel(labels map[string]string, keys ...string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(labels[key]); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 // normalizeServicePorts remaps user-specified ports so the container-internal

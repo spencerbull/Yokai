@@ -22,12 +22,14 @@ func GenerateMonitoringCompose(cfg MonitoringConfig) string {
   prometheus:
     container_name: yokai-mon-prometheus
     image: prom/prometheus:latest
+    user: '0:0'
     ports:
       - "`)
 	services.WriteString(fmt.Sprintf("%d:9090", cfg.PrometheusPort))
 	services.WriteString(`"
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/secrets:/etc/prometheus/secrets:ro
       - prometheus_data:/prometheus
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
@@ -36,6 +38,8 @@ func GenerateMonitoringCompose(cfg MonitoringConfig) string {
       - '--web.console.templates=/etc/prometheus/consoles'
       - '--storage.tsdb.retention.time=30d'
       - '--web.enable-lifecycle'
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
     networks:
       - yokai-monitoring
     restart: unless-stopped
@@ -121,10 +125,13 @@ scrape_configs:
       - targets: ['host.docker.internal:9100']
 
   - job_name: 'yokai-agent'
-    metrics_path: '/metrics'
+    metrics_path: '/metrics/prometheus'
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/secrets/yokai-agent-token
     static_configs:
       - targets: ['`)
-	config.WriteString(fmt.Sprintf("%s:%d", cfg.AgentHost, cfg.AgentPort))
+	config.WriteString(fmt.Sprintf("host.docker.internal:%d", cfg.AgentPort))
 	config.WriteString(`']
 `)
 

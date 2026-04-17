@@ -8,10 +8,13 @@ scrape_configs:
       - targets: ['localhost:9100']
 
   - job_name: 'yokai-agent'
-    metrics_path: '/metrics'
+    metrics_path: '/metrics/prometheus'
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/secrets/yokai-agent-token
     static_configs:
-      - targets: ['localhost:7474']
+      - targets: ['host.docker.internal:7474']
 
   - job_name: 'dcgm'
     static_configs:
-      - targets: ['localhost:9400']
+      - targets: ['dcgm_exporter:9400']

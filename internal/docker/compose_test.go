@@ -55,10 +55,19 @@ func TestGenerateMonitoringCompose(t *testing.T) {
 			t.Errorf("compose should contain container name: %s", name)
 		}
 	}
+	if !strings.Contains(compose, "user: '0:0'") {
+		t.Error("compose should run Prometheus as root to read the mounted bearer token")
+	}
 
 	// Test networks and volumes
 	if !strings.Contains(compose, "yokai-monitoring:") {
 		t.Error("compose should contain yokai-monitoring network")
+	}
+	if !strings.Contains(compose, "./prometheus/secrets:/etc/prometheus/secrets:ro") {
+		t.Error("compose should mount Prometheus secrets directory")
+	}
+	if !strings.Contains(compose, "host.docker.internal:host-gateway") {
+		t.Error("compose should map host.docker.internal for Linux Prometheus scrapes")
 	}
 	if !strings.Contains(compose, "prometheus_data:") {
 		t.Error("compose should contain prometheus_data volume")
@@ -183,9 +192,15 @@ func TestGeneratePrometheusConfig(t *testing.T) {
 	}
 
 	// Test agent target
-	expectedAgentTarget := "192.168.1.50:7474"
+	expectedAgentTarget := "host.docker.internal:7474"
 	if !strings.Contains(config, expectedAgentTarget) {
 		t.Errorf("config should contain agent target: %s", expectedAgentTarget)
+	}
+	if !strings.Contains(config, "metrics_path: '/metrics/prometheus'") {
+		t.Error("config should scrape the Prometheus exposition endpoint")
+	}
+	if !strings.Contains(config, "credentials_file: /etc/prometheus/secrets/yokai-agent-token") {
+		t.Error("config should include bearer credentials file for yokai-agent")
 	}
 
 	// Test that dcgm job is NOT included when HasNvidiaGPU is false
@@ -216,7 +231,7 @@ func TestGeneratePrometheusConfigWithGPU(t *testing.T) {
 	}
 
 	// Test custom agent configuration
-	expectedAgentTarget := "gpu.server:9999"
+	expectedAgentTarget := "host.docker.internal:9999"
 	if !strings.Contains(config, expectedAgentTarget) {
 		t.Errorf("config should contain custom agent target: %s", expectedAgentTarget)
 	}
@@ -336,6 +351,7 @@ func TestPrometheusConfigYAMLStructure(t *testing.T) {
 		"scrape_interval:",
 		"evaluation_interval:",
 		"metrics_path:",
+		"authorization:",
 	}
 
 	for _, key := range configKeys {

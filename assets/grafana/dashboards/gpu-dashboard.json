@@ -1,184 +1,455 @@
 {
-  "dashboard": {
-    "id": null,
-    "title": "Yokai Monitoring Dashboard",
-    "tags": ["yokai"],
-    "timezone": "browser",
-    "panels": [
-      {
-        "id": 1,
-        "title": "GPU Utilization",
-        "type": "gauge",
-        "targets": [
-          {
-            "expr": "DCGM_FI_DEV_GPU_UTIL",
-            "legendFormat": "GPU {{instance}}",
-            "refId": "A"
-          }
-        ],
-        "fieldConfig": {
-          "defaults": {
-            "min": 0,
-            "max": 100,
-            "unit": "percent"
-          }
-        },
-        "gridPos": {
-          "h": 8,
-          "w": 6,
-          "x": 0,
-          "y": 0
+  "annotations": {
+    "list": []
+  },
+  "description": "Default Yokai dashboard for LLM generation, throughput, concurrency, system health, and power.",
+  "editable": true,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "id": 1,
+      "title": "Decode Tok/s",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "sum(yokai_llm_decode_tokens_per_second) or sum(rate(yokai_llm_generated_tokens_total[5m]))",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
         }
       },
-      {
-        "id": 2,
-        "title": "GPU Memory Usage",
-        "type": "gauge",
-        "targets": [
-          {
-            "expr": "DCGM_FI_DEV_MEM_COPY_UTIL",
-            "legendFormat": "GPU {{instance}}",
-            "refId": "A"
-          }
-        ],
-        "fieldConfig": {
-          "defaults": {
-            "min": 0,
-            "max": 100,
-            "unit": "percent"
-          }
-        },
-        "gridPos": {
-          "h": 8,
-          "w": 6,
-          "x": 6,
-          "y": 0
-        }
-      },
-      {
-        "id": 3,
-        "title": "CPU Usage",
-        "type": "timeseries",
-        "targets": [
-          {
-            "expr": "100 - (avg by (instance) (irate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)",
-            "legendFormat": "CPU Usage",
-            "refId": "A"
-          }
-        ],
-        "fieldConfig": {
-          "defaults": {
-            "min": 0,
-            "max": 100,
-            "unit": "percent"
-          }
-        },
-        "gridPos": {
-          "h": 8,
-          "w": 12,
-          "x": 12,
-          "y": 0
-        }
-      },
-      {
-        "id": 4,
-        "title": "GPU Temperature",
-        "type": "timeseries",
-        "targets": [
-          {
-            "expr": "DCGM_FI_DEV_GPU_TEMP",
-            "legendFormat": "GPU {{instance}}",
-            "refId": "A"
-          }
-        ],
-        "fieldConfig": {
-          "defaults": {
-            "min": 0,
-            "max": 100,
-            "unit": "celsius"
-          }
-        },
-        "gridPos": {
-          "h": 8,
-          "w": 12,
-          "x": 0,
-          "y": 8
-        }
-      },
-      {
-        "id": 5,
-        "title": "RAM Usage",
-        "type": "gauge",
-        "targets": [
-          {
-            "expr": "100 * (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes))",
-            "legendFormat": "RAM Usage",
-            "refId": "A"
-          }
-        ],
-        "fieldConfig": {
-          "defaults": {
-            "min": 0,
-            "max": 100,
-            "unit": "percent"
-          }
-        },
-        "gridPos": {
-          "h": 8,
-          "w": 6,
-          "x": 12,
-          "y": 8
-        }
-      },
-      {
-        "id": 6,
-        "title": "Container Count",
-        "type": "stat",
-        "targets": [
-          {
-            "expr": "count(container_last_seen)",
-            "legendFormat": "Containers",
-            "refId": "A"
-          }
-        ],
-        "gridPos": {
-          "h": 8,
-          "w": 6,
-          "x": 18,
-          "y": 8
-        }
-      },
-      {
-        "id": 7,
-        "title": "GPU Power Consumption",
-        "type": "timeseries",
-        "targets": [
-          {
-            "expr": "DCGM_FI_DEV_POWER_USAGE",
-            "legendFormat": "GPU {{instance}}",
-            "refId": "A"
-          }
-        ],
-        "fieldConfig": {
-          "defaults": {
-            "min": 0,
-            "unit": "watt"
-          }
-        },
-        "gridPos": {
-          "h": 8,
-          "w": 24,
-          "x": 0,
-          "y": 16
-        }
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 0,
+        "y": 0
       }
-    ],
-    "time": {
-      "from": "now-1h",
-      "to": "now"
     },
-    "refresh": "5s",
-    "version": 1,
-    "uid": "yokai-monitoring"
-  }
+    {
+      "id": 2,
+      "title": "Prefill Tok/s",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "sum(yokai_llm_prefill_tokens_per_second) or sum(rate(yokai_llm_prompt_tokens_total[5m]))",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        }
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 4,
+        "y": 0
+      }
+    },
+    {
+      "id": 3,
+      "title": "Current Sessions",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "sum(yokai_llm_requests_in_flight)",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 8,
+        "y": 0
+      }
+    },
+    {
+      "id": 4,
+      "title": "Queue Depth",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "sum(yokai_llm_requests_queued)",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 12,
+        "y": 0
+      }
+    },
+    {
+      "id": 5,
+      "title": "Generated Tokens (1h)",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "sum(increase(yokai_llm_generated_tokens_total[1h]))",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 16,
+        "y": 0
+      }
+    },
+    {
+      "id": 6,
+      "title": "Services Up",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "sum(yokai_service_up)",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 20,
+        "y": 0
+      }
+    },
+    {
+      "id": 7,
+      "title": "Decode Throughput by Service",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum by (service) (yokai_llm_decode_tokens_per_second) or sum by (service) (rate(yokai_llm_generated_tokens_total[5m]))",
+          "legendFormat": "{{service}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 5
+      }
+    },
+    {
+      "id": 8,
+      "title": "Prefill Throughput by Service",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum by (service) (yokai_llm_prefill_tokens_per_second) or sum by (service) (rate(yokai_llm_prompt_tokens_total[5m]))",
+          "legendFormat": "{{service}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 5
+      }
+    },
+    {
+      "id": 9,
+      "title": "Current Sessions by Service",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum by (service) (yokai_llm_requests_in_flight)",
+          "legendFormat": "{{service}}",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 13
+      }
+    },
+    {
+      "id": 10,
+      "title": "Queue Depth by Service",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum by (service) (yokai_llm_requests_queued)",
+          "legendFormat": "{{service}}",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 13
+      }
+    },
+    {
+      "id": 11,
+      "title": "TTFT p95",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(yokai_llm_ttft_seconds_bucket[5m])))",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 21
+      }
+    },
+    {
+      "id": 12,
+      "title": "Generated Tokens Rate",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum by (service) (rate(yokai_llm_generated_tokens_total[5m]))",
+          "legendFormat": "{{service}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 21
+      }
+    },
+    {
+      "id": 13,
+      "title": "Tokens per Joule",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "(sum(yokai_llm_decode_tokens_per_second) or sum(rate(yokai_llm_generated_tokens_total[5m]))) / clamp_min((sum(DCGM_FI_DEV_POWER_USAGE) or sum(yokai_gpu_power_draw_watts) or vector(0)) + (sum(rate({__name__=~\"node_rapl(_package_.*)?_joules_total\"}[1m])) or vector(0)), 1)",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 21
+      }
+    },
+    {
+      "id": 14,
+      "title": "GPU Power",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "avg by (instance, gpu) (DCGM_FI_DEV_POWER_USAGE) or avg by (instance, gpu) (yokai_gpu_power_draw_watts)",
+          "legendFormat": "{{instance}} GPU {{gpu}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "watt"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 29
+      }
+    },
+    {
+      "id": 15,
+      "title": "CPU Package Power",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum by (instance) (rate({__name__=~\"node_rapl(_package_.*)?_joules_total\"}[1m]))",
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "watt"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 29
+      }
+    },
+    {
+      "id": 16,
+      "title": "VRAM Used",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "avg by (instance, gpu) (DCGM_FI_DEV_FB_USED) * 1024 * 1024 or avg by (instance, gpu) (yokai_gpu_vram_used_bytes)",
+          "legendFormat": "{{instance}} GPU {{gpu}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 29
+      }
+    },
+    {
+      "id": 17,
+      "title": "GPU Utilization",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "avg by (instance, gpu) (DCGM_FI_DEV_GPU_UTIL) or avg by (instance, gpu) (yokai_gpu_utilization)",
+          "legendFormat": "{{instance}} GPU {{gpu}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 0,
+        "y": 37
+      }
+    },
+    {
+      "id": 18,
+      "title": "GPU Temperature",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "avg by (instance, gpu) (DCGM_FI_DEV_GPU_TEMP) or avg by (instance, gpu) (yokai_gpu_temperature_celsius)",
+          "legendFormat": "{{instance}} GPU {{gpu}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 6,
+        "y": 37
+      }
+    },
+    {
+      "id": 19,
+      "title": "CPU Usage",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "100 - (avg by (instance) (irate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100) or yokai_cpu_percent",
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 12,
+        "y": 37
+      }
+    },
+    {
+      "id": 20,
+      "title": "RAM Usage",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "100 * (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) or 100 * (yokai_ram_used_bytes / clamp_min(yokai_ram_total_bytes, 1))",
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 37
+      }
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 39,
+  "tags": [
+    "yokai",
+    "llm",
+    "monitoring"
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timezone": "browser",
+  "title": "Yokai LLM Monitoring",
+  "uid": "yokai-monitoring",
+  "version": 2
 }

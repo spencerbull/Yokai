@@ -200,7 +200,7 @@ function AppShell() {
     ) : activeRoute === "deploy" ? (
       <DeployRoute controller={deploy} terminalHeight={height} />
     ) : activeRoute === "settings" ? (
-      <SettingsRoute controller={settings} />
+      <SettingsRoute controller={settings} terminalHeight={height} />
     ) : (
       <RoutePlaceholder routeId={active.id} status={active.status} summary={active.summary} />
     )

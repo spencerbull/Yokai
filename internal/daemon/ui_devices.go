@@ -103,6 +103,7 @@ func (d *Daemon) handleCreateDevice(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad_request", "message": err.Error()})
 		return
 	}
+	req = preferTailscaleHostInRequest(req)
 
 	d.mu.RLock()
 	nextCfg := cloneConfig(d.cfg)
@@ -126,6 +127,7 @@ func (d *Daemon) handleUpdateDevice(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad_request", "message": err.Error()})
 		return
 	}
+	req = preferTailscaleHostInRequest(req)
 
 	d.mu.RLock()
 	nextCfg := cloneConfig(d.cfg)
@@ -137,6 +139,7 @@ func (d *Daemon) handleUpdateDevice(w http.ResponseWriter, r *http.Request) {
 	}
 
 	device := buildDeviceFromRequest(req, current.ID)
+	device.MonitoringInstalled = current.MonitoringInstalled
 	nextCfg.UpsertDevice(device)
 	if err := config.Save(nextCfg); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "config_save_failed", "message": err.Error()})
@@ -193,7 +196,7 @@ func (d *Daemon) handleUpgradeDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result := upgradeSingleDevice(*device)
+	result := d.upgradeSingleDevice(*device)
 	status := http.StatusOK
 	if !result.OK {
 		status = http.StatusBadGateway
@@ -214,7 +217,7 @@ func (d *Daemon) handleUpgradeAllDevices(w http.ResponseWriter, r *http.Request)
 	devices := d.allDevices()
 	results := make([]interface{}, 0, len(devices))
 	for _, device := range devices {
-		results = append(results, upgradeSingleDevice(device))
+		results = append(results, d.upgradeSingleDevice(device))
 	}
 	writeJSON(w, http.StatusOK, bulkDeviceActionResponse{Results: results})
 }
@@ -282,7 +285,7 @@ func testSingleDevice(device config.Device) deviceTestResult {
 	return result
 }
 
-func upgradeSingleDevice(device config.Device) deviceUpgradeResult {
+func (d *Daemon) upgradeSingleDevice(device config.Device) deviceUpgradeResult {
 	client, err := sshpkg.Connect(sshpkg.ClientConfig{
 		Host:           device.Host,
 		Port:           fmt.Sprintf("%d", device.SSHPortOrDefault()),
@@ -310,7 +313,42 @@ func upgradeSingleDevice(device config.Device) deviceUpgradeResult {
 		return deviceUpgradeResult{DeviceID: device.ID, OK: false, Message: err.Error()}
 	}
 
-	return deviceUpgradeResult{DeviceID: device.ID, OK: true, Message: "Agent upgraded successfully"}
+	containers, err := d.listDeviceContainers(device)
+	if err != nil {
+		return deviceUpgradeResult{DeviceID: device.ID, OK: false, Message: fmt.Sprintf("container inventory failed: %s", err.Error())}
+	}
+
+	hasMonitoring := device.MonitoringInstalled || containsMonitoringContainers(containers)
+	if hasMonitoring {
+		if err := deployMonitoringStack(client, device.Host, device.AgentPort, device.AgentToken, preflight); err != nil {
+			return deviceUpgradeResult{DeviceID: device.ID, OK: false, Message: fmt.Sprintf("monitoring refresh failed: %s", err.Error())}
+		}
+		if !device.MonitoringInstalled {
+			if err := d.updateDeviceMonitoringInstalled(device.ID, true); err != nil {
+				return deviceUpgradeResult{DeviceID: device.ID, OK: false, Message: fmt.Sprintf("monitoring state save failed: %s", err.Error())}
+			}
+			device.MonitoringInstalled = true
+		}
+	}
+
+	reconciled, err := d.ensureConfiguredServices(device)
+	if err != nil {
+		return deviceUpgradeResult{DeviceID: device.ID, OK: false, Message: fmt.Sprintf("service refresh failed: %s", err.Error())}
+	}
+
+	message := "Agent upgraded successfully"
+	if hasMonitoring {
+		message = "Agent upgraded and monitoring refreshed successfully"
+	}
+	if reconciled > 0 {
+		if hasMonitoring {
+			message = fmt.Sprintf("Agent upgraded, monitoring refreshed, and %d missing service(s) reconciled", reconciled)
+		} else {
+			message = fmt.Sprintf("Agent upgraded and %d missing service(s) reconciled", reconciled)
+		}
+	}
+
+	return deviceUpgradeResult{DeviceID: device.ID, OK: true, Message: message}
 }
 
 func (d *Daemon) deviceStatuses() []deviceStatus {

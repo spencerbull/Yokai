@@ -38,6 +38,7 @@ type Device struct {
 	ConnectionType string   `json:"connection_type"`    // "tailscale", "local", "manual"
 	AgentPort      int      `json:"agent_port"`
 	AgentToken     string   `json:"agent_token,omitempty"`
+	MonitoringInstalled bool `json:"monitoring_installed,omitempty"`
 	GPUType        string   `json:"gpu_type,omitempty"` // "nvidia", "amd", "apple", ""
 	Tags           []string `json:"tags,omitempty"`
 }
@@ -57,6 +58,7 @@ type Service struct {
 	Image       string            `json:"image"`
 	Model       string            `json:"model,omitempty"`
 	Port        int               `json:"port"`
+	GPUIDs      string            `json:"gpu_ids,omitempty"`
 	ExtraArgs   string            `json:"extra_args,omitempty"`
 	Env         map[string]string `json:"env,omitempty"`
 	Volumes     map[string]string `json:"volumes,omitempty"`

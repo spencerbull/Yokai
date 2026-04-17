@@ -34,6 +34,11 @@ func Run(version string) error {
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
+	if applyCurrentTailscaleHostAliases(cfg) {
+		if err := config.Save(cfg); err != nil {
+			log.Printf("warning: failed to persist Tailscale DNS host aliases: %v", err)
+		}
+	}
 
 	d := &Daemon{
 		cfg:     cfg,
@@ -325,37 +330,13 @@ func (d *Daemon) handleReload(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-
-	d.mu.Lock()
-	oldDevices := d.cfg.Devices
-	d.cfg = newCfg
-	d.tunnels.UpdateConfig(newCfg)
-	d.aggregator.UpdateConfig(newCfg)
-	d.mu.Unlock()
-
-	// Determine which devices were added or removed
-	oldSet := make(map[string]struct{}, len(oldDevices))
-	for _, dev := range oldDevices {
-		oldSet[dev.ID] = struct{}{}
-	}
-	newSet := make(map[string]struct{}, len(newCfg.Devices))
-	for _, dev := range newCfg.Devices {
-		newSet[dev.ID] = struct{}{}
-	}
-
-	// Close tunnels for removed devices
-	for id := range oldSet {
-		if _, ok := newSet[id]; !ok {
-			d.tunnels.CloseDevice(id)
+	if applyCurrentTailscaleHostAliases(newCfg) {
+		if err := config.Save(newCfg); err != nil {
+			log.Printf("warning: failed to persist Tailscale DNS host aliases: %v", err)
 		}
 	}
 
-	// Connect tunnels for new devices
-	for _, dev := range newCfg.Devices {
-		if _, ok := oldSet[dev.ID]; !ok {
-			d.tunnels.ConnectDevice(dev)
-		}
-	}
+	d.applyConfigUpdate(newCfg)
 
 	log.Printf("config reloaded: %d devices", len(newCfg.Devices))
 
@@ -443,6 +424,7 @@ func (d *Daemon) persistDeployResult(req DeployRequest, result *DeployResult) er
 		Image:       strings.TrimSpace(req.Image),
 		Model:       strings.TrimSpace(req.Model),
 		Port:        port,
+		GPUIDs:      strings.TrimSpace(req.GPUIDs),
 		ExtraArgs:   strings.TrimSpace(req.ExtraArgs),
 		Env:         cloneStringMap(req.Env),
 		Volumes:     cloneStringMap(req.Volumes),

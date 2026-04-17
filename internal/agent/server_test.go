@@ -57,6 +57,7 @@ func setupTestServer(version string, token string) *http.ServeMux {
 	// Protected endpoints
 	mux.HandleFunc("GET /system/info", requireAuth(handleSystemInfo(version)))
 	mux.HandleFunc("GET /metrics", requireAuth(handleMetrics))
+	mux.HandleFunc("GET /metrics/prometheus", requireAuth(handlePrometheusMetrics))
 	mux.HandleFunc("GET /containers", requireAuth(handleContainers))
 	mux.HandleFunc("POST /containers", requireAuth(handleContainerDeploy))
 
@@ -171,6 +172,63 @@ func TestMetricsEndpoint(t *testing.T) {
 	_ = response.RAM.TotalMB
 	_ = response.Swap.TotalMB
 	_ = response.Disk.TotalGB
+}
+
+func TestRenderPrometheusMetricsIncludesLLMAndHostSeries(t *testing.T) {
+	t.Parallel()
+
+	metrics := &SystemMetrics{
+		CPU:  CPUMetrics{Percent: 42.5},
+		RAM:  RAMMetrics{UsedMB: 1024, TotalMB: 8192, Percent: 12.5},
+		Disk: DiskMetrics{FreeGB: 300},
+		GPUs: []GPUMetrics{{Index: 0, Name: "RTX 4090", UtilPercent: 87, VRAMUsedMB: 20480, VRAMTotalMB: 24576, TempC: 70, PowerDrawW: 310, PowerLimitW: 450}},
+	}
+	containers := []Container{{
+		Name:   "yokai-vllm-llama31-8b",
+		Image:  "vllm/vllm-openai:latest",
+		Status: "running",
+		VLLMMetrics: &VLLMMetrics{
+			Model:                 "meta-llama/Llama-3.1-8B-Instruct",
+			PromptTokPerSec:       118.2,
+			GenerationTokPerSec:   35.5,
+			RequestsRunning:       3,
+			RequestsWaiting:       1,
+			PromptTokensTotal:     1200,
+			GenerationTokensTotal: 900,
+			TTFTBuckets: map[string]float64{
+				"0.1":  10,
+				"+Inf": 12,
+			},
+			TTFTSum:                  1.23,
+			TTFTCount:                12,
+			HasPromptTokPerSec:       true,
+			HasGenerationTokPerSec:   true,
+			HasRequestsRunning:       true,
+			HasRequestsWaiting:       true,
+			HasPromptTokensTotal:     true,
+			HasGenerationTokensTotal: true,
+			HasTTFT:                  true,
+		},
+	}}
+
+	body := renderPrometheusMetrics(metrics, containers)
+
+	checks := []string{
+		"yokai_cpu_percent 42.5",
+		`yokai_service_up{backend="vllm",model="meta-llama/Llama-3.1-8B-Instruct",service="vllm-llama31-8b"} 1`,
+		`yokai_llm_prefill_tokens_per_second{backend="vllm",model="meta-llama/Llama-3.1-8B-Instruct",service="vllm-llama31-8b"} 118.2`,
+		`yokai_llm_decode_tokens_per_second{backend="vllm",model="meta-llama/Llama-3.1-8B-Instruct",service="vllm-llama31-8b"} 35.5`,
+		`yokai_llm_requests_in_flight{backend="vllm",model="meta-llama/Llama-3.1-8B-Instruct",service="vllm-llama31-8b"} 3`,
+		`yokai_llm_generated_tokens_total{backend="vllm",model="meta-llama/Llama-3.1-8B-Instruct",service="vllm-llama31-8b"} 900`,
+		`yokai_llm_ttft_seconds_bucket{backend="vllm",le="0.1",model="meta-llama/Llama-3.1-8B-Instruct",service="vllm-llama31-8b"} 10`,
+		`yokai_gpu_power_draw_watts{gpu="0",name="RTX 4090"} 310`,
+	}
+
+	for _, check := range checks {
+		if !strings.Contains(body, check) {
+			t.Fatalf("expected Prometheus output to contain %q\n%s", check, body)
+		}
+	}
 }
 
 func TestContainersEndpoint(t *testing.T) {

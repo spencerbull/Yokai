@@ -12,6 +12,7 @@ import (
 
 	"github.com/spencerbull/yokai/internal/config"
 	"github.com/spencerbull/yokai/internal/docker"
+	"github.com/spencerbull/yokai/internal/monitoring"
 	sshpkg "github.com/spencerbull/yokai/internal/ssh"
 )
 
@@ -37,6 +38,7 @@ func (d *Daemon) handleBootstrapDevice(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad_request", "message": err.Error()})
 		return
 	}
+	req.deviceUpsertRequest = preferTailscaleHostInRequest(req.deviceUpsertRequest)
 
 	client, err := sshpkg.Connect(sshpkg.ClientConfig{
 		Host:           req.Host,
@@ -95,7 +97,7 @@ func (d *Daemon) handleBootstrapDevice(w http.ResponseWriter, r *http.Request) {
 
 	monitoringInstalled := false
 	if req.InstallMonitoring {
-		if err := deployMonitoringStack(client, req.Host, req.AgentPort, preflight); err != nil {
+		if err := deployMonitoringStack(client, req.Host, req.AgentPort, agentToken, preflight); err != nil {
 			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "monitoring_deploy_failed", "message": err.Error()})
 			return
 		}
@@ -106,6 +108,7 @@ func (d *Daemon) handleBootstrapDevice(w http.ResponseWriter, r *http.Request) {
 	device := buildDeviceFromRequest(req.deviceUpsertRequest, req.ID)
 	device.AgentToken = agentToken
 	device.AgentPort = req.AgentPort
+	device.MonitoringInstalled = monitoringInstalled
 	if preflight.GPUDetected {
 		device.GPUType = "nvidia"
 	}
@@ -150,7 +153,7 @@ func cloneConfigCurrent(d *Daemon) *config.Config {
 	return cloneConfig(d.cfg)
 }
 
-func deployMonitoringStack(client *sshpkg.Client, host string, agentPort int, preflight *sshpkg.PreflightResult) error {
+func deployMonitoringStack(client *sshpkg.Client, host string, agentPort int, agentToken string, preflight *sshpkg.PreflightResult) error {
 	monitoringCfg := docker.MonitoringConfig{
 		AgentHost:      host,
 		AgentPort:      agentPort,
@@ -162,28 +165,13 @@ func deployMonitoringStack(client *sshpkg.Client, host string, agentPort int, pr
 	composeYAML := docker.GenerateMonitoringCompose(monitoringCfg)
 	prometheusYAML := docker.GeneratePrometheusConfig(monitoringCfg)
 
-	tmpDir := "/tmp/yokai-monitoring"
-	if _, err := client.Exec(fmt.Sprintf("mkdir -p %s", tmpDir)); err != nil {
-		return fmt.Errorf("creating monitoring dir: %w", err)
-	}
-
-	writeComposeCmd := fmt.Sprintf(`cat > %s/docker-compose.yml << 'EOF'
-%s
-EOF`, tmpDir, composeYAML)
-	if _, err := client.Exec(writeComposeCmd); err != nil {
-		return fmt.Errorf("writing compose file: %w", err)
-	}
-
-	writePrometheusCmd := fmt.Sprintf(`cat > %s/prometheus.yml << 'EOF'
-%s
-EOF`, tmpDir, prometheusYAML)
-	if _, err := client.Exec(writePrometheusCmd); err != nil {
-		return fmt.Errorf("writing prometheus config: %w", err)
-	}
-
-	mkdirCmd := fmt.Sprintf("mkdir -p %s/grafana/provisioning %s/grafana/dashboards", tmpDir, tmpDir)
-	if _, err := client.Exec(mkdirCmd); err != nil {
-		return fmt.Errorf("creating grafana dirs: %w", err)
+	tmpDir, err := monitoring.SeedRemoteFiles(client, monitoring.RemoteFiles{
+		ComposeYAML:    composeYAML,
+		PrometheusYAML: prometheusYAML,
+		AgentToken:     agentToken,
+	})
+	if err != nil {
+		return fmt.Errorf("seeding monitoring files: %w", err)
 	}
 
 	pullCmd := fmt.Sprintf("cd %s && docker compose pull 2>&1", tmpDir)

@@ -45,7 +45,7 @@ export function TailscaleImportModal(props: TailscaleImportModalProps) {
 
         {status && status.installed && status.running ? (
           <>
-            <text fg={theme.colors.textSubtle}>Type to filter by hostname, IP, OS, or tag. Up/Down choose a peer. Enter imports it into the device form.</text>
+            <text fg={theme.colors.textSubtle}>Type to filter by hostname, DNS name, IP, OS, or tag. Up/Down choose a peer. Enter imports it into the device form.</text>
             <input
               value={props.query}
               onInput={props.onQueryChange}
@@ -55,7 +55,7 @@ export function TailscaleImportModal(props: TailscaleImportModalProps) {
               textColor={theme.colors.text}
               focusedBackgroundColor={theme.colors.panelMuted}
               cursorColor={theme.colors.accent}
-              placeholder="Filter hostname, IP, OS, or tag"
+              placeholder="Filter hostname, DNS, IP, OS, or tag"
             />
 
             {props.visiblePeers.length === 0 ? (
@@ -130,7 +130,11 @@ function InstructionBlock(props: { text: string; title: string }) {
 }
 
 function renderPeerMeta(peer: TailscalePeer) {
-  const parts = [peer.ip, peer.os || "unknown"]
+  const parts = [peer.dns_name || peer.ip]
+  if (peer.dns_name) {
+    parts.push(peer.ip)
+  }
+  parts.push(peer.os || "unknown")
   if (peer.recommended) {
     parts.push("recommended for Yokai", "tag:ai-gpu")
   }

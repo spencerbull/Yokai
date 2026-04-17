@@ -301,7 +301,7 @@ func TestRemoveEndpoints(t *testing.T) {
 			map[string]interface{}{
 				"family": "openai",
 				"id":     "vllm-1",
-				"name":   "VLLM Model (yokai)",
+				"name":   "VLLM Model (yokai-beskar)",
 				"url":    "http://localhost:8000/v1",
 			},
 			map[string]interface{}{
@@ -348,7 +348,7 @@ func TestRemoveEndpoints(t *testing.T) {
 	for _, model := range models {
 		m := model.(map[string]interface{})
 		name := m["name"].(string)
-		if strings.Contains(name, "(yokai)") {
+		if isYokaiEndpointName(name) {
 			t.Errorf("yokai endpoint should have been removed: %s", name)
 		}
 	}
@@ -455,8 +455,8 @@ func TestEndpointStructure(t *testing.T) {
 	if endpoint.ID != "test-model" {
 		t.Errorf("expected ID 'test-model', got %s", endpoint.ID)
 	}
-	if !strings.Contains(endpoint.Name, "(yokai)") {
-		t.Error("endpoint name should contain (yokai)")
+	if !isYokaiEndpointName("Test Model (yokai-beskar)") {
+		t.Error("device-specific yokai endpoint names should be recognized")
 	}
 	if endpoint.URL != "http://192.168.1.100:8000/v1" {
 		t.Errorf("unexpected URL: %s", endpoint.URL)

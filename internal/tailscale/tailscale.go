@@ -100,6 +100,32 @@ func (s *Status) OnlinePeers() []Peer {
 	return online
 }
 
+// PreferredDNSName returns the peer DNS name for a matching host, short host,
+// or Tailscale IP when that mapping is available.
+func (s *Status) PreferredDNSName(host string) (string, bool) {
+	host = normalizeHost(host)
+	if host == "" {
+		return "", false
+	}
+
+	if dns, ok := preferredDNSNameForPeer(s.Self, host); ok {
+		return dns, true
+	}
+
+	keys := make([]string, 0, len(s.Peers))
+	for key := range s.Peers {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if dns, ok := preferredDNSNameForPeer(s.Peers[key], host); ok {
+			return dns, true
+		}
+	}
+
+	return "", false
+}
+
 // HasTag reports whether the peer has the given tag.
 func (p Peer) HasTag(tag string) bool {
 	tag = strings.ToLower(strings.TrimSpace(tag))
@@ -139,6 +165,33 @@ func (p Peer) OtherTags() []string {
 		return nil
 	}
 	return other
+}
+
+func preferredDNSNameForPeer(peer *statusPeer, host string) (string, bool) {
+	if peer == nil {
+		return "", false
+	}
+
+	dnsName := normalizeHost(peer.DNSName)
+	if dnsName == "" {
+		return "", false
+	}
+
+	if strings.EqualFold(host, dnsName) || strings.EqualFold(host, normalizeHost(peer.HostName)) {
+		return dnsName, true
+	}
+
+	for _, ip := range peer.TailscaleIPs {
+		if strings.EqualFold(host, normalizeHost(ip)) {
+			return dnsName, true
+		}
+	}
+
+	return "", false
+}
+
+func normalizeHost(host string) string {
+	return strings.TrimSuffix(strings.TrimSpace(host), ".")
 }
 
 // EnrollmentTagHelp explains how to mark AI GPU servers in Tailscale.
