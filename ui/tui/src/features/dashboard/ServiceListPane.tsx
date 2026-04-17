@@ -44,15 +44,15 @@ export function ServiceListPane(props: ServiceListPaneProps) {
               : theme.colors.textSubtle
 
           return (
-            <text key={service.containerId} fg={selected ? theme.colors.selectionText : theme.colors.textMuted} bg={selected ? theme.colors.selectionBackground : theme.colors.panelMuted}>
-              <span fg={selected ? theme.colors.selectionText : statusColor}>{selected ? "▌" : healthGlyph(service)}</span>{" "}
+            <text key={service.containerId} fg={selected ? theme.colors.text : theme.colors.textMuted}>
+              <span fg={selected ? theme.colors.accent : statusColor}>{selected ? "▌" : healthGlyph(service)}</span>{" "}
               {rowLine(service, props.terminalWidth)}
             </text>
           )
         })
       )}
 
-      <text fg={theme.colors.textSubtle}>Arrows/J/K move selection. Press L to open logs for the selected service.</text>
+      <text fg={theme.colors.textSubtle}>Arrows/J/K move selection. Enter opens the selected service.</text>
     </box>
   )
 }

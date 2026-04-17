@@ -28,6 +28,16 @@ type openAIEndpointRecord struct {
 	Reachable   bool     `json:"reachable"`
 }
 
+type openAIEndpointCandidate struct {
+	ServiceID    string
+	DeviceID     string
+	DeviceLabel  string
+	DisplayModel string
+	Host         string
+	Port         int
+	ServiceType  string
+}
+
 type configureIntegrationsRequest struct {
 	Tools []string `json:"tools"`
 }
@@ -115,44 +125,153 @@ func (d *Daemon) discoverOpenAIEndpoints() ([]openAIEndpointRecord, error) {
 	devices := append([]config.Device(nil), d.cfg.Devices...)
 	d.mu.RUnlock()
 
-	deviceByID := make(map[string]config.Device, len(devices))
-	for _, device := range devices {
-		deviceByID[device.ID] = device
-	}
-
 	httpClient := &http.Client{Timeout: 5 * time.Second}
-	endpoints := make([]openAIEndpointRecord, 0)
-	for _, service := range services {
-		if service.Type == "comfyui" {
-			continue
-		}
-		device, ok := deviceByID[service.DeviceID]
-		if !ok {
-			continue
-		}
-		modelName := strings.TrimSpace(service.Model)
-		if modelName == "" {
-			modelName = service.Type
-		}
-		models, reachable := resolveOpenAIModelIDs(httpClient, device.Host, service.Port, modelName)
+	candidates := d.openAIEndpointCandidates(devices, services)
+	endpoints := make([]openAIEndpointRecord, 0, len(candidates))
+	for _, candidate := range candidates {
+		fallbackModel := firstNonEmpty(strings.TrimSpace(candidate.DisplayModel), strings.TrimSpace(candidate.ServiceType))
+		models, reachable := resolveOpenAIModelIDs(httpClient, candidate.Host, candidate.Port, fallbackModel)
 		if !reachable {
 			continue
 		}
+		displayModel := firstNonEmpty(strings.TrimSpace(candidate.DisplayModel), firstModelID(models, fallbackModel), fallbackModel)
 		endpoints = append(endpoints, openAIEndpointRecord{
-			ServiceID:   service.ID,
-			DeviceID:    device.ID,
-			DeviceLabel: firstNonEmpty(device.Label, device.ID),
-			Host:        device.Host,
-			Port:        service.Port,
-			BaseURL:     fmt.Sprintf("http://%s:%d/v1", device.Host, service.Port),
-			ServiceType: service.Type,
+			ServiceID:   candidate.ServiceID,
+			DeviceID:    candidate.DeviceID,
+			DeviceLabel: candidate.DeviceLabel,
+			Host:        candidate.Host,
+			Port:        candidate.Port,
+			BaseURL:     fmt.Sprintf("http://%s:%d/v1", candidate.Host, candidate.Port),
+			ServiceType: candidate.ServiceType,
 			ModelIDs:    models,
-			DisplayName: fmt.Sprintf("%s / %s", firstNonEmpty(device.Label, device.ID), modelName),
+			DisplayName: fmt.Sprintf("%s / %s", candidate.DeviceLabel, displayModel),
 			Reachable:   true,
 		})
 	}
 
 	return endpoints, nil
+}
+
+func (d *Daemon) openAIEndpointCandidates(devices []config.Device, services []config.Service) []openAIEndpointCandidate {
+	configured, claimedPorts := configuredOpenAIEndpointCandidates(devices, services)
+	live := liveOpenAIEndpointCandidates(devices, claimedPorts, d.liveContainersByDevice(devices))
+	return append(configured, live...)
+}
+
+func configuredOpenAIEndpointCandidates(devices []config.Device, services []config.Service) ([]openAIEndpointCandidate, map[string]map[int]struct{}) {
+	deviceByID := make(map[string]config.Device, len(devices))
+	for _, device := range devices {
+		deviceByID[device.ID] = device
+	}
+
+	claimedPorts := make(map[string]map[int]struct{}, len(devices))
+	candidates := make([]openAIEndpointCandidate, 0, len(services))
+	for _, service := range services {
+		if service.Type == "comfyui" {
+			continue
+		}
+		device, ok := deviceByID[service.DeviceID]
+		if !ok || service.Port <= 0 {
+			continue
+		}
+		claimOpenAIPort(claimedPorts, device.ID, service.Port)
+		candidates = append(candidates, openAIEndpointCandidate{
+			ServiceID:    service.ID,
+			DeviceID:     device.ID,
+			DeviceLabel:  firstNonEmpty(device.Label, device.ID),
+			DisplayModel: firstNonEmpty(strings.TrimSpace(service.Model), strings.TrimSpace(service.Type)),
+			Host:         device.Host,
+			Port:         service.Port,
+			ServiceType:  service.Type,
+		})
+	}
+
+	return candidates, claimedPorts
+}
+
+func liveOpenAIEndpointCandidates(devices []config.Device, claimedPorts map[string]map[int]struct{}, liveContainers map[string][]agentContainerRecord) []openAIEndpointCandidate {
+	candidates := make([]openAIEndpointCandidate, 0)
+	for _, device := range devices {
+		containers := liveContainers[device.ID]
+		if len(containers) == 0 {
+			continue
+		}
+		for _, container := range containers {
+			serviceType := inferServiceType(container.Image, container.Name)
+			if serviceType != "vllm" && serviceType != "llamacpp" {
+				continue
+			}
+			if !strings.EqualFold(strings.TrimSpace(container.Status), "running") {
+				continue
+			}
+			port := externalPortFromDeploy(container.Ports)
+			if port <= 0 || openAIPortClaimed(claimedPorts, device.ID, port) {
+				continue
+			}
+			claimOpenAIPort(claimedPorts, device.ID, port)
+			candidates = append(candidates, openAIEndpointCandidate{
+				ServiceID:    inferredServiceID(container),
+				DeviceID:     device.ID,
+				DeviceLabel:  firstNonEmpty(device.Label, device.ID),
+				DisplayModel: "",
+				Host:         device.Host,
+				Port:         port,
+				ServiceType:  serviceType,
+			})
+		}
+	}
+
+	return candidates
+}
+
+func (d *Daemon) liveContainersByDevice(devices []config.Device) map[string][]agentContainerRecord {
+	if d.aggregator == nil {
+		return nil
+	}
+
+	result := make(map[string][]agentContainerRecord, len(devices))
+	for _, device := range devices {
+		metrics, ok := d.aggregator.DeviceMetrics(device.ID)
+		if !ok || metrics == nil || !metrics.Online || len(metrics.Containers) == 0 {
+			continue
+		}
+
+		var containers []agentContainerRecord
+		if err := json.Unmarshal(metrics.Containers, &containers); err != nil {
+			continue
+		}
+		result[device.ID] = containers
+	}
+
+	return result
+}
+
+func claimOpenAIPort(claimedPorts map[string]map[int]struct{}, deviceID string, port int) {
+	if port <= 0 {
+		return
+	}
+	if _, ok := claimedPorts[deviceID]; !ok {
+		claimedPorts[deviceID] = make(map[int]struct{})
+	}
+	claimedPorts[deviceID][port] = struct{}{}
+}
+
+func openAIPortClaimed(claimedPorts map[string]map[int]struct{}, deviceID string, port int) bool {
+	devicePorts, ok := claimedPorts[deviceID]
+	if !ok {
+		return false
+	}
+	_, ok = devicePorts[port]
+	return ok
+}
+
+func inferredServiceID(container agentContainerRecord) string {
+	name := strings.TrimSpace(container.Name)
+	name = strings.TrimPrefix(name, "yokai-")
+	if name != "" {
+		return name
+	}
+	return strings.TrimSpace(container.ID)
 }
 
 func resolveOpenAIModelIDs(client *http.Client, host string, port int, fallback string) ([]string, bool) {
@@ -210,7 +329,7 @@ func configureVSCode(endpoints []openAIEndpointRecord) configureIntegrationResul
 			vscodeEndpoints = append(vscodeEndpoints, vscode.Endpoint{
 				Family: "openai",
 				ID:     endpoint.ServiceID,
-				Name:   fmt.Sprintf("%s (yokai)", modelID),
+				Name:   yokaiModelName(modelID, endpoint.DeviceLabel),
 				URL:    endpoint.BaseURL,
 				APIKey: "none",
 			})
@@ -233,7 +352,7 @@ func configureOpenCode(endpoints []openAIEndpointRecord) configureIntegrationRes
 			opencodeEndpoints = append(opencodeEndpoints, opencode.Endpoint{
 				BaseURL:   endpoint.BaseURL,
 				ModelID:   modelID,
-				ModelName: fmt.Sprintf("%s (yokai)", modelID),
+				ModelName: yokaiModelName(modelID, endpoint.DeviceLabel),
 			})
 		}
 	}
@@ -252,7 +371,7 @@ func configureClaudeCode(endpoints []openAIEndpointRecord) configureIntegrationR
 	if err := claudecode.AddEndpoints([]claudecode.Endpoint{{
 		BaseURL:   chosen.BaseURL,
 		ModelID:   modelID,
-		ModelName: fmt.Sprintf("%s (yokai)", modelID),
+		ModelName: yokaiModelName(modelID, chosen.DeviceLabel),
 	}}); err != nil {
 		return configureIntegrationResult{Name: "Claude Code", OK: false, Err: err.Error()}
 	}
@@ -268,7 +387,7 @@ func configureCodex(endpoints []openAIEndpointRecord) configureIntegrationResult
 	if err := codex.AddEndpoints([]codex.Endpoint{{
 		BaseURL:   chosen.BaseURL,
 		ModelID:   modelID,
-		ModelName: fmt.Sprintf("%s (yokai)", modelID),
+		ModelName: yokaiModelName(modelID, chosen.DeviceLabel),
 	}}); err != nil {
 		return configureIntegrationResult{Name: "Codex", OK: false, Err: err.Error()}
 	}
@@ -282,7 +401,7 @@ func configureOpenClaw(endpoints []openAIEndpointRecord) configureIntegrationRes
 			openclawEndpoints = append(openclawEndpoints, openclaw.Endpoint{
 				BaseURL:   endpoint.BaseURL,
 				ModelID:   modelID,
-				ModelName: fmt.Sprintf("%s (yokai)", modelID),
+				ModelName: yokaiModelName(modelID, endpoint.DeviceLabel),
 			})
 		}
 	}
@@ -334,4 +453,45 @@ func firstModelID(models []string, fallback string) string {
 		}
 	}
 	return strings.TrimSpace(fallback)
+}
+
+func yokaiModelName(modelID, deviceLabel string) string {
+	modelID = strings.TrimSpace(modelID)
+	deviceTag := yokaiDeviceTag(deviceLabel)
+	if modelID == "" {
+		return fmt.Sprintf("(%s)", deviceTag)
+	}
+	return fmt.Sprintf("%s (%s)", modelID, deviceTag)
+}
+
+func yokaiDeviceTag(deviceLabel string) string {
+	deviceLabel = strings.ToLower(strings.TrimSpace(deviceLabel))
+	if deviceLabel == "" {
+		return "yokai"
+	}
+
+	var builder strings.Builder
+	lastSeparator := false
+	for _, r := range deviceLabel {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			builder.WriteRune(r)
+			lastSeparator = false
+		case r == '-' || r == '_' || r == '.':
+			builder.WriteRune(r)
+			lastSeparator = false
+		default:
+			if builder.Len() == 0 || lastSeparator {
+				continue
+			}
+			builder.WriteByte('-')
+			lastSeparator = true
+		}
+	}
+
+	tag := strings.Trim(builder.String(), "-_.")
+	if tag == "" {
+		return "yokai"
+	}
+	return "yokai-" + tag
 }

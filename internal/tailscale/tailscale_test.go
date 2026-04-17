@@ -54,6 +54,46 @@ func TestPeerTagHelpers(t *testing.T) {
 	}
 }
 
+func TestStatusPreferredDNSName(t *testing.T) {
+	t.Parallel()
+
+	status := &Status{
+		Self: &statusPeer{
+			HostName:     "workstation",
+			DNSName:      "workstation.tailnet.ts.net.",
+			TailscaleIPs: []string{"100.64.0.1"},
+		},
+		Peers: map[string]*statusPeer{
+			"peer-1": {
+				HostName:     "gpu-box",
+				DNSName:      "gpu-box.tailnet.ts.net.",
+				TailscaleIPs: []string{"100.64.0.2", "fd7a:115c:a1e0::2"},
+			},
+		},
+	}
+
+	for input, want := range map[string]string{
+		"gpu-box":                "gpu-box.tailnet.ts.net",
+		"gpu-box.tailnet.ts.net": "gpu-box.tailnet.ts.net",
+		"100.64.0.2":             "gpu-box.tailnet.ts.net",
+		"fd7a:115c:a1e0::2":      "gpu-box.tailnet.ts.net",
+		"100.64.0.1":             "workstation.tailnet.ts.net",
+		"workstation":            "workstation.tailnet.ts.net",
+	} {
+		got, ok := status.PreferredDNSName(input)
+		if !ok {
+			t.Fatalf("expected match for %q", input)
+		}
+		if got != want {
+			t.Fatalf("PreferredDNSName(%q) = %q, want %q", input, got, want)
+		}
+	}
+
+	if got, ok := status.PreferredDNSName("192.168.1.10"); ok || got != "" {
+		t.Fatalf("expected no match for non-tailscale host, got %q %v", got, ok)
+	}
+}
+
 func TestEnrollmentTagHelpMentionsAIGPUTag(t *testing.T) {
 	t.Parallel()
 

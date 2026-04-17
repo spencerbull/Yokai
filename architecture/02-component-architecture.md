@@ -1,170 +1,110 @@
 # L2: Component Architecture
 
-Internal structure of each major component, mapped to Go packages.
+Current Yokai component structure, centered on a Go daemon backend and a single OpenTUI frontend.
 
 ## Package Dependency Graph
 
-```
+```text
 cmd/yokai/main.go
-├── internal/tui/          (TUI mode)
+├── internal/opentui/      (launch OpenTUI client)
 ├── internal/daemon/       (daemon mode)
-└── internal/agent/        (agent mode)
+├── internal/agent/        (agent mode)
+├── internal/cli/          (JSON-first non-TUI commands)
+└── internal/upgrade/      (self-update)
 
-internal/tui/
-├── app.go                 ← Root Bubbletea model
-├── views/                 ← One file per screen
-│   ├── welcome.go
-│   ├── localnet.go
-│   ├── tailscale.go
-│   ├── manual.go
-│   ├── sshcreds.go
-│   ├── bootstrap.go
-│   ├── hftoken.go
-│   ├── dashboard.go
-│   ├── deploy.go
-│   ├── devices.go
-│   ├── logs.go
-│   ├── copilot.go
-│   └── help.go
-├── components/            ← Reusable UI widgets
-│   ├── metricsbar.go
-│   ├── sparkline.go
-│   ├── gpupanel.go
-│   ├── servicelist.go
-│   ├── devicecard.go
-│   ├── keybinds.go
-│   ├── stepper.go
-│   └── overlay.go
-└── theme/
-    └── theme.go           ← Colors, borders, styles
+internal/opentui/
+└── launcher.go            ← starts daemon, launches bundled/source OpenTUI runtime
+
+ui/tui/
+├── src/app/               ← shell frame, routes, keymap
+├── src/features/          ← dashboard, deploy, devices, logs, settings, onboarding
+├── src/services/          ← daemon REST and SSE clients
+├── src/contracts/         ← shared frontend-side data contracts
+└── src/theme/             ← theme resolution and OpenTUI styling tokens
 
 internal/daemon/
 ├── daemon.go              ← HTTP server on :7473, lifecycle
-├── aggregator.go          ← Polls agents, stores ring buffers
+├── handlers_*.go          ← REST endpoint families
+├── ui_*.go                ← UI-neutral helpers for frontend-facing flows
 └── tunnel.go              ← SSH tunnel pool management
 
 internal/agent/
 ├── server.go              ← HTTP server on :7474
-├── handlers.go            ← Route handlers
+├── handlers.go            ← route handlers
 ├── metrics.go             ← nvidia-smi / rocm-smi / procfs
-└── docker.go              ← Docker SDK wrapper
-
-internal/ssh/
-├── client.go              ← Connect, exec, SCP
-└── bootstrap.go           ← Deploy agent binary + systemd
-
-internal/tailscale/
-└── tailscale.go           ← CLI wrapper (status --json)
-
-internal/docker/
-├── catalog.go             ← Fetch tags from Docker Hub / GHCR
-└── compose.go             ← Monitoring stack template
-
-internal/hf/
-└── client.go              ← HuggingFace API (model search, GGUF files)
+└── docker*.go             ← Docker SDK wrappers and service operations
 
 internal/config/
 └── config.go              ← JSON load/save/migrate/defaults
-
-internal/vscode/
-└── settings.go            ← Read/merge/write VS Code settings.json
 ```
 
-## Component Details
+## Frontend Structure
 
-### TUI (`internal/tui/`)
+### OpenTUI Frontend (`ui/tui/`)
 
+```text
+src/
+├── app/
+│   ├── App.tsx            ← root shell, route switching, global keyboard handling
+│   ├── keymap.ts          ← footer keymap definitions per route/mode
+│   └── shell/
+│       ├── ShellFrame.tsx ← chrome, route tabs, footer keymap bar
+│       └── layout.ts      ← shell sizing helpers
+├── features/
+│   ├── dashboard/         ← fleet overview, service detail, logs routing, polling controllers
+│   ├── deploy/            ← deploy wizard controller and screens
+│   ├── devices/           ← device manager, overlays, import flows
+│   ├── logs/              ← log pane and SSE stream hook
+│   ├── onboarding/        ← first-run setup route
+│   └── settings/          ← theme, defaults, and integration configuration
+├── services/
+│   ├── daemon-client.ts   ← REST client for daemon endpoints
+│   └── sse.ts             ← SSE stream reader
+├── contracts/             ← typed frontend models for daemon payloads
+└── theme/                 ← terminal theme resolution and runtime context
 ```
-┌─ app.go ─────────────────────────────────────────────────────────┐
-│                                                                   │
-│  type App struct {                                                │
-│      currentView   View        // active screen                  │
-│      viewStack     []View      // navigation history (for Esc)   │
-│      daemonClient  *DaemonAPI  // HTTP client to localhost:7473  │
-│      config        *Config     // loaded from disk               │
-│      width, height int         // terminal dimensions            │
-│  }                                                                │
-│                                                                   │
-│  View interface {                                                 │
-│      Init() tea.Cmd                                               │
-│      Update(msg tea.Msg) (View, tea.Cmd)                         │
-│      View() string                                                │
-│      KeyBinds() []KeyBind   // for the keybind bar               │
-│  }                                                                │
-│                                                                   │
-│  Navigation:                                                      │
-│    pushView(v)  → push current to stack, set v as active         │
-│    popView()    → restore previous from stack (Esc behavior)     │
-│    replaceView(v) → swap without pushing to stack                │
-│                                                                   │
-└───────────────────────────────────────────────────────────────────┘
-```
+
+Responsibilities:
+
+- Keep UI state local to the OpenTUI shell and feature controllers.
+- Route all system actions through daemon APIs.
+- Treat logs as SSE streams and everything else as REST operations.
+- Avoid direct filesystem, SSH, or external-tool access from the frontend.
+
+## Backend Structure
 
 ### Daemon (`internal/daemon/`)
 
-```
-┌─ daemon.go ──────────────────────────────────────────────────────┐
-│                                                                   │
-│  Lifecycle:                                                       │
-│    1. Load config.json                                            │
-│    2. For each device: establish SSH tunnel → agent :7474         │
-│    3. Start metrics polling goroutines (one per device)           │
-│    4. Serve REST API on localhost:7473                            │
-│    5. Watch config file for changes (fsnotify)                    │
-│                                                                   │
-│  ┌─ aggregator.go ────────────────────────────────────────────┐  │
-│  │  Per-device goroutine:                                      │  │
-│  │    loop every 2s:                                           │  │
-│  │      GET agent:7474/metrics → parse → store in ring buffer  │  │
-│  │      ring buffer: 60 points per metric (2min window)        │  │
-│  │    on error: mark device offline, retry every 30s           │  │
-│  └─────────────────────────────────────────────────────────────┘  │
-│                                                                   │
-│  ┌─ tunnel.go ────────────────────────────────────────────────┐  │
-│  │  SSH tunnel pool:                                           │  │
-│  │    - One tunnel per device                                  │  │
-│  │    - Local port → remote :7474                              │  │
-│  │    - Keepalive every 30s                                    │  │
-│  │    - Auto-reconnect on disconnect                           │  │
-│  └─────────────────────────────────────────────────────────────┘  │
-│                                                                   │
-└───────────────────────────────────────────────────────────────────┘
-```
+The daemon is the system boundary for the frontend.
+
+Responsibilities:
+
+- load and persist config
+- discover and manage devices
+- maintain SSH tunnels and device connectivity
+- poll metrics from agents
+- expose fleet, deploy, logs, settings, and integration APIs
+- own side effects such as bootstrap, deploy, restart, delete, and config writes
 
 ### Agent (`internal/agent/`)
 
-```
-┌─ agent (runs on target device) ──────────────────────────────────┐
-│                                                                   │
-│  server.go                                                        │
-│    - chi router on :7474                                         │
-│    - Bearer token auth middleware                                 │
-│    - CORS disabled (not browser-facing)                          │
-│                                                                   │
-│  handlers.go                                                      │
-│    - GET  /health          → { version, uptime }                 │
-│    - GET  /system/info     → { gpus, cpu, ram, disk, docker }    │
-│    - GET  /metrics         → { cpu%, ram, gpu[], containers[] }  │
-│    - GET  /containers      → list managed containers             │
-│    - POST /containers      → deploy workload (JSON spec)         │
-│    - DEL  /containers/:id  → stop + remove                      │
-│    - GET  /containers/:id/logs → SSE streaming                   │
-│    - POST /containers/:id/restart                                │
-│    - POST /images/pull     → pull image, SSE progress            │
-│    - GET  /images/tags/:img → fetch registry tags                │
-│                                                                   │
-│  metrics.go                                                       │
-│    - nvidia-smi --query-gpu (utilization, memory, temp, power)   │
-│    - /proc/stat, /proc/meminfo (CPU, RAM)                        │
-│    - df (disk)                                                    │
-│    - docker stats per container                                   │
-│                                                                   │
-│  docker.go                                                        │
-│    - Docker SDK client                                            │
-│    - Container lifecycle: create, start, stop, remove, logs      │
-│    - Image pull with progress callback                            │
-│    - List containers filtered by yokai-* prefix               │
-│    - Re-adopt existing containers on agent startup                │
-│                                                                   │
-└───────────────────────────────────────────────────────────────────┘
-```
+The agent runs on target devices and exposes container and metrics operations to the daemon.
+
+Responsibilities:
+
+- collect CPU, RAM, GPU, and container metrics
+- manage service lifecycle operations
+- stream logs and run service tests
+
+## Interaction Boundaries
+
+- `cmd/yokai/main.go` launches OpenTUI by default.
+- `internal/opentui/launcher.go` ensures the daemon is available, then starts the OpenTUI runtime.
+- `ui/tui` talks to the daemon over REST and SSE only.
+- The daemon talks to agents and local system services.
+
+## Design Notes
+
+- There is a single supported terminal frontend: OpenTUI.
+- The daemon remains UI-agnostic so future frontends can reuse the same APIs.
+- Retired frontend code has been removed from the active architecture.

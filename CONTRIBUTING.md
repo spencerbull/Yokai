@@ -123,7 +123,7 @@ import (
     "fmt"                    // stdlib
     "net/http"
 
-    tea "github.com/charmbracelet/bubbletea"  // third-party
+    "github.com/pelletier/go-toml/v2"         // third-party
 
     "github.com/spencerbull/yokai/internal/config"  // internal
 )

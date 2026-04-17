@@ -1,4 +1,4 @@
-import { startTransition, useEffect, useState } from "react"
+import { startTransition, useEffect, useRef, useState } from "react"
 
 import type { FleetHistory, FleetSnapshot } from "../../contracts/fleet"
 import { getDevices, getMetrics } from "../../services/daemon-client"
@@ -38,9 +38,11 @@ export function useFleetSnapshot(active: boolean) {
     status: "loading",
     snapshot: EMPTY_SNAPSHOT,
   })
+  const pollRef = useRef<null | (() => Promise<void>)>(null)
 
   useEffect(() => {
     if (!active) {
+      pollRef.current = null
       return
     }
 
@@ -77,6 +79,8 @@ export function useFleetSnapshot(active: boolean) {
       }
     }
 
+    pollRef.current = poll
+
     void poll()
     const interval = setInterval(() => {
       void poll()
@@ -84,9 +88,20 @@ export function useFleetSnapshot(active: boolean) {
 
     return () => {
       cancelled = true
+      if (pollRef.current === poll) {
+        pollRef.current = null
+      }
       clearInterval(interval)
     }
   }, [active])
 
-  return state
+  return {
+    ...state,
+    refresh() {
+      if (!active || !pollRef.current) {
+        return
+      }
+      void pollRef.current()
+    },
+  }
 }

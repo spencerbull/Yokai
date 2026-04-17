@@ -46,6 +46,7 @@ func Run(port string, version string) error {
 	// Protected endpoints
 	mux.HandleFunc("GET /system/info", requireAuth(handleSystemInfo(version)))
 	mux.HandleFunc("GET /metrics", requireAuth(handleMetrics))
+	mux.HandleFunc("GET /metrics/prometheus", requireAuth(handlePrometheusMetrics))
 	mux.HandleFunc("GET /containers", requireAuth(handleContainers))
 	mux.HandleFunc("POST /containers", requireAuth(handleContainerDeploy))
 	mux.HandleFunc("POST /containers/{id}/stop", requireAuth(handleContainerStop))

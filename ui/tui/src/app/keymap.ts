@@ -80,10 +80,11 @@ function dashboardKeys(mode?: "overview" | "service" | "logs"): readonly KeymapI
   switch (mode) {
     case "service":
       return [
-        { keys: "Tab", description: "next section" },
-        { keys: "J/K", description: "switch service" },
+        { keys: "Tab", description: "next panel" },
         { keys: "←/→", description: "action select" },
         { keys: "Enter", description: "run action" },
+        { keys: "Shift+L", description: "logs" },
+        { keys: "S/R/T/X", description: "service action" },
         { keys: "Esc", description: "back" },
       ]
     case "logs":

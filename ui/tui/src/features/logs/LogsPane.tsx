@@ -62,7 +62,7 @@ export function LogsPane(props: LogsPaneProps) {
           </scrollbox>
         </>
       ) : (
-        <text fg={theme.colors.textSubtle}>Press L on a selected service to open a contextual live log stream.</text>
+        <text fg={theme.colors.textSubtle}>Open a service first, then use the top action bar or Shift+L to open a contextual live log stream.</text>
       )}
     </box>
   )

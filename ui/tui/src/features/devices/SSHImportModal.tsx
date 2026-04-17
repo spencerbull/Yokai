@@ -49,8 +49,8 @@ export function SSHImportModal(props: SSHImportModalProps) {
           const suffix = host.identity_file_encrypted ? " encrypted-key" : host.identity_file ? " key" : ""
 
           return (
-            <text key={`${host.alias}-${host.host}`} fg={selected ? theme.colors.selectionText : theme.colors.textMuted} bg={selected ? theme.colors.selectionBackground : theme.colors.panel}>
-              {selected ? "▌" : " "} {truncate(host.alias, 18)} <span fg={selected ? theme.colors.selectionText : theme.colors.textSubtle}>{truncate(detail, 30)}{suffix}</span>
+            <text key={`${host.alias}-${host.host}`} fg={selected ? theme.colors.text : theme.colors.textMuted}>
+              <span fg={selected ? theme.colors.accent : theme.colors.textSubtle}>{selected ? "▌" : " "}</span> {truncate(host.alias, 18)} <span fg={theme.colors.textSubtle}>{truncate(detail, 30)}{suffix}</span>
             </text>
           )
         })}

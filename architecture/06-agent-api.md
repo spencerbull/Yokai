@@ -133,27 +133,77 @@ Live system and GPU metrics. Called every 2 seconds by daemon.
 
 Prometheus scrape endpoint. Returns metrics in Prometheus exposition format.
 
-**Response** `200 OK` (text/plain)
+This endpoint stays protected by the same bearer token used for the rest of the
+agent API. Prometheus must scrape this route with `Authorization: Bearer
+<agent_token>` or an equivalent `authorization.credentials_file` configuration.
+
+`GET /metrics` remains the daemon-facing JSON endpoint. Grafana host and GPU
+panels should continue to prefer `node_exporter` and `dcgm-exporter` handles for
+system, GPU, and power charts. `GET /metrics/prometheus` is the normalized
+service-level LLM contract.
+
+**Response** `200 OK` (`text/plain; version=0.0.4`)
+
+Required metric families:
+
+| Handle | Type | Labels | Notes |
+|--------|------|--------|-------|
+| `yokai_service_up` | gauge | `service,backend,model` | `1` when service metrics are available |
+| `yokai_service_info` | gauge | `service,backend,model,image` | constant `1`, inventory use only |
+| `yokai_llm_prefill_tokens_per_second` | gauge | `service,backend,model` | prompt prefill throughput |
+| `yokai_llm_decode_tokens_per_second` | gauge | `service,backend,model` | decode throughput |
+| `yokai_llm_requests_in_flight` | gauge | `service,backend,model` | current sessions |
+| `yokai_llm_requests_queued` | gauge | `service,backend,model` | queue depth |
+| `yokai_llm_prompt_tokens_total` | counter | `service,backend,model` | cumulative prompt tokens |
+| `yokai_llm_generated_tokens_total` | counter | `service,backend,model` | cumulative output tokens |
+| `yokai_llm_requests_total` | counter | `service,backend,model,result` | bounded `result` values: `ok`, `error`, `cancelled` |
+| `yokai_llm_ttft_seconds` | histogram | `service,backend,model` | TTFT p50/p95 source |
+| `yokai_llm_request_duration_seconds` | histogram | `service,backend,model` | end-to-end latency |
+| `yokai_llm_kv_cache_utilization_ratio` | gauge | `service,backend,model` | omit when backend does not support it |
+
+Do not emit high-cardinality labels such as `container_id`, request IDs, prompt
+IDs, or client IPs.
+
+Preferred Prometheus scrape configuration:
+
+```yaml
+scrape_configs:
+  - job_name: yokai-agent
+    metrics_path: /metrics/prometheus
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/secrets/yokai-agent-token
 ```
-# HELP yokai_cpu_percent CPU utilization percentage
-# TYPE yokai_cpu_percent gauge
-yokai_cpu_percent 47.2
 
-# HELP yokai_ram_used_bytes RAM used in bytes
-# TYPE yokai_ram_used_bytes gauge
-yokai_ram_used_bytes 19541893120
+```
+# HELP yokai_service_up Whether Yokai can scrape service-level metrics
+# TYPE yokai_service_up gauge
+yokai_service_up{service="vllm-llama31-8b",backend="vllm",model="meta-llama/Llama-3.1-8B-Instruct"} 1
 
-# HELP yokai_gpu_utilization GPU utilization percentage
-# TYPE yokai_gpu_utilization gauge
-yokai_gpu_utilization{gpu="0",name="RTX 4090"} 87
+# HELP yokai_llm_prefill_tokens_per_second Prompt prefill throughput in tokens per second
+# TYPE yokai_llm_prefill_tokens_per_second gauge
+yokai_llm_prefill_tokens_per_second{service="vllm-llama31-8b",backend="vllm",model="meta-llama/Llama-3.1-8B-Instruct"} 118.2
 
-# HELP yokai_gpu_vram_used_bytes VRAM used in bytes
-# TYPE yokai_gpu_vram_used_bytes gauge
-yokai_gpu_vram_used_bytes{gpu="0",name="RTX 4090"} 21578424320
+# HELP yokai_llm_decode_tokens_per_second Decode throughput in tokens per second
+# TYPE yokai_llm_decode_tokens_per_second gauge
+yokai_llm_decode_tokens_per_second{service="vllm-llama31-8b",backend="vllm",model="meta-llama/Llama-3.1-8B-Instruct"} 35.5
 
-# HELP yokai_gpu_temperature GPU temperature in Celsius
-# TYPE yokai_gpu_temperature gauge
-yokai_gpu_temperature{gpu="0",name="RTX 4090"} 72
+# HELP yokai_llm_requests_in_flight Current in-flight requests
+# TYPE yokai_llm_requests_in_flight gauge
+yokai_llm_requests_in_flight{service="vllm-llama31-8b",backend="vllm",model="meta-llama/Llama-3.1-8B-Instruct"} 3
+
+# HELP yokai_llm_generated_tokens_total Total generated output tokens
+# TYPE yokai_llm_generated_tokens_total counter
+yokai_llm_generated_tokens_total{service="vllm-llama31-8b",backend="vllm",model="meta-llama/Llama-3.1-8B-Instruct"} 483920
+
+# HELP yokai_llm_ttft_seconds Time to first token
+# TYPE yokai_llm_ttft_seconds histogram
+yokai_llm_ttft_seconds_bucket{service="vllm-llama31-8b",backend="vllm",model="meta-llama/Llama-3.1-8B-Instruct",le="0.05"} 12
+yokai_llm_ttft_seconds_bucket{service="vllm-llama31-8b",backend="vllm",model="meta-llama/Llama-3.1-8B-Instruct",le="0.1"} 29
+yokai_llm_ttft_seconds_bucket{service="vllm-llama31-8b",backend="vllm",model="meta-llama/Llama-3.1-8B-Instruct",le="0.25"} 41
+yokai_llm_ttft_seconds_bucket{service="vllm-llama31-8b",backend="vllm",model="meta-llama/Llama-3.1-8B-Instruct",le="+Inf"} 41
+yokai_llm_ttft_seconds_sum{service="vllm-llama31-8b",backend="vllm",model="meta-llama/Llama-3.1-8B-Instruct"} 5.74
+yokai_llm_ttft_seconds_count{service="vllm-llama31-8b",backend="vllm",model="meta-llama/Llama-3.1-8B-Instruct"} 41
 ```
 
 ---

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/tailscale/hujson"
 )
@@ -147,7 +148,7 @@ func RemoveEndpoints(settingsPath string) error {
 			for _, item := range arr {
 				if m, ok := item.(map[string]interface{}); ok {
 					if name, ok := m["name"].(string); ok {
-						if len(name) < 7 || name[len(name)-7:] != "(yokai)" {
+						if !isYokaiEndpointName(name) {
 							filtered = append(filtered, item)
 						}
 						continue
@@ -176,6 +177,15 @@ func endpointExists(models []interface{}, url string) bool {
 		}
 	}
 	return false
+}
+
+func isYokaiEndpointName(name string) bool {
+	name = strings.TrimSpace(name)
+	if strings.HasSuffix(name, " (yokai)") {
+		return true
+	}
+	start := strings.LastIndex(name, " (yokai-")
+	return start >= 0 && strings.HasSuffix(name, ")")
 }
 
 func parseSettingsJSONC(data []byte) (map[string]interface{}, error) {

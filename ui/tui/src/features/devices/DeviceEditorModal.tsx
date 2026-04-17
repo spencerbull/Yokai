@@ -48,8 +48,8 @@ export function DeviceEditorModal(props: DeviceEditorModalProps) {
         <Field label="Label" active={props.field === "label"}>
           <input value={props.form.label} onInput={(value) => props.onChange("label", value)} focused={props.field === "label"} width={46} backgroundColor={theme.colors.panelMuted} textColor={theme.colors.text} focusedBackgroundColor={theme.colors.panelMuted} cursorColor={theme.colors.accent} placeholder="darkporgs" />
         </Field>
-        <Field label="Host / IP" active={props.field === "host"}>
-          <input value={props.form.host} onInput={(value) => props.onChange("host", value)} focused={props.field === "host"} width={46} backgroundColor={theme.colors.panelMuted} textColor={theme.colors.text} focusedBackgroundColor={theme.colors.panelMuted} cursorColor={theme.colors.accent} placeholder="100.64.0.2" />
+        <Field label="Host / DNS / IP" active={props.field === "host"}>
+          <input value={props.form.host} onInput={(value) => props.onChange("host", value)} focused={props.field === "host"} width={46} backgroundColor={theme.colors.panelMuted} textColor={theme.colors.text} focusedBackgroundColor={theme.colors.panelMuted} cursorColor={theme.colors.accent} placeholder="gpu-box.tailnet.ts.net" />
         </Field>
         <Field label="SSH User" active={props.field === "sshUser"}>
           <input value={props.form.sshUser} onInput={(value) => props.onChange("sshUser", value)} focused={props.field === "sshUser"} width={46} backgroundColor={theme.colors.panelMuted} textColor={theme.colors.text} focusedBackgroundColor={theme.colors.panelMuted} cursorColor={theme.colors.accent} placeholder="root" />
@@ -65,11 +65,11 @@ export function DeviceEditorModal(props: DeviceEditorModalProps) {
                   border
                   borderStyle={selected ? "double" : "single"}
                   borderColor={selected ? theme.colors.borderStrong : theme.colors.border}
-                  backgroundColor={selected ? theme.colors.selectionBackground : theme.colors.panelMuted}
+                  backgroundColor={theme.colors.panelMuted}
                   paddingX={1}
                   onMouseDown={() => props.onChange("authMethod", method.id)}
                 >
-                  <text fg={selected ? theme.colors.selectionText : active ? theme.colors.text : theme.colors.textMuted}>{method.label}</text>
+                  <text fg={selected ? theme.colors.accent : active ? theme.colors.text : theme.colors.textMuted}>{selected ? `▸ ${method.label}` : method.label}</text>
                 </box>
               )
             })}

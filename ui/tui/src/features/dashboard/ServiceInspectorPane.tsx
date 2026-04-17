@@ -37,8 +37,7 @@ export function ServiceInspectorPane(props: ServiceInspectorPaneProps) {
           <MetricLine label="Output" value={formatRate(props.service.generationTokPerSec, "tok/s")} />
           <MetricLine label="Prefill" value={formatRate(props.service.promptTokPerSec, "tok/s")} />
           <MetricLine label="Uptime" value={formatUptime(props.service.uptimeSeconds)} />
-          <text fg={theme.colors.textSubtle}>Actions: S stop · R restart · T test · X delete</text>
-          {props.pendingAction ? <text fg={theme.colors.accent}>Pending: {props.pendingAction}</text> : null}
+          {props.pendingAction ? <text fg={theme.colors.accent}>Running {props.pendingAction}...</text> : null}
         </>
       ) : (
         <text fg={theme.colors.textSubtle}>No service selected.</text>

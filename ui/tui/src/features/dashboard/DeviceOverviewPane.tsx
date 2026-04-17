@@ -52,12 +52,12 @@ export function DeviceOverviewPane(props: DeviceOverviewPaneProps) {
                 border
                 borderStyle={selected ? "double" : "single"}
                 borderColor={selected ? theme.colors.borderStrong : theme.colors.border}
-                backgroundColor={selected ? theme.colors.selectionBackground : theme.colors.panel}
+                backgroundColor={theme.colors.panel}
                 paddingX={1}
                 minWidth={12}
               >
-                <text fg={selected ? theme.colors.selectionText : theme.colors.textMuted}>
-                  {device.online ? "●" : "○"} {truncate(device.label, 10)}
+                <text fg={selected ? theme.colors.accent : theme.colors.textMuted}>
+                  {selected ? "▸" : device.online ? "●" : "○"} {truncate(device.label, 10)}
                 </text>
               </box>
             )

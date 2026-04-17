@@ -5,114 +5,135 @@ import type { SettingsController } from "./useSettingsController"
 
 type SettingsRouteProps = {
   controller: SettingsController
+  terminalHeight?: number
 }
 
 export function SettingsRoute(props: SettingsRouteProps) {
   const theme = useTheme()
   const settings = props.controller.settings
   const endpointLines = props.controller.endpoints.slice(0, 4)
+  const viewportHeight = Math.max(14, (props.terminalHeight ?? 40) - 18)
 
   return (
     <box flexDirection="column" gap={1} flexGrow={1}>
-      {props.controller.notice ? <Banner color={noticeColor(theme, props.controller.notice.level)}>{props.controller.notice.message}</Banner> : null}
-      {props.controller.pendingAction ? <Banner color={theme.colors.accent}>Running {props.controller.pendingAction}...</Banner> : null}
+      <scrollbox height={viewportHeight} style={scrollboxStyle(theme)}>
+        <box flexDirection="column" gap={1} flexGrow={1} paddingRight={1}>
+          {props.controller.notice ? <Banner color={noticeColor(theme, props.controller.notice.level)}>{props.controller.notice.message}</Banner> : null}
+          {props.controller.pendingAction ? <Banner color={theme.colors.accent}>Running {props.controller.pendingAction}...</Banner> : null}
 
-      <box flexDirection="row" gap={1}>
-        <Card title="Theme">
-          <ThemeChoice
-            active={theme.preference === "auto"}
-            description={theme.source === "omarchy" ? `Following Omarchy ${theme.themeName || "theme"}` : "Follow terminal/Omarchy automatically"}
-            keys="A"
-            label="Auto"
-            onSelect={() => theme.setPreference("auto")}
-          />
-          <ThemeChoice
-            active={theme.preference === "dark"}
-            description="Use Yokai's built-in dark theme"
-            keys="D"
-            label="Dark"
-            onSelect={() => theme.setPreference("dark")}
-          />
-        </Card>
+          <box flexDirection="row" gap={1}>
+            <Card title="Theme">
+              <ThemeChoice
+                active={theme.preference === "auto"}
+                description={theme.source === "omarchy" ? `Following Omarchy ${theme.themeName || "theme"}` : "Follow terminal/Omarchy automatically"}
+                keys="A"
+                label="Auto"
+                onSelect={() => theme.setPreference("auto")}
+              />
+              <ThemeChoice
+                active={theme.preference === "dark"}
+                description="Use Yokai's built-in dark theme"
+                keys="D"
+                label="Dark"
+                onSelect={() => theme.setPreference("dark")}
+              />
+            </Card>
 
-        <Card title="Hugging Face">
-          <Line label="Status" value={settings.hf.configured ? `configured (${settings.hf.source})` : "not configured"} />
-          <Line label="User" value={settings.hf.username || "unknown"} />
-          <ActionText keys="H" onSelect={props.controller.openHFEditor}>Edit HF token</ActionText>
-        </Card>
-      </box>
+            <Card title="Hugging Face">
+              <Line label="Status" value={settings.hf.configured ? `configured (${settings.hf.source})` : "not configured"} />
+              <Line label="User" value={settings.hf.username || "unknown"} />
+              <ActionText keys="H" onSelect={props.controller.openHFEditor}>Edit HF token</ActionText>
+            </Card>
+          </box>
 
-      <box flexDirection="row" gap={1}>
-        <Card title="Deploy Defaults">
-          <Line label="VLLM" value={settings.preferences.default_vllm_image} marquee />
-          <Line label="Llama" value={settings.preferences.default_llama_image} marquee />
-          <Line label="Comfy" value={settings.preferences.default_comfyui_image} marquee />
-          <ActionText keys="P" onSelect={props.controller.openDefaultsEditor}>Edit defaults</ActionText>
-        </Card>
+          <box flexDirection="row" gap={1}>
+            <Card title="Deploy Defaults">
+              <Line label="VLLM" value={settings.preferences.default_vllm_image} marquee />
+              <Line label="Llama" value={settings.preferences.default_llama_image} marquee />
+              <Line label="Comfy" value={settings.preferences.default_comfyui_image} marquee />
+              <ActionText keys="P" onSelect={props.controller.openDefaultsEditor}>Edit defaults</ActionText>
+            </Card>
 
-        <Card title="Deploy History">
-          <Line label="Images" value={settings.history.images.slice(0, 2).join(" · ") || "none"} marquee />
-          <Line label="Models" value={settings.history.models.slice(0, 2).join(" · ") || "none"} marquee />
-          <ActionText keys="R" onSelect={props.controller.refresh}>Refresh settings</ActionText>
-        </Card>
-      </box>
+            <Card title="Deploy History">
+              <Line label="Images" value={settings.history.images.slice(0, 2).join(" · ") || "none"} marquee />
+              <Line label="Models" value={settings.history.models.slice(0, 2).join(" · ") || "none"} marquee />
+              <ActionText keys="R" onSelect={props.controller.refresh}>Refresh settings</ActionText>
+            </Card>
+          </box>
 
-      <Card title="AI Integrations">
-        <box flexDirection="row" gap={1}>
-          <ToolToggle
-            active={props.controller.selectedTools.vscode}
-            configured={settings.integrations.vscode.configured}
-            keys="V"
-            label="VS Code"
-            onSelect={() => props.controller.toggleTool("vscode")}
-          />
-          <ToolToggle
-            active={props.controller.selectedTools.opencode}
-            configured={settings.integrations.opencode.configured}
-            keys="O"
-            label="OpenCode"
-            onSelect={() => props.controller.toggleTool("opencode")}
-          />
-          <ToolToggle
-            active={props.controller.selectedTools.openclaw}
-            configured={settings.integrations.openclaw.configured}
-            keys="L"
-            label="OpenClaw"
-            onSelect={() => props.controller.toggleTool("openclaw")}
-          />
-          <ToolToggle
-            active={props.controller.selectedTools.claudecode}
-            configured={settings.integrations.claudecode.configured}
-            keys="K"
-            label="Claude Code"
-            onSelect={() => props.controller.toggleTool("claudecode")}
-          />
-          <ToolToggle
-            active={props.controller.selectedTools.codex}
-            configured={settings.integrations.codex.configured}
-            keys="X"
-            label="Codex"
-            onSelect={() => props.controller.toggleTool("codex")}
-          />
+          <Card title="AI Integrations">
+            <box flexDirection="row" gap={1}>
+              <ToolToggle
+                active={props.controller.selectedTools.vscode}
+                configured={settings.integrations.vscode.configured}
+                keys="V"
+                label="VS Code"
+                onSelect={() => props.controller.toggleTool("vscode")}
+              />
+              <ToolToggle
+                active={props.controller.selectedTools.opencode}
+                configured={settings.integrations.opencode.configured}
+                keys="O"
+                label="OpenCode"
+                onSelect={() => props.controller.toggleTool("opencode")}
+              />
+              <ToolToggle
+                active={props.controller.selectedTools.openclaw}
+                configured={settings.integrations.openclaw.configured}
+                keys="L"
+                label="OpenClaw"
+                onSelect={() => props.controller.toggleTool("openclaw")}
+              />
+              <ToolToggle
+                active={props.controller.selectedTools.claudecode}
+                configured={settings.integrations.claudecode.configured}
+                keys="K"
+                label="Claude Code"
+                onSelect={() => props.controller.toggleTool("claudecode")}
+              />
+              <ToolToggle
+                active={props.controller.selectedTools.codex}
+                configured={settings.integrations.codex.configured}
+                keys="X"
+                label="Codex"
+                onSelect={() => props.controller.toggleTool("codex")}
+              />
+            </box>
+
+            <text fg={theme.colors.textSubtle}>OpenAI-compatible endpoints discovered: {props.controller.endpoints.length}</text>
+            {endpointLines.map((endpoint) => (
+              <text key={endpoint.service_id} fg={theme.colors.textMuted}>
+                • {endpoint.display_name} <span fg={theme.colors.textSubtle}>{endpoint.base_url}</span>
+              </text>
+            ))}
+            {props.controller.endpoints.length > endpointLines.length ? (
+              <text fg={theme.colors.textSubtle}>Showing {endpointLines.length} of {props.controller.endpoints.length}</text>
+            ) : null}
+
+            <ActionText keys="C" onSelect={props.controller.runConfigureIntegrations}>Configure selected tools</ActionText>
+          </Card>
         </box>
-
-        <text fg={theme.colors.textSubtle}>OpenAI-compatible endpoints discovered: {props.controller.endpoints.length}</text>
-        {endpointLines.map((endpoint) => (
-          <text key={endpoint.service_id} fg={theme.colors.textMuted}>
-            • {endpoint.display_name} <span fg={theme.colors.textSubtle}>{endpoint.base_url}</span>
-          </text>
-        ))}
-        {props.controller.endpoints.length > endpointLines.length ? (
-          <text fg={theme.colors.textSubtle}>Showing {endpointLines.length} of {props.controller.endpoints.length}</text>
-        ) : null}
-
-        <ActionText keys="C" onSelect={props.controller.runConfigureIntegrations}>Configure selected tools</ActionText>
-      </Card>
+      </scrollbox>
 
       {props.controller.hfEditor ? <HFTokenModal controller={props.controller} /> : null}
       {props.controller.defaultsEditor ? <DefaultsModal controller={props.controller} /> : null}
     </box>
   )
+}
+
+function scrollboxStyle(theme: ReturnType<typeof useTheme>) {
+  return {
+    rootOptions: { backgroundColor: theme.colors.panel },
+    wrapperOptions: { backgroundColor: theme.colors.panel },
+    viewportOptions: { backgroundColor: theme.colors.panel },
+    contentOptions: { backgroundColor: theme.colors.panel },
+    scrollbarOptions: {
+      trackOptions: {
+        foregroundColor: theme.colors.borderStrong,
+        backgroundColor: theme.colors.panelMuted,
+      },
+    },
+  }
 }
 
 function HFTokenModal(props: { controller: SettingsController }) {
@@ -184,9 +205,9 @@ function Card(props: { children: ReactNode; title: string }) {
 function ThemeChoice(props: { active: boolean; description: string; keys: string; label: string; onSelect: () => void }) {
   const theme = useTheme()
   return (
-    <box border borderStyle={props.active ? "double" : "single"} borderColor={props.active ? theme.colors.borderStrong : theme.colors.border} backgroundColor={props.active ? theme.colors.selectionBackground : theme.colors.panel} padding={1} flexDirection="column" onMouseDown={props.onSelect}>
-      <text fg={props.active ? theme.colors.selectionText : theme.colors.text}><strong>{props.label}</strong> <span fg={props.active ? theme.colors.selectionText : theme.colors.textSubtle}>[{props.keys}]</span></text>
-      <text fg={props.active ? theme.colors.selectionText : theme.colors.textMuted}>{props.description}</text>
+    <box border borderStyle={props.active ? "double" : "single"} borderColor={props.active ? theme.colors.borderStrong : theme.colors.border} backgroundColor={theme.colors.panel} padding={1} flexDirection="column" onMouseDown={props.onSelect}>
+      <text fg={props.active ? theme.colors.accent : theme.colors.text}><strong>{props.active ? `▸ ${props.label}` : props.label}</strong> <span fg={theme.colors.textSubtle}>[{props.keys}]</span></text>
+      <text fg={theme.colors.textMuted}>{props.description}</text>
     </box>
   )
 }
@@ -194,9 +215,9 @@ function ThemeChoice(props: { active: boolean; description: string; keys: string
 function ToolToggle(props: { active: boolean; configured: boolean; keys: string; label: string; onSelect: () => void }) {
   const theme = useTheme()
   return (
-    <box border borderStyle={props.active ? "double" : "single"} borderColor={props.active ? theme.colors.borderStrong : theme.colors.border} backgroundColor={props.active ? theme.colors.selectionBackground : theme.colors.panel} padding={1} flexDirection="column" onMouseDown={props.onSelect}>
-      <text fg={props.active ? theme.colors.selectionText : theme.colors.text}><strong>{props.label}</strong> <span fg={props.active ? theme.colors.selectionText : theme.colors.textSubtle}>[{props.keys}]</span></text>
-      <text fg={props.active ? theme.colors.selectionText : theme.colors.textMuted}>{props.configured ? "configured" : "not configured"}</text>
+    <box border borderStyle={props.active ? "double" : "single"} borderColor={props.active ? theme.colors.borderStrong : theme.colors.border} backgroundColor={theme.colors.panel} padding={1} flexDirection="column" onMouseDown={props.onSelect}>
+      <text fg={props.active ? theme.colors.accent : theme.colors.text}><strong>{props.active ? `▸ ${props.label}` : props.label}</strong> <span fg={theme.colors.textSubtle}>[{props.keys}]</span></text>
+      <text fg={theme.colors.textMuted}>{props.configured ? "configured" : "not configured"}</text>
     </box>
   )
 }

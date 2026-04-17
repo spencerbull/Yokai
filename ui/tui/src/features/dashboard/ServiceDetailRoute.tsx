@@ -1,5 +1,6 @@
 import type { ReactNode } from "react"
 
+import { DashboardActionBanner } from "./DashboardActionBanner"
 import { DeviceOverviewPane } from "./DeviceOverviewPane"
 import { LogsPane } from "../logs/LogsPane"
 import { ServiceInspectorPane } from "./ServiceInspectorPane"
@@ -15,8 +16,8 @@ type ServiceDetailRouteProps = {
 
 const ACTIONS: Array<{ action: "logs" | "stop" | "restart" | "test" | "delete"; label: string }> = [
   { action: "logs", label: "View Logs" },
-  { action: "stop", label: "Stop" },
   { action: "restart", label: "Restart" },
+  { action: "stop", label: "Stop" },
   { action: "test", label: "Test" },
   { action: "delete", label: "Delete" },
 ]
@@ -26,8 +27,9 @@ export function ServiceDetailRoute(props: ServiceDetailRouteProps) {
   const service = props.controller.selectedService
   const wide = props.contentWidth >= 110
   const viewportHeight = Math.max(12, props.contentHeight)
-  const rightColumnWidth = wide ? Math.max(36, Math.min(48, Math.floor(props.contentWidth * 0.34))) : props.contentWidth
-  const leftColumnWidth = wide ? Math.max(36, props.contentWidth - rightColumnWidth - 1) : props.contentWidth
+  const rightColumnWidth = wide ? Math.max(34, Math.min(44, Math.floor(props.contentWidth * 0.3))) : props.contentWidth
+  const leftColumnWidth = wide ? Math.max(40, props.contentWidth - rightColumnWidth - 1) : props.contentWidth
+  const positionLabel = props.controller.selectedIndex >= 0 ? `${props.controller.selectedIndex + 1} of ${props.controller.snapshot.services.length}` : null
 
   if (!service) {
     return <text fg={theme.colors.textSubtle}>No service selected.</text>
@@ -36,38 +38,42 @@ export function ServiceDetailRoute(props: ServiceDetailRouteProps) {
   return (
     <scrollbox height={viewportHeight} style={scrollboxStyle(theme)}>
       <box flexDirection="column" gap={1} paddingRight={1}>
+        <DashboardActionBanner confirm={props.controller.confirm} notice={props.controller.notice} pendingAction={props.controller.pendingAction} />
+
         <box border borderStyle="single" borderColor={theme.colors.borderStrong} backgroundColor={theme.colors.panelMuted} padding={1} flexDirection="column" gap={1}>
-          <text fg={theme.colors.text}><strong>{service.name}</strong></text>
-          <text fg={theme.colors.textMuted}>{service.deviceLabel} · {service.type} · {service.health || service.status || "running"}</text>
-          <text fg={theme.colors.textSubtle}>Esc back to dashboard · Tab cycles device/inspector/actions · J/K switch selected service</text>
+          <box flexDirection={wide ? "row" : "column"} justifyContent="space-between" gap={1}>
+            <box flexDirection="column" gap={0}>
+              <text fg={theme.colors.text}><strong>{service.name}</strong></text>
+              <text fg={theme.colors.textMuted}>{service.deviceLabel} · {service.type} · {service.health || service.status || "running"}{positionLabel ? ` · ${positionLabel}` : ""}</text>
+            </box>
+            <text fg={theme.colors.textSubtle}>Esc back to dashboard</text>
+          </box>
+          <FocusFrame focused={props.controller.serviceSection === "actions"}>
+            <ActionPanel controller={props.controller} />
+          </FocusFrame>
+          <text fg={theme.colors.textSubtle}>Actions first: Shift+L opens logs · S stop · R restart · T test · X delete · Left/Right choose action · Enter runs · Tab cycles panels</text>
         </box>
 
         {wide ? (
           <box flexDirection="row" gap={1}>
             <box width={leftColumnWidth} minWidth={36} flexDirection="column" gap={1}>
-              <FocusFrame focused={props.controller.serviceSection === "device"}>
-                <DeviceOverviewPane panelWidth={leftColumnWidth - 8} devices={props.controller.snapshot.devices} history={props.controller.history} selectedService={service} />
-              </FocusFrame>
-            </box>
-            <box width={rightColumnWidth} minWidth={34} flexDirection="column" gap={1}>
               <FocusFrame focused={props.controller.serviceSection === "inspector"}>
                 <ServiceInspectorPane pendingAction={props.controller.pendingAction} service={service} snapshot={props.controller.snapshot} />
               </FocusFrame>
-              <FocusFrame focused={props.controller.serviceSection === "actions"}>
-                <ActionPanel controller={props.controller} />
+            </box>
+            <box width={rightColumnWidth} minWidth={34} flexDirection="column" gap={1}>
+              <FocusFrame focused={props.controller.serviceSection === "device"}>
+                <DeviceOverviewPane compact panelWidth={rightColumnWidth - 8} devices={props.controller.snapshot.devices} history={props.controller.history} selectedService={service} />
               </FocusFrame>
             </box>
           </box>
         ) : (
           <box flexDirection="column" gap={1}>
-            <FocusFrame focused={props.controller.serviceSection === "device"}>
-              <DeviceOverviewPane panelWidth={props.contentWidth - 8} devices={props.controller.snapshot.devices} history={props.controller.history} selectedService={service} />
-            </FocusFrame>
             <FocusFrame focused={props.controller.serviceSection === "inspector"}>
               <ServiceInspectorPane pendingAction={props.controller.pendingAction} service={service} snapshot={props.controller.snapshot} />
             </FocusFrame>
-            <FocusFrame focused={props.controller.serviceSection === "actions"}>
-              <ActionPanel controller={props.controller} />
+            <FocusFrame focused={props.controller.serviceSection === "device"}>
+              <DeviceOverviewPane compact panelWidth={props.contentWidth - 8} devices={props.controller.snapshot.devices} history={props.controller.history} selectedService={service} />
             </FocusFrame>
           </box>
         )}
@@ -80,10 +86,11 @@ export function ServiceLogsRoute(props: { contentHeight: number; controller: Das
   const theme = useTheme()
   const service = props.controller.selectedService
   const routeHeight = Math.max(10, props.contentHeight)
-  const logsHeight = Math.max(8, routeHeight - 5)
+  const logsHeight = Math.max(8, routeHeight - 8)
 
   return (
     <box flexDirection="column" gap={1} height={routeHeight}>
+      <DashboardActionBanner confirm={props.controller.confirm} notice={props.controller.notice} pendingAction={props.controller.pendingAction} />
       <box border borderStyle="single" borderColor={theme.colors.borderStrong} backgroundColor={theme.colors.panelMuted} padding={1} flexDirection="column" gap={1}>
         <text fg={theme.colors.text}><strong>Logs</strong>{service ? ` · ${service.name}` : ""}</text>
         <text fg={theme.colors.textSubtle}>Esc back to service view · PgUp/PgDn scroll · F toggle follow</text>
@@ -111,7 +118,7 @@ function ActionPanel(props: { controller: DashboardController }) {
 
   return (
     <box border borderStyle="single" borderColor={theme.colors.border} backgroundColor={theme.colors.panelMuted} padding={1} flexDirection="column" gap={1}>
-      <text fg={theme.colors.text}><strong>Actions</strong></text>
+      <text fg={theme.colors.text}><strong>Service Actions</strong></text>
       <box flexDirection="row" gap={1} flexWrap="wrap">
         {ACTIONS.map((item, index) => {
           const active = props.controller.serviceActionIndex === index
@@ -121,19 +128,19 @@ function ActionPanel(props: { controller: DashboardController }) {
               border
               borderStyle={active ? "double" : "single"}
               borderColor={active ? theme.colors.borderStrong : theme.colors.border}
-              backgroundColor={active ? theme.colors.selectionBackground : theme.colors.panel}
+              backgroundColor={theme.colors.panel}
               paddingX={1}
               onMouseDown={() => {
                 props.controller.setServiceActionIndex(index)
                 props.controller.runServiceAction(item.action)
               }}
             >
-              <text fg={active ? theme.colors.selectionText : theme.colors.textMuted}>{item.label}</text>
+              <text fg={active ? theme.colors.accent : theme.colors.textMuted}>{active ? `▸ ${item.label}` : item.label}</text>
             </box>
           )
         })}
       </box>
-      <text fg={theme.colors.textSubtle}>Use Tab to focus Actions, Left/Right to choose, and Enter to run.</text>
+      <text fg={theme.colors.textSubtle}>Logs is first. Left/Right choose an action and Enter runs it.</text>
     </box>
   )
 }

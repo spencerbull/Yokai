@@ -45,7 +45,7 @@ export function TailscaleImportModal(props: TailscaleImportModalProps) {
 
         {status && status.installed && status.running ? (
           <>
-            <text fg={theme.colors.textSubtle}>Type to filter by hostname, IP, OS, or tag. Up/Down choose a peer. Enter imports it into the device form.</text>
+            <text fg={theme.colors.textSubtle}>Type to filter by hostname, DNS name, IP, OS, or tag. Up/Down choose a peer. Enter imports it into the device form.</text>
             <input
               value={props.query}
               onInput={props.onQueryChange}
@@ -53,9 +53,9 @@ export function TailscaleImportModal(props: TailscaleImportModalProps) {
               width={58}
               backgroundColor={theme.colors.panelMuted}
               textColor={theme.colors.text}
-              focusedBackgroundColor={theme.colors.selectionBackground}
-              cursorColor={theme.colors.selectionText}
-              placeholder="Filter hostname, IP, OS, or tag"
+              focusedBackgroundColor={theme.colors.panelMuted}
+              cursorColor={theme.colors.accent}
+              placeholder="Filter hostname, DNS, IP, OS, or tag"
             />
 
             {props.visiblePeers.length === 0 ? (
@@ -65,10 +65,10 @@ export function TailscaleImportModal(props: TailscaleImportModalProps) {
                 const selected = index === props.selectedIndex
                 return (
                   <box key={`${peer.hostname}-${peer.ip}`} flexDirection="column">
-                    <text fg={selected ? theme.colors.selectionText : theme.colors.textMuted} bg={selected ? theme.colors.selectionBackground : theme.colors.panel}>
-                      {selected ? "▌" : " "} {peer.recommended ? recommendedBadge() + " " : ""}{truncate(peer.hostname, 18)}
+                    <text fg={selected ? theme.colors.text : theme.colors.textMuted}>
+                      <span fg={selected ? theme.colors.accent : theme.colors.textSubtle}>{selected ? "▌" : " "}</span> {peer.recommended ? recommendedBadge() + " " : ""}{truncate(peer.hostname, 18)}
                     </text>
-                    <text fg={selected ? theme.colors.selectionText : theme.colors.textSubtle} bg={selected ? theme.colors.selectionBackground : theme.colors.panel}>
+                    <text fg={theme.colors.textSubtle}>
                       {truncate(renderPeerMeta(peer), 74)}
                     </text>
                   </box>
@@ -130,7 +130,11 @@ function InstructionBlock(props: { text: string; title: string }) {
 }
 
 function renderPeerMeta(peer: TailscalePeer) {
-  const parts = [peer.ip, peer.os || "unknown"]
+  const parts = [peer.dns_name || peer.ip]
+  if (peer.dns_name) {
+    parts.push(peer.ip)
+  }
+  parts.push(peer.os || "unknown")
   if (peer.recommended) {
     parts.push("recommended for Yokai", "tag:ai-gpu")
   }
