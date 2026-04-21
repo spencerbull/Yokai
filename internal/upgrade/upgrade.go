@@ -4,7 +4,6 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"compress/gzip"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,27 +16,20 @@ import (
 )
 
 const (
-	githubAPI   = "https://api.github.com/repos/spencerbull/yokai/releases/latest"
-	projectName = "Yokai"
-	tuiBinary   = "yokai-tui"
+	latestReleaseURL = "https://github.com/spencerbull/yokai/releases/latest"
+	repoBaseURL      = "https://github.com/spencerbull/yokai/releases/download"
+	projectName      = "Yokai"
+	tuiBinary        = "yokai-tui"
 )
 
-// Release represents a GitHub release.
+// Release represents the latest release metadata needed for upgrades.
 type Release struct {
-	TagName string  `json:"tag_name"`
-	Assets  []Asset `json:"assets"`
-}
-
-// Asset represents a release asset.
-type Asset struct {
-	Name               string `json:"name"`
-	BrowserDownloadURL string `json:"browser_download_url"`
+	TagName string
 }
 
 // Check checks for a newer version on GitHub.
 func Check(currentVersion string) (*Release, bool, error) {
-	// GET the latest release from GitHub API
-	resp, err := http.Get(githubAPI)
+	resp, err := http.Get(latestReleaseURL)
 	if err != nil {
 		return nil, false, fmt.Errorf("failed to fetch release info: %w", err)
 	}
@@ -45,19 +37,20 @@ func Check(currentVersion string) (*Release, bool, error) {
 		_ = resp.Body.Close() // Best-effort close of release API response body.
 	}()
 
+	if resp.Request == nil || resp.Request.URL == nil {
+		return nil, false, fmt.Errorf("failed to resolve latest release URL")
+	}
+
 	if resp.StatusCode != http.StatusOK {
-		return nil, false, fmt.Errorf("GitHub API returned status %d", resp.StatusCode)
+		return nil, false, fmt.Errorf("GitHub returned status %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, false, fmt.Errorf("failed to read response body: %w", err)
+	latestTag := strings.TrimPrefix(filepath.Base(resp.Request.URL.Path), "v")
+	if latestTag == "" || latestTag == "latest" {
+		return nil, false, fmt.Errorf("failed to parse latest release version from %q", resp.Request.URL.String())
 	}
 
-	var release Release
-	if err := json.Unmarshal(body, &release); err != nil {
-		return nil, false, fmt.Errorf("failed to parse release JSON: %w", err)
-	}
+	release := Release{TagName: "v" + latestTag}
 
 	// Compare tag_name with currentVersion
 	// Remove 'v' prefix if present for comparison
@@ -100,17 +93,7 @@ func Run(currentVersion string) error {
 		archiveExt,
 	)
 
-	var downloadURL string
-	for _, asset := range release.Assets {
-		if asset.Name == expectedAssetName {
-			downloadURL = asset.BrowserDownloadURL
-			break
-		}
-	}
-
-	if downloadURL == "" {
-		return fmt.Errorf("no compatible binary found for %s/%s", runtime.GOOS, runtime.GOARCH)
-	}
+	downloadURL := fmt.Sprintf("%s/%s/%s", repoBaseURL, release.TagName, expectedAssetName)
 
 	fmt.Printf("Downloading %s...\n", expectedAssetName)
 
