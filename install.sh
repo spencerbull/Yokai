@@ -87,6 +87,14 @@ curl -fsSL "$URL" -o "${TMP_DIR}/${FILENAME}" || fail "Download failed. Does v${
 tar -xzf "${TMP_DIR}/${FILENAME}" -C "$TMP_DIR"
 success "Downloaded and extracted"
 
+# Locate binaries inside the extracted archive (GoReleaser wraps in a directory)
+YOKAI_SRC=$(find "$TMP_DIR" -name "$BINARY" -type f | head -n 1)
+TUI_SRC=$(find "$TMP_DIR" -name "$TUI_BINARY" -type f | head -n 1)
+
+if [ -z "$YOKAI_SRC" ]; then
+  fail "Could not find '${BINARY}' in the downloaded archive."
+fi
+
 # ── Install ──────────────────────────────────────────────────────
 step "Installing"
 
@@ -100,13 +108,28 @@ else
   TARGET_DIR="$FALLBACK_INSTALL_DIR"
 fi
 
+install_bin() {
+  _src="$1"
+  _dst="$2"
+  if [ "$USE_SUDO" -eq 1 ]; then
+    sudo mv "$_src" "$_dst"
+    sudo chmod +x "$_dst"
+  else
+    mv "$_src" "$_dst"
+    chmod +x "$_dst"
+  fi
+}
+
 if [ "$TARGET_DIR" = "$FALLBACK_INSTALL_DIR" ]; then
   mkdir -p "$TARGET_DIR"
-  mv "${TMP_DIR}/${BINARY}" "${TARGET_DIR}/${BINARY}"
-  mv "${TMP_DIR}/${TUI_BINARY}" "${TARGET_DIR}/${TUI_BINARY}"
-  chmod +x "${TARGET_DIR}/${BINARY}"
-  chmod +x "${TARGET_DIR}/${TUI_BINARY}"
+fi
 
+install_bin "$YOKAI_SRC" "${TARGET_DIR}/${BINARY}"
+if [ -n "$TUI_SRC" ]; then
+  install_bin "$TUI_SRC" "${TARGET_DIR}/${TUI_BINARY}"
+fi
+
+if [ "$TARGET_DIR" = "$FALLBACK_INSTALL_DIR" ]; then
   # Add to PATH in shell rc files
   PATH_ADDED=0
   for rc_file in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile"; do
@@ -125,18 +148,6 @@ if [ "$TARGET_DIR" = "$FALLBACK_INSTALL_DIR" ]; then
     warn "Run 'source ~/.bashrc' or restart your shell to use yokai"
   fi
 else
-  if [ "$USE_SUDO" -eq 1 ]; then
-    info "Using sudo for ${TARGET_DIR}"
-    sudo mv "${TMP_DIR}/${BINARY}" "${TARGET_DIR}/${BINARY}"
-    sudo mv "${TMP_DIR}/${TUI_BINARY}" "${TARGET_DIR}/${TUI_BINARY}"
-    sudo chmod +x "${TARGET_DIR}/${BINARY}"
-    sudo chmod +x "${TARGET_DIR}/${TUI_BINARY}"
-  else
-    mv "${TMP_DIR}/${BINARY}" "${TARGET_DIR}/${BINARY}"
-    mv "${TMP_DIR}/${TUI_BINARY}" "${TARGET_DIR}/${TUI_BINARY}"
-    chmod +x "${TARGET_DIR}/${BINARY}"
-    chmod +x "${TARGET_DIR}/${TUI_BINARY}"
-  fi
   success "Installed to ${TARGET_DIR}/${BINARY}"
 fi
 
