@@ -65,7 +65,8 @@ success "Platform: ${OS}/${ARCH}"
 # ── Fetch latest version ────────────────────────────────────────
 step "Fetching latest release"
 
-VERSION=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name"' | sed -E 's/.*"v([^"]+)".*/\1/')
+LATEST_URL=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest")
+VERSION=$(printf '%s\n' "$LATEST_URL" | sed -nE 's#.*/tag/v([^/]+)$#\1#p')
 
 if [ -z "$VERSION" ]; then
   fail "Could not determine latest version. Check your internet connection."
