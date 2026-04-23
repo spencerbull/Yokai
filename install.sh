@@ -164,6 +164,91 @@ else
   info "Run: export PATH=\"${TARGET_DIR}:\$PATH\""
 fi
 
+# ── Restart daemon ───────────────────────────────────────────────
+# When a user reinstalls / upgrades yokai, any already-running `yokai
+# daemon` process is still executing the OLD binary and will happily
+# serve 404s for any route introduced in the new version (the TUI then
+# appears broken for no obvious reason). Stop it cleanly and restart it
+# so the installed version is what's serving /hf, /deploy, etc.
+step "Restarting daemon"
+
+find_daemon_pids() {
+  # Match processes whose argv starts with `yokai daemon` (bare or path-prefixed
+  # binary name), not arbitrary commands like `grep yokai daemon` or
+  # `man yokai daemon` that merely mention the string.
+  if command -v pgrep >/dev/null 2>&1; then
+    pgrep -f '(^|/)yokai[[:space:]]+daemon([[:space:]]|$)' 2>/dev/null || true
+  else
+    # BusyBox / minimal images may lack pgrep; fall back to ps+awk. The
+    # `[y]okai` trick keeps awk's own argv from matching itself.
+    ps -eo pid,args 2>/dev/null \
+      | awk '/(^|[[:space:]]|[/])[y]okai[[:space:]]+daemon([[:space:]]|$)/ {print $1}' \
+      || true
+  fi
+}
+
+DAEMON_PIDS=$(find_daemon_pids)
+
+if [ -n "$DAEMON_PIDS" ]; then
+  info "Stopping old daemon (PIDs: $(printf '%s' "$DAEMON_PIDS" | tr '\n' ' '))"
+  for pid in $DAEMON_PIDS; do
+    kill "$pid" 2>/dev/null || true
+  done
+
+  # Wait up to ~3s for graceful exit before escalating.
+  waited=0
+  while [ "$waited" -lt 15 ]; do
+    still_running=""
+    for pid in $DAEMON_PIDS; do
+      if kill -0 "$pid" 2>/dev/null; then
+        still_running="$pid"
+        break
+      fi
+    done
+    [ -z "$still_running" ] && break
+    sleep 0.2
+    waited=$((waited + 1))
+  done
+
+  for pid in $DAEMON_PIDS; do
+    if kill -0 "$pid" 2>/dev/null; then
+      warn "Daemon PID $pid did not exit cleanly; sending SIGKILL"
+      kill -9 "$pid" 2>/dev/null || true
+    fi
+  done
+  success "Old daemon stopped"
+
+  # Start the freshly installed binary. Running as root (typically via
+  # sudo curl | sudo sh) is the one case where auto-restart is risky —
+  # the daemon would end up owned by root with a root-owned config dir,
+  # which breaks the user's subsequent `yokai` invocations. Leave the
+  # restart to them in that case.
+  if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
+    warn "Running as root; not auto-restarting the daemon."
+    info "As ${SUDO_USER}, run:  yokai daemon &   (or just  yokai  to auto-start)"
+  else
+    DAEMON_LOG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/yokai"
+    mkdir -p "$DAEMON_LOG_DIR" 2>/dev/null || true
+    DAEMON_LOG="$DAEMON_LOG_DIR/daemon.log"
+
+    # nohup + & detaches the daemon so it survives this install script
+    # exiting. We don't use `disown` because dash (the typical /bin/sh)
+    # doesn't implement it.
+    (nohup "${TARGET_DIR}/${BINARY}" daemon >>"$DAEMON_LOG" 2>&1 &) >/dev/null 2>&1
+
+    # Give the daemon a moment to bind its port.
+    sleep 1
+
+    if [ -n "$(find_daemon_pids)" ]; then
+      success "New daemon started (logs: ${DAEMON_LOG})"
+    else
+      warn "Daemon did not start cleanly — run 'yokai daemon &' manually, or launch 'yokai'"
+    fi
+  fi
+else
+  info "No running daemon detected — nothing to restart"
+fi
+
 # ── Done ─────────────────────────────────────────────────────────
 printf "\n${GREEN}${BOLD}  ⚡ yokai v${VERSION} is ready!${NC}\n\n"
 printf "${DIM}  Quick start:${NC}\n"
