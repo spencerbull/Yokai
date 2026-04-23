@@ -157,7 +157,7 @@ export function useDeployController(active: boolean, onComplete: () => void) {
     }
 
     let cancelled = false
-    void getDeployBKC(form.workload, model)
+    void getDeployBKC(form.workload, model, form.deviceId || undefined)
       .then((config) => {
         if (!cancelled) {
           setBkc(config)
@@ -172,7 +172,7 @@ export function useDeployController(active: boolean, onComplete: () => void) {
     return () => {
       cancelled = true
     }
-  }, [active, form.model, form.workload])
+  }, [active, form.deviceId, form.model, form.workload])
 
   useEffect(() => {
     if (!notice) {
