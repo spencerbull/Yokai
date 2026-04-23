@@ -1,0 +1,121 @@
+package bkc
+
+import "strings"
+
+func init() {
+	register(
+		Config{
+			ID:       "gemma-4-e2b-it",
+			Name:     "Gemma 4 E2B Instruct",
+			Workload: WorkloadVLLM,
+			ModelID:  "google/gemma-4-E2B-it",
+			Image:    imageVLLMGemma4Cu,
+			Port:     "8000",
+			ExtraArgs: strings.Join([]string{
+				"--max-model-len 32768",
+				"--limit-mm-per-prompt image=4,video=1",
+			}, " "),
+			Volumes:         hfMountDefault,
+			Runtime:         runtimeDefault,
+			Description:     "Gemma 4 E2B multimodal — runs on any 12 GB+ NVIDIA GPU.",
+			Source:          "vllm-project/recipes Google/Gemma4.md",
+			TargetDevices:   []string{DeviceRTX4090, DeviceRTX5090, DeviceL40S, DeviceA100_80, DeviceH100_80, DeviceH200, DeviceB200, DeviceRTXPRO6000, DeviceGB10},
+			MinVRAMGBPerGPU: 12,
+			MinGPUCount:     1,
+			Quantization:    QuantBF16,
+			Arch:            ArchHopper,
+		},
+
+		Config{
+			ID:       "gemma-4-e4b-it",
+			Name:     "Gemma 4 E4B Instruct",
+			Workload: WorkloadVLLM,
+			ModelID:  "google/gemma-4-E4B-it",
+			Image:    imageVLLMGemma4Cu,
+			Port:     "8000",
+			ExtraArgs: strings.Join([]string{
+				"--max-model-len 131072",
+			}, " "),
+			Volumes:         hfMountDefault,
+			Runtime:         runtimeDefault,
+			Description:     "Gemma 4 E4B Instruct — single-GPU default, up to 131 k context.",
+			Source:          "vllm-project/recipes Google/Gemma4.md",
+			TargetDevices:   []string{DeviceRTX4090, DeviceRTX5090, DeviceL40S, DeviceA100_80, DeviceH100_80, DeviceH200, DeviceB200, DeviceRTXPRO6000, DeviceGB10},
+			MinVRAMGBPerGPU: 16,
+			MinGPUCount:     1,
+			Quantization:    QuantBF16,
+			Arch:            ArchHopper,
+		},
+
+		Config{
+			ID:       "gemma-4-26b-a4b-it",
+			Name:     "Gemma 4 26B A4B Instruct",
+			Workload: WorkloadVLLM,
+			ModelID:  "google/gemma-4-26B-A4B-it",
+			Image:    imageVLLMGemma4Cu,
+			Port:     "8000",
+			ExtraArgs: strings.Join([]string{
+				"--max-model-len 32768",
+				"--gpu-memory-utilization 0.90",
+			}, " "),
+			Volumes:         hfMountDefault,
+			Runtime:         runtimeDefault,
+			Description:     "Gemma 4 26B A4B MoE single-GPU default (80 GB+).",
+			Source:          "vllm-project/recipes Google/Gemma4.md",
+			TargetDevices:   []string{DeviceA100_80, DeviceH100_80, DeviceH200, DeviceB200, DeviceRTXPRO6000, DeviceGB10},
+			MinVRAMGBPerGPU: 64,
+			MinGPUCount:     1,
+			Quantization:    QuantBF16,
+			Arch:            ArchHopper,
+		},
+
+		Config{
+			ID:       "gemma-4-31b-it",
+			Name:     "Gemma 4 31B Instruct",
+			Workload: WorkloadVLLM,
+			ModelID:  "google/gemma-4-31B-it",
+			Image:    imageVLLMGemma4Cu,
+			Port:     "8000",
+			ExtraArgs: strings.Join([]string{
+				"--tensor-parallel-size 2",
+				"--max-model-len 32768",
+				"--gpu-memory-utilization 0.90",
+				"--enable-auto-tool-choice",
+				"--tool-call-parser gemma4",
+				"--reasoning-parser gemma4",
+			}, " "),
+			Volumes:         hfMountDefault,
+			Runtime:         runtimeDefault,
+			Description:     "Gemma 4 31B Instruct on 2x 80 GB GPUs with tool-calling.",
+			Source:          "vllm-project/recipes Google/Gemma4.md",
+			TargetDevices:   []string{DeviceA100_80, DeviceH100_80, DeviceH200, DeviceB200, DeviceRTXPRO6000},
+			MinVRAMGBPerGPU: 40,
+			MinGPUCount:     2,
+			Quantization:    QuantBF16,
+			Arch:            ArchHopper,
+		},
+
+		// TranslateGemma 27B — based on Gemma 2 27B finetune used via the cu130 image.
+		Config{
+			ID:       "translategemma-27b-it",
+			Name:     "TranslateGemma 27B Instruct",
+			Workload: WorkloadVLLM,
+			ModelID:  "google/translategemma-27b-it",
+			Image:    imageVLLMCU130,
+			Port:     "8000",
+			ExtraArgs: strings.Join([]string{
+				"--tensor-parallel-size 1",
+				"--max-model-len 8192",
+			}, " "),
+			Volumes:         hfMountDefault,
+			Runtime:         runtimeDefault,
+			Description:     "Translation-tuned Gemma 27B — single-GPU default.",
+			Source:          "vllm-project/recipes Google/TranslateGemma.md",
+			TargetDevices:   []string{DeviceA100_80, DeviceH100_80, DeviceH200, DeviceB200, DeviceRTXPRO6000, DeviceGB10},
+			MinVRAMGBPerGPU: 60,
+			MinGPUCount:     1,
+			Quantization:    QuantBF16,
+			Arch:            ArchHopper,
+		},
+	)
+}

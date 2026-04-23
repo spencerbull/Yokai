@@ -18,22 +18,27 @@ type deployBKCResponse struct {
 }
 
 type deployBKCRecord struct {
-	ID          string            `json:"id"`
-	Name        string            `json:"name"`
-	Workload    string            `json:"workload"`
-	ModelID     string            `json:"model_id"`
-	Image       string            `json:"image"`
-	Port        string            `json:"port"`
-	ExtraArgs   string            `json:"extra_args"`
-	Env         map[string]string `json:"env"`
-	Volumes     map[string]string `json:"volumes"`
-	Plugins     []string          `json:"plugins"`
-	Runtime     map[string]any    `json:"runtime"`
-	Description string            `json:"description"`
-	MatchType   string            `json:"match_type"`
-	Source      string            `json:"source"`
-	Notes       []string          `json:"notes"`
-	Warning     string            `json:"warning,omitempty"`
+	ID              string            `json:"id"`
+	Name            string            `json:"name"`
+	Workload        string            `json:"workload"`
+	ModelID         string            `json:"model_id"`
+	Image           string            `json:"image"`
+	Port            string            `json:"port"`
+	ExtraArgs       string            `json:"extra_args"`
+	Env             map[string]string `json:"env"`
+	Volumes         map[string]string `json:"volumes"`
+	Plugins         []string          `json:"plugins"`
+	Runtime         map[string]any    `json:"runtime"`
+	Description     string            `json:"description"`
+	MatchType       string            `json:"match_type"`
+	Source          string            `json:"source"`
+	Notes           []string          `json:"notes"`
+	Warning         string            `json:"warning,omitempty"`
+	TargetDevices   []string          `json:"target_devices,omitempty"`
+	MinVRAMGBPerGPU float64           `json:"min_vram_gb_per_gpu,omitempty"`
+	MinGPUCount     int               `json:"min_gpu_count,omitempty"`
+	Quantization    string            `json:"quantization,omitempty"`
+	Arch            string            `json:"arch,omitempty"`
 }
 
 type vllmMemoryEstimateRequest struct {
@@ -73,6 +78,8 @@ type liveDeviceMetricsPayload struct {
 func (d *Daemon) handleDeployBKC(w http.ResponseWriter, r *http.Request) {
 	workload := strings.TrimSpace(r.URL.Query().Get("workload"))
 	model := strings.TrimSpace(r.URL.Query().Get("model"))
+	deviceID := strings.TrimSpace(r.URL.Query().Get("device_id"))
+	deviceProfile := strings.TrimSpace(r.URL.Query().Get("device_profile"))
 	if workload == "" || model == "" {
 		writeJSON(w, http.StatusOK, deployBKCResponse{})
 		return
@@ -94,6 +101,22 @@ func (d *Daemon) handleDeployBKC(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, deployBKCResponse{})
 		return
 	}
+
+	// When the UI supplied a device, prefer a device-aware variant so GB10 and
+	// RTX PRO 6000 users get the right container image / flag set.
+	if matchType == bkc.MatchExact {
+		vramGB, gpuCount := 0.0, 0
+		if deviceID != "" {
+			if gpus, err := d.fetchDeployGPUs(deviceID); err == nil && len(gpus) > 0 {
+				vramGB = smallestVRAMGB(gpus)
+				gpuCount = len(gpus)
+			}
+		}
+		if picked, found := bkc.LookupForDevice(target, model, deviceProfile, vramGB, gpuCount); found {
+			cfg = picked
+		}
+	}
+
 	warning := ""
 	if matchType == bkc.MatchSuggested {
 		warning = "Suggested BKC for a similar model. Review image, port, and flags before deploying."
@@ -115,11 +138,16 @@ func (d *Daemon) handleDeployBKC(w http.ResponseWriter, r *http.Request) {
 			"shm_size": cfg.Runtime.ShmSize,
 			"ulimits":  cfg.Runtime.Ulimits,
 		},
-		Description: cfg.Description,
-		MatchType:   string(matchType),
-		Source:      cfg.Source,
-		Notes:       cfg.Notes,
-		Warning:     warning,
+		Description:     cfg.Description,
+		MatchType:       string(matchType),
+		Source:          cfg.Source,
+		Notes:           cfg.Notes,
+		Warning:         warning,
+		TargetDevices:   cfg.TargetDevices,
+		MinVRAMGBPerGPU: cfg.MinVRAMGBPerGPU,
+		MinGPUCount:     cfg.MinGPUCount,
+		Quantization:    cfg.Quantization,
+		Arch:            cfg.Arch,
 	}})
 }
 

@@ -65,6 +65,11 @@ export type DeployBKC = {
   source: string
   notes: string[]
   warning?: string
+  target_devices?: string[]
+  min_vram_gb_per_gpu?: number
+  min_gpu_count?: number
+  quantization?: string
+  arch?: string
 }
 
 export type VLLMMemoryEstimate = {
