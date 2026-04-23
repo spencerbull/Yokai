@@ -7,19 +7,36 @@
 
 **One binary to deploy, monitor, and manage LLM inference across all your GPUs.**
 
-yokai is a terminal-based fleet manager for running **vLLM**, **llama.cpp**, and **ComfyUI** on any number of GPU machines. Connect your devices, deploy models through a guided wizard, and watch everything on a btop-style dashboard -- all from a single binary with zero dependencies on the target machines.
+yokai is a terminal-based fleet manager for running **vLLM**, **llama.cpp**, and **ComfyUI** on any number of GPU machines. Connect your devices, deploy curated Best-Known-Configs (or roll your own through a guided wizard), and watch everything on a btop-style dashboard -- all from a single binary with zero dependencies on the target machines.
 
 ```
-╭─ yokai ──────────────────────────────────────────────────── 2 devices ─╮
-│ ╭─ gaming-rig · 100.64.0.2 ● ──────────────────────────────────────────╮ │
-│ │ GPU 0: RTX 4090  Util 87% [█████████████████░░░]  VRAM 20.1/24.0 GB │ │
-│ ╰──────────────────────────────────────────────────────────────────────╯ │
-│ ╭─ Services ───────────────────────────────────────────────────────────╮ │
-│ │▸ vLLM  Llama-3.1-8B-Instruct  gaming-rig  ● live  :8000  142 t/s  │ │
-│ │  llama.cpp  Mistral-7B-Q4_K_M  gaming-rig  ● live  :8080   38 t/s  │ │
-│ ╰──────────────────────────────────────────────────────────────────────╯ │
-│ n new  s stop  l logs  d devices  g grafana  c ai tools  ? help  q quit │
-╰──────────────────────────────────────────────────────────────────────────╯
+ ┌───────────┐ ╔══════════════════╗ ┌──────────────┐ ┌─────────────┐ ┌───────────────┐
+ │  G. Home  │ ║  ▸ 1. Dashboard  ║ │  2. Devices  │ │  3. Deploy  │ │  4. Settings  │
+ └───────────┘ ╚══════════════════╝ └──────────────┘ └─────────────┘ └───────────────┘
+
+ ╭────────────────────────────────────────────────────────────────────────────────────╮
+ │ Dashboard                                                                          │
+ │ Fleet services, inspector details, and contextual live logs.                       │
+ │                                                                                    │
+ │ ┌─ AI Fleet ───────────────────────────────────────────────────────────────────┐   │
+ │ │ GPU  73%  ▁▂▃▅▆▇█▇▆▅▆▇█▇▆▅▆▇█▇▆▅▆▇█▇▆▅▆▇█▇▆▅▆▇█▇▆▅▆▇█▇▆▅▆▇█▇▆▅▆▇█▇▆▅▆▇█▇▆ │   │
+ │ │ VRAM 84%  20.1 / 24.0 GB                                                     │   │
+ │ │ GPUs 2 active / 2 total · Svc 3 total · 0 alert(s)                           │   │
+ │ └──────────────────────────────────────────────────────────────────────────────┘   │
+ │                                                                                    │
+ │ ╔═ AI Services [2] ════════════════════════════════════════════════════════════╗   │
+ │ ║ ▌ vllm-llama-3.1-8b      · Gaming Rig   · live                               ║   │
+ │ ║ ●  llamacpp-mistral-7b   · Gaming Rig   · live                               ║   │
+ │ ╚══════════════════════════════════════════════════════════════════════════════╝   │
+ │                                                                                    │
+ │ ┌─ Monitoring Services [1] ────────────────────────────────────────────────────┐   │
+ │ │ ●  grafana                · Gaming Rig   · live                              │   │
+ │ └──────────────────────────────────────────────────────────────────────────────┘   │
+ ╰────────────────────────────────────────────────────────────────────────────────────╯
+
+ ╭────────────────────────────────────────────────────────────────────────────────────╮
+ │ G home  |  Tab next section  |  Shift+Tab previous section  |  1-4 jump            │
+ ╰────────────────────────────────────────────────────────────────────────────────────╯
 ```
 
 ---
@@ -46,10 +63,13 @@ yokai solves all of this with a single binary. Install it, point it at your mach
 - **Secure by default** -- auto-generated bearer tokens for agent authentication, SSH key resolution with agent/key/password fallback
 
 ### Workload Deployment
-- **Guided deploy wizard** -- 5-step flow: pick workload type, target device, Docker image, model, and configuration
+- **Best Known Configs (BKC)** -- pick from a built-in catalog of pre-validated vLLM and llama.cpp deploys grouped by vendor (NVIDIA, OpenAI, Meta/Llama, Google, Mistral, Qwen, DeepSeek, GLM, Moonshot, Microsoft, and more) and filtered to the GPUs each device actually has
+- **Guided deploy wizard** -- pick workload type, target device, Docker image, model, and runtime config when you want to deviate from the catalog
 - **HuggingFace integration** -- search models directly, browse GGUF quantizations, auto-download during deployment
+- **VRAM estimator** -- `hf-mem`-backed memory estimate for vLLM weights + KV cache before you commit to a deploy
 - **Docker image catalog** -- browse official tags from Docker Hub and GHCR, including nightly builds
-- **GPU-aware deployment** -- automatic `--gpus` flag configuration, VRAM estimation, multi-GPU tensor parallelism support
+- **Plugin system** -- model-specific add-ons (e.g. Nemotron Super V3 reasoning parser) that fetch assets, mount them into the container, and append the right runtime flags
+- **GPU-aware deployment** -- automatic `--gpus` flag configuration, multi-GPU tensor parallelism support
 
 ### Live Monitoring
 - **btop-style dashboard** -- live GPU utilization, VRAM, temperature, power draw, and fan speed per GPU
@@ -58,21 +78,23 @@ yokai solves all of this with a single binary. Install it, point it at your mach
 - **Service lifecycle** -- stop, restart, and remove containers directly from the dashboard
 
 ### Monitoring Stack
-- **Auto-deployed** -- Prometheus + Grafana + node_exporter + dcgm-exporter deployed during device bootstrap
+- **Auto-provisioned** -- Prometheus + Grafana + node_exporter + dcgm-exporter seeded onto each device during bootstrap, with the agent bearer token wired in for authenticated scrapes
 - **Pre-built dashboards** -- Grafana dashboard with GPU utilization, temperature, power, and system metrics panels
-- **One-key access** -- press `g` to open Grafana in your browser
+- **Live in the dashboard** -- the monitoring stack shows up as its own services panel alongside your AI workloads
 
 ### AI Coding Tool Integration
-- **One-key config** -- press `c` to auto-configure all supported AI coding tools at once
-- **VS Code Copilot** -- writes OpenAI-compatible endpoints into your VS Code `settings.json`
-- **OpenCode** -- configures `.opencode.json` with yokai as a local model provider
+- **One-shot config** -- the Settings route auto-configures every supported AI coding tool at once
+- **VS Code Copilot** -- appends OpenAI-compatible models to `chat.models[]` in the VS Code user `settings.json`
+- **OpenCode** -- registers a per-host provider in `~/.config/opencode/opencode.json` via `@ai-sdk/openai-compatible`
 - **OpenClaw** -- adds a yokai provider under `models.providers` in `~/.openclaw/openclaw.json`
-- **Backup-safe** -- creates a `.yokai.bak` backup of each config before modifying
-- **Multi-endpoint** -- registers all running inference services as available endpoints
+- **Claude Code** -- writes `ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL`, and `ANTHROPIC_CUSTOM_MODEL_OPTION` into `~/.claude/settings.json`
+- **Codex** -- adds a `[model_providers.yokai]` section to `~/.codex/config.toml`
+- **Backup-safe** -- writes a `.yokai.bak` of every config before modifying it
+- **Multi-endpoint** -- registers every running inference service as an available endpoint
 
 ### Self-Updating
 - **`yokai upgrade`** -- checks GitHub Releases, downloads the correct binary for your OS/arch, and replaces itself in place
-- **Cross-platform** -- builds for Linux (amd64/arm64) and macOS (arm64)
+- **Cross-platform** -- builds for Linux, macOS, and Windows (amd64 + arm64)
 - **One-line install** -- `curl | sh` installer that detects your platform automatically
 
 ---
@@ -110,7 +132,7 @@ yokai
 # 3. Enter SSH credentials -- yokai tests the connection
 # 4. Bootstrap runs: pre-flight checks → agent deploy → monitoring stack
 # 5. Set up your HuggingFace token (optional, for gated models)
-# 6. You're on the dashboard -- press 'n' to deploy your first model
+# 6. Tab over to "Deploy" and pick a Best-Known-Config to run your first model
 ```
 
 ### Running the Daemon
@@ -131,61 +153,111 @@ yokai
 
 ### Commands
 
+**Core**
+
 | Command | Description |
 |---|---|
-| `yokai` | Launch OpenTUI (default) |
+| `yokai` | Launch OpenTUI (default; auto-starts the daemon) |
 | `yokai agent [port]` | Run the agent on a target device (default port: 7474) |
-| `yokai daemon` | Start the local background daemon |
+| `yokai daemon` | Start the local background daemon (default `127.0.0.1:7473`) |
 | `yokai upgrade` | Update to the latest release |
 | `yokai version` | Print version and build info |
 
-### Dashboard Keybinds
+**Device management**
+
+| Command | Description |
+|---|---|
+| `yokai devices list` | List all configured devices |
+| `yokai devices add --host <host> [flags]` | Add a device |
+| `yokai devices remove <device-id>` | Remove a device |
+| `yokai devices test <device-id>` | Test SSH + agent connectivity |
+| `yokai devices bootstrap <device-id>` | Install or upgrade the agent on a device |
+
+**Service management**
+
+| Command | Description |
+|---|---|
+| `yokai services list [--device <id>]` | List containers across the fleet (or one device) |
+| `yokai services deploy --device <id> [flags]` | Deploy a service |
+| `yokai services stop <device-id> <cid>` | Stop a container |
+| `yokai services restart <device-id> <cid>` | Restart a container |
+| `yokai services logs [--follow] <did> <cid>` | Stream container logs |
+
+**Fleet status & config**
+
+| Command | Description |
+|---|---|
+| `yokai status` | Fleet overview (JSON) |
+| `yokai metrics [--device <id>]` | Detailed device metrics (JSON) |
+| `yokai config show` | Dump config (tokens redacted) |
+| `yokai config set <key> <value>` | Set a config value |
+| `yokai config path` | Print the config file path |
+
+All non-TUI commands emit JSON on stdout and JSON-formatted errors on stderr, so they're scriptable from shell or another tool.
+
+### Keybinds
+
+**Global**
 
 | Key | Action |
 |---|---|
-| `n` | Deploy a new service |
-| `s` | Stop selected service |
-| `r` | Restart selected service |
-| `l` | View logs for selected service |
-| `d` | Open device manager |
-| `g` | Open Grafana in browser |
-| `c` | Configure AI coding tools (VS Code, OpenCode, OpenClaw) |
-| `?` | Show help overlay |
-| `j`/`k` | Navigate service list |
-| `q` | Quit |
+| `Tab` / `Shift+Tab` | Cycle between Dashboard / Devices / Deploy / Settings |
+| `1` … `4` | Jump to a top-level route by number |
+| `g` | Return to the landing screen |
+| `Esc` (twice) or `Ctrl+C` (twice) | Quit |
+
+**Dashboard**
+
+| Key | Action |
+|---|---|
+| `j` / `k` (or `↑` / `↓`) | Move selection within the service list |
+| `Tab` | Switch between AI services and the monitoring stack |
+| `Enter` or `l` | Open the selected service's detail view |
+| `Shift+L` | Open logs for the selected service |
+| `s` / `r` / `t` / `x` | Stop / restart / test / delete (in service detail) |
+| `y` / `n` | Confirm or cancel a destructive action |
 
 ---
 
 ## How It Works
 
-yokai uses a three-tier architecture: **TUI** (what you see), **Daemon** (runs locally), and **Agent** (runs on each GPU device).
+yokai uses a three-tier architecture: **OpenTUI** (what you see, a TypeScript app rendered in your terminal), the **Daemon** (runs locally and brokers everything), and the **Agent** (runs on each GPU device).
 
 ```
 Your Machine                              GPU Device(s)
 ┌──────────────────────┐                  ┌──────────────────────┐
-│                      │                  │  yokai agent         │
-│  yokai (TUI)         │   HTTP :7473     │  ├── REST API :7474  │
-│  ├── Dashboard       │◄───────────────► │  ├── nvidia-smi      │
-│  ├── Deploy Wizard   │                  │  ├── Docker engine   │
-│  ├── Device Manager  │                  │  └── System metrics  │
-│  └── Log Viewer      │                  │                      │
-│                      │                  │  Docker containers   │
-│  yokai daemon        │   SSH tunnel     │  ├── vLLM :8000      │
-│  ├── SSH Tunnels     │◄═══════════════► │  ├── llama.cpp :8080 │
-│  ├── Metrics Agg.    │                  │  └── ComfyUI :8188   │
-│  └── Command Proxy   │                  │                      │
-│                      │                  │  Monitoring stack    │
-│  ~/.config/yokai/    │                  │  ├── Prometheus      │
-│  └── config.json     │                  │  ├── Grafana         │
-└──────────────────────┘                  │  └── Exporters       │
-                                          └──────────────────────┘
+│  OpenTUI (Bun/Node)  │                  │  yokai agent         │
+│  ├── Dashboard       │   HTTP :7473     │  ├── REST API :7474  │
+│  ├── Deploy Wizard   │◄───────────────► │  ├── nvidia-smi      │
+│  ├── Device Manager  │                  │  ├── Docker engine   │
+│  └── Log Viewer      │                  │  └── System metrics  │
+│         ▲            │                  │                      │
+│         │ launches   │                  │  Docker containers   │
+│         ▼            │   SSH tunnel     │  ├── vLLM :8000      │
+│  yokai daemon        │◄═══════════════► │  ├── llama.cpp :8080 │
+│  ├── SSH Tunnels     │                  │  └── ComfyUI :8188   │
+│  ├── Metrics Agg.    │                  │                      │
+│  ├── BKC Catalog     │                  │  Monitoring stack    │
+│  ├── HF + hf-mem     │                  │  ├── Prometheus      │
+│  └── Tool Configs    │                  │  ├── Grafana         │
+│                      │                  │  ├── node_exporter   │
+│  ~/.config/yokai/    │                  │  └── dcgm-exporter   │
+│  └── config.json     │                  │                      │
+└──────────────────────┘                  └──────────────────────┘
 ```
 
-**Data flow:**
-1. The **daemon** opens SSH tunnels to each device and creates local port forwards to each agent
-2. Every 2 seconds, the daemon polls each agent's `/metrics` endpoint and caches the results
-3. The **TUI** reads from the daemon's REST API (`localhost:7473`) and renders the dashboard
-4. Deploy and lifecycle commands (stop/restart/remove) flow from TUI -> daemon -> agent -> Docker
+**Launch sequence**
+
+1. `yokai` checks whether the daemon is healthy; if not, it spawns `yokai daemon` in the background and waits for `/health`
+2. It then runs the bundled `yokai-tui` binary (preferred) or, if you're on a dev checkout with `bun` installed, `bun run src/index.tsx` from `ui/tui/` -- the daemon URL is passed via `YOKAI_DAEMON_URL`
+3. The TUI talks to the daemon over HTTP on `127.0.0.1:7473`
+
+**Data flow**
+
+1. The daemon opens SSH tunnels to each device and forwards a local port to each agent's `:7474` REST API
+2. Every few seconds it polls each agent's `/metrics` endpoint and caches the results in memory
+3. The TUI reads aggregated metrics from the daemon and renders the dashboard
+4. Deploy and lifecycle commands (deploy/stop/restart/remove/logs) flow TUI -> daemon -> agent -> Docker
 
 ---
 
@@ -211,7 +283,9 @@ All state lives in `~/.config/yokai/config.json`. Copy this file to another mach
       "connection_type": "tailscale",
       "agent_port": 7474,
       "agent_token": "a1b2c3...",
-      "gpu_type": "nvidia"
+      "gpu_type": "nvidia",
+      "tags": ["rtx-4090"],
+      "monitoring_installed": true
     }
   ],
   "services": [
@@ -221,7 +295,9 @@ All state lives in `~/.config/yokai/config.json`. Copy this file to another mach
       "type": "vllm",
       "image": "vllm/vllm-openai:latest",
       "model": "meta-llama/Llama-3.1-8B-Instruct",
-      "port": 8000
+      "port": 8000,
+      "plugins": [],
+      "runtime": { "ipc_mode": "host", "shm_size": "16g" }
     }
   ],
   "preferences": {
@@ -272,6 +348,7 @@ Detailed multi-level architecture docs are available in the [`architecture/`](ar
 | L4 | [Network Topology](architecture/04-network-topology.md) | SSH tunnels, ports, authentication, Tailscale |
 | L5 | [TUI Screen Map](architecture/05-tui-screen-map.md) | View hierarchy and navigation state machine |
 | L6 | [Agent API](architecture/06-agent-api.md) | Full REST API contract with JSON schemas |
+| L7 | [Daemon UI API](architecture/07-daemon-ui-api.md) | Daemon REST API consumed by OpenTUI |
 
 ---
 
@@ -279,28 +356,42 @@ Detailed multi-level architecture docs are available in the [`architecture/`](ar
 
 ```
 yokai/
-├── cmd/yokai/          # Binary entry point and subcommand routing
+├── cmd/yokai/             # Binary entry point and subcommand dispatch
 ├── internal/
-│   ├── agent/             # Remote agent: REST API, Docker ops, system metrics
-│   ├── config/            # Config load/save/migrate (~/.config/yokai/)
-│   ├── daemon/            # Local daemon: SSH tunnels, metrics aggregation
-│   ├── docker/            # Docker Hub/GHCR tag catalog, Compose generation
+│   ├── agent/             # Remote agent: REST API, Docker ops, system metrics (port :7474)
+│   ├── bkc/               # Best Known Configs catalog (per-vendor catalog_*.go files)
+│   ├── claudecode/        # Claude Code (~/.claude/settings.json) endpoint registration
+│   ├── cli/               # Non-TUI subcommand handlers (devices/services/status/metrics/config)
+│   ├── codex/             # Codex (~/.codex/config.toml) endpoint registration
+│   ├── config/            # Config load/save/migrate, deploy history (~/.config/yokai/)
+│   ├── daemon/            # Local daemon: REST API (:7473), SSH tunnels, metrics aggregation
+│   ├── docker/            # Docker Hub/GHCR tag catalog and image helpers
 │   ├── hf/                # HuggingFace API: model search, GGUF listing
+│   ├── hfmem/             # `hf-mem` wrapper for vLLM weight + KV-cache memory estimation
+│   ├── monitoring/        # Provisions Prometheus/Grafana/exporters onto remote devices
+│   ├── openclaw/          # OpenClaw openclaw.json provider registration
+│   ├── opencode/          # OpenCode opencode.json provider registration
+│   ├── opentui/           # OpenTUI launcher (daemon health check + bundled/Bun spawn)
+│   ├── platform/          # Cross-platform shims (e.g. chmod no-op on Windows)
+│   ├── plugins/           # Plugin catalog: assets, mounts, runtime-flag overrides per model
 │   ├── ssh/               # SSH client, SCP upload, bootstrap/deploy
 │   ├── tailscale/         # Tailscale CLI wrapper for peer discovery
-│   ├── tui/               # Bubbletea app shell and view router
-│   │   ├── components/    # Reusable widgets (metrics bar, sparkline, GPU panel)
-│   │   ├── theme/         # Tokyo Night color palette and styles
-│   │   └── views/         # All TUI screens (dashboard, deploy, devices, etc.)
-│   ├── openclaw/           # OpenClaw openclaw.json provider config
-│   ├── opencode/           # OpenCode .opencode.json provider config
-│   ├── upgrade/            # Self-update from GitHub Releases
-│   └── vscode/             # VS Code settings.json manipulation
+│   ├── upgrade/           # Self-update from GitHub Releases
+│   └── vscode/            # VS Code settings.json (chat.models[]) manipulation
+├── ui/tui/                # OpenTUI: TypeScript/React TUI run by Bun
+│   ├── src/
+│   │   ├── app/           # App shell and routing
+│   │   ├── contracts/     # Daemon API types
+│   │   ├── features/      # Dashboard, deploy, devices, logs, integrations, etc.
+│   │   ├── services/      # Daemon HTTP client
+│   │   └── theme/         # Color palette and styles
+│   └── package.json
 ├── assets/
 │   ├── grafana/           # Pre-built dashboard JSON and provisioning
 │   ├── prometheus/        # Prometheus scrape configuration
 │   └── systemd/           # Agent systemd service template
 ├── architecture/          # Multi-level architecture documentation
+├── docker/                # Reference Dockerfiles (e.g. comfyui/)
 ├── .github/workflows/     # CI (build/test/lint) and release (GoReleaser)
 ├── .goreleaser.yml        # Cross-compilation and release config
 ├── install.sh             # curl-pipe-sh installer
