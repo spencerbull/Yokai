@@ -79,30 +79,40 @@ type ParsedGGUFName struct {
 }
 
 // ParseGGUFFilename extracts the quantization and shard info from a GGUF
-// filename. The filename may include directory components; only the basename
-// is considered.
+// filename. The filename may include directory components; the directory
+// prefix is preserved in Base so files in different folders do not collide
+// during variant grouping (HuggingFace repos are listed recursively and
+// commonly keep one quant per subdirectory).
 func ParseGGUFFilename(filename string) ParsedGGUFName {
-	base := filename
-	if idx := strings.LastIndex(base, "/"); idx >= 0 {
-		base = base[idx+1:]
+	dir := ""
+	name := filename
+	if idx := strings.LastIndex(filename, "/"); idx >= 0 {
+		dir = filename[:idx+1]
+		name = filename[idx+1:]
 	}
 
-	parsed := ParsedGGUFName{Base: base}
+	parsed := ParsedGGUFName{Base: dir + name}
 
-	if match := shardSuffixPattern.FindStringSubmatchIndex(base); match != nil {
-		idx, _ := strconv.Atoi(base[match[2]:match[3]])
-		total, _ := strconv.Atoi(base[match[4]:match[5]])
+	if match := shardSuffixPattern.FindStringSubmatchIndex(name); match != nil {
+		idx, _ := strconv.Atoi(name[match[2]:match[3]])
+		total, _ := strconv.Atoi(name[match[4]:match[5]])
 		parsed.ShardIndex = idx
 		parsed.ShardTotal = total
 		// Strip the shard suffix so siblings group together. Preserve the
-		// `.gguf` extension on the base key.
-		parsed.Base = base[:match[0]] + ".gguf"
+		// `.gguf` extension and the directory prefix.
+		parsed.Base = dir + name[:match[0]] + ".gguf"
 	}
 
-	// Run the quant match against the full original name (including shard
-	// suffix) since the quant label usually sits before the shard suffix.
-	if match := quantTokenPattern.FindStringSubmatch(base); len(match) == 2 {
+	// Prefer the quant label from the basename, but fall back to the
+	// directory component — HuggingFace repos frequently name the folder
+	// after the quant (e.g. `Q4_K_M/model-00001-of-00002.gguf`) and give the
+	// shard files a generic `model-` prefix.
+	if match := quantTokenPattern.FindStringSubmatch(name); len(match) == 2 {
 		parsed.Quantization = canonicalizeQuant(match[1])
+	} else if dir != "" {
+		if match := quantTokenPattern.FindStringSubmatch(dir); len(match) == 2 {
+			parsed.Quantization = canonicalizeQuant(match[1])
+		}
 	}
 
 	return parsed

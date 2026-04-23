@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -33,9 +34,12 @@ func modelDirName(modelID string) string {
 }
 
 // ensureGGUFFiles downloads every shard in req.GGUFFiles from HuggingFace to
-// the agent's local models directory. It returns the container-visible path
-// to the primary shard (the one that should be passed to the inference
-// runtime's --model flag).
+// the agent's local models directory, preserving the repo's relative
+// directory structure so two files with the same basename in different
+// folders (common in repos that split one quant per directory) do not
+// overwrite each other. It returns the container-visible path to the primary
+// shard (the one that should be passed to the inference runtime's --model
+// flag).
 //
 // Already-downloaded shards are reused in place. Empty GGUFFiles is a no-op
 // and returns an empty path.
@@ -54,20 +58,65 @@ func ensureGGUFFiles(req *ContainerRequest) (string, error) {
 	}
 
 	dl := hf.NewDownloader(req.HFToken)
-	for _, filename := range req.GGUFFiles {
-		clean := strings.TrimSpace(filename)
-		if clean == "" {
+	primaryRel := ""
+	for i, filename := range req.GGUFFiles {
+		rel, err := sanitizeRepoPath(filename)
+		if err != nil {
+			return "", err
+		}
+		if rel == "" {
 			continue
 		}
-		dest := filepath.Join(hostBase, filepath.Base(clean))
-		log.Printf("GGUF download: %s/%s -> %s", req.Model, clean, dest)
-		if err := dl.Download(req.Model, clean, dest); err != nil {
-			return "", fmt.Errorf("downloading %s: %w", clean, err)
+		dest := filepath.Join(hostBase, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+			return "", fmt.Errorf("creating %s: %w", filepath.Dir(dest), err)
+		}
+		log.Printf("GGUF download: %s/%s -> %s", req.Model, rel, dest)
+		if err := dl.Download(req.Model, rel, dest); err != nil {
+			return "", fmt.Errorf("downloading %s: %w", rel, err)
+		}
+		if i == 0 {
+			primaryRel = rel
 		}
 	}
 
-	primary := filepath.Base(strings.TrimSpace(req.GGUFFiles[0]))
-	return filepath.Join(ggufContainerDir, subdir, primary), nil
+	if primaryRel == "" {
+		return "", nil
+	}
+	// Container path uses forward slashes regardless of the agent host OS.
+	return path.Join(ggufContainerDir, subdir, primaryRel), nil
+}
+
+// sanitizeRepoPath validates and normalizes a HuggingFace repo-relative path
+// before it is joined against a host directory. Rejects empty strings,
+// absolute paths, `..` segments, and Windows-style drive prefixes so a
+// malicious deploy request cannot escape the agent's models directory.
+func sanitizeRepoPath(p string) (string, error) {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return "", nil
+	}
+	// HuggingFace paths are always forward-slash; reject backslashes outright
+	// rather than silently normalising them.
+	if strings.ContainsRune(p, '\\') {
+		return "", fmt.Errorf("invalid gguf path %q: contains backslash", p)
+	}
+	if strings.HasPrefix(p, "/") {
+		return "", fmt.Errorf("invalid gguf path %q: must be relative", p)
+	}
+	clean := path.Clean(p)
+	if clean == "." || clean == "" {
+		return "", fmt.Errorf("invalid gguf path %q: empty after clean", p)
+	}
+	if clean == ".." || strings.HasPrefix(clean, "../") {
+		return "", fmt.Errorf("invalid gguf path %q: escapes repo root", p)
+	}
+	for _, segment := range strings.Split(clean, "/") {
+		if segment == ".." {
+			return "", fmt.Errorf("invalid gguf path %q: contains '..'", p)
+		}
+	}
+	return clean, nil
 }
 
 // ensureGGUFVolume guarantees the models volume is mounted at /models. This

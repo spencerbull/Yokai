@@ -47,6 +47,12 @@ func TestParseGGUFFilenameShard(t *testing.T) {
 		{"Qwen3-27B-Q4_K_M-00002-of-00003.gguf", 2, 3, "Qwen3-27B-Q4_K_M.gguf"},
 		{"model-00003-OF-00003.gguf", 3, 3, "model.gguf"},
 		{"model-Q4_K_M.gguf", 0, 0, "model-Q4_K_M.gguf"},
+		// Directory-prefixed paths from a recursive HF tree listing: the
+		// directory stays in Base so sibling shards in the same folder group,
+		// while same-basename files in different folders stay separate.
+		{"Q4_K_M/model-00001-of-00003.gguf", 1, 3, "Q4_K_M/model.gguf"},
+		{"F16/model-00001-of-00002.gguf", 1, 2, "F16/model.gguf"},
+		{"nested/dir/model.gguf", 0, 0, "nested/dir/model.gguf"},
 	}
 
 	for _, tc := range cases {
@@ -57,6 +63,46 @@ func TestParseGGUFFilenameShard(t *testing.T) {
 		if got.Base != tc.base {
 			t.Errorf("%s: expected base %q, got %q", tc.filename, tc.base, got.Base)
 		}
+	}
+}
+
+func TestGroupGGUFVariantsPreservesDirectoryContext(t *testing.T) {
+	t.Parallel()
+
+	// Real-world repo layout where each quant lives in its own folder and the
+	// shards all share the same basename. Without directory-aware grouping
+	// these would collapse into one oversized variant.
+	files := []GGUFFile{
+		{Filename: "Q4_K_M/model-00001-of-00002.gguf", SizeMB: 8000},
+		{Filename: "Q4_K_M/model-00002-of-00002.gguf", SizeMB: 8000},
+		{Filename: "Q8_0/model-00001-of-00002.gguf", SizeMB: 14000},
+		{Filename: "Q8_0/model-00002-of-00002.gguf", SizeMB: 14000},
+	}
+
+	variants := GroupGGUFVariants(files)
+	if len(variants) != 2 {
+		t.Fatalf("expected 2 variants, got %d: %+v", len(variants), variants)
+	}
+
+	index := make(map[string]GGUFVariant, len(variants))
+	for _, v := range variants {
+		index[v.Quantization] = v
+	}
+
+	q4 := index["Q4_K_M"]
+	if q4.ShardCount != 2 || len(q4.Shards) != 2 || q4.TotalSizeMB != 16000 {
+		t.Errorf("Q4_K_M: unexpected variant %+v", q4)
+	}
+	if q4.Primary != "Q4_K_M/model-00001-of-00002.gguf" {
+		t.Errorf("Q4_K_M: expected primary with directory prefix, got %q", q4.Primary)
+	}
+
+	q8 := index["Q8_0"]
+	if q8.ShardCount != 2 || len(q8.Shards) != 2 || q8.TotalSizeMB != 28000 {
+		t.Errorf("Q8_0: unexpected variant %+v", q8)
+	}
+	if q8.Primary != "Q8_0/model-00001-of-00002.gguf" {
+		t.Errorf("Q8_0: expected primary with directory prefix, got %q", q8.Primary)
 	}
 }
 
