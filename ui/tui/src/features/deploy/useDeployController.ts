@@ -184,33 +184,40 @@ export function useDeployController(active: boolean, onComplete: () => void) {
     if (form.workload === "comfyui") {
       setGGUFVariants([])
       setGGUFError(undefined)
+      setGGUFLoading(false)
       return
     }
     const model = form.model.trim()
     if (model === "") {
       setGGUFVariants([])
       setGGUFError(undefined)
+      setGGUFLoading(false)
       return
     }
 
+    // Debounce so rapid typing on the Model step doesn't hammer the Hub
+    // API. Matches the 250ms debounce used by the model-search effect.
     let cancelled = false
     setGGUFLoading(true)
     setGGUFError(undefined)
-    void getGGUFVariants(model)
-      .then((variants) => {
-        if (cancelled) return
-        setGGUFVariants(variants)
-        setGGUFLoading(false)
-      })
-      .catch((cause) => {
-        if (cancelled) return
-        setGGUFVariants([])
-        setGGUFError(cause instanceof Error ? cause.message : "failed to fetch GGUF variants")
-        setGGUFLoading(false)
-      })
+    const timeout = setTimeout(() => {
+      void getGGUFVariants(model)
+        .then((variants) => {
+          if (cancelled) return
+          setGGUFVariants(variants)
+          setGGUFLoading(false)
+        })
+        .catch((cause) => {
+          if (cancelled) return
+          setGGUFVariants([])
+          setGGUFError(cause instanceof Error ? cause.message : "failed to fetch GGUF variants")
+          setGGUFLoading(false)
+        })
+    }, 250)
 
     return () => {
       cancelled = true
+      clearTimeout(timeout)
     }
   }, [active, form.model, form.workload])
 
@@ -230,22 +237,30 @@ export function useDeployController(active: boolean, onComplete: () => void) {
     secondary: device.host,
   })), [devices])
 
+  function goToVariantStep() {
+    // Prime the loading flag so the Variant step shows a spinner on its very
+    // first frame instead of briefly flashing the "no GGUF files" empty
+    // state. The fetch effect (watching form.model) will take over as soon
+    // as it fires and either populate variants or clear the flag.
+    if (form.model.trim() !== "") {
+      setGGUFLoading(true)
+    }
+    setStep("variant")
+    setCursor(0)
+  }
+
   function advanceFromModel() {
     if (form.workload === "comfyui") {
       setStep("config")
       setCursor(0)
       return
     }
-    // Go to variant step when variants are known and non-empty, or when a
-    // request is still in flight so the user sees the spinner. If the repo
-    // has no GGUF files, skip the step entirely.
-    if (ggufLoading || ggufVariants.length > 0) {
-      setStep("variant")
-      setCursor(0)
-      return
-    }
-    setStep("config")
-    setCursor(0)
+    // Always route GGUF-capable workloads through the Variant step. The step
+    // renders a spinner while variants are being fetched and falls back to
+    // an explicit "no GGUF files in this repo, press Enter to continue"
+    // message when the repo has none — so the user always sees the variant
+    // mapping when one exists, rather than being silently skipped past.
+    goToVariantStep()
   }
 
   function selectVariantByIndex(index: number) {
@@ -333,14 +348,14 @@ export function useDeployController(active: boolean, onComplete: () => void) {
       setForm((current) => ({ ...current, model: modelId, ggufVariant: "", ggufFiles: [] }))
       setSearchError(undefined)
       setModelResults([])
-      // Defer the step advance to the next render so the new model has a
-      // chance to kick off the variants fetch; the flow tries to route via
-      // the variant step when any variants exist.
       if (form.workload === "comfyui") {
         setStep("config")
         setCursor(0)
         return
       }
+      // Prime the Variant step with a spinner on first frame so the user
+      // doesn't see an empty-state flash before the fetch effect fires.
+      setGGUFLoading(true)
       setStep("variant")
       setCursor(0)
     },
