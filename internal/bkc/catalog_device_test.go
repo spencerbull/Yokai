@@ -159,7 +159,12 @@ func TestCatalogReturnsIndependentCopy(t *testing.T) {
 	t.Parallel()
 	snapshot := Catalog()
 	before := len(snapshot)
-	snapshot = append(snapshot, Config{ID: "zzz-test-only"})
+	// Force a capacity-stretching append that would mutate the backing array
+	// if Catalog() returned the package-level slice directly.
+	grown := append(snapshot, Config{ID: "zzz-test-only"})
+	if len(grown) != before+1 {
+		t.Fatalf("expected append to return a grown slice")
+	}
 	if len(Catalog()) != before {
 		t.Fatalf("Catalog() returned a slice that shares backing memory with internal state")
 	}
