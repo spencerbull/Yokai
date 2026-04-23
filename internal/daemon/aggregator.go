@@ -27,6 +27,22 @@ type Aggregator struct {
 	client  *http.Client
 }
 
+// hfToken returns the HuggingFace token available to the daemon, falling back
+// to the environment when no value is configured. Used when forwarding deploy
+// requests that require downloading GGUF shards from the Hub.
+func (a *Aggregator) hfToken() string {
+	a.mu.RLock()
+	token := ""
+	if a.cfg != nil {
+		token = a.cfg.HFToken
+	}
+	a.mu.RUnlock()
+	if token == "" {
+		token = loadHFTokenFromEnv()
+	}
+	return token
+}
+
 // agentRequest creates an HTTP request with the agent's auth token (if configured).
 func (a *Aggregator) agentRequest(method, url, deviceID string, body io.Reader) (*http.Request, error) {
 	req, err := http.NewRequest(method, url, body)
@@ -246,7 +262,18 @@ func (a *Aggregator) Deploy(req DeployRequest) (*DeployResult, error) {
 		return nil, fmt.Errorf("device %s is not connected", req.DeviceID)
 	}
 
-	jsonData, err := json.Marshal(req)
+	// Inject the HF token so the agent can fetch gated GGUF shards. The token
+	// is never persisted on the agent; it lives only for the duration of this
+	// deploy request.
+	payload := struct {
+		DeployRequest
+		HFToken string `json:"hf_token,omitempty"`
+	}{
+		DeployRequest: req,
+		HFToken:       a.hfToken(),
+	}
+
+	jsonData, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling request: %w", err)
 	}

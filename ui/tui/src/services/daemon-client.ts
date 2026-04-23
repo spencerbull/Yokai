@@ -1,6 +1,6 @@
 import { DAEMON_URL } from "../config"
 import type { BootstrapDeviceRequest, BootstrapDeviceResponse, BulkDeviceTestResponse, BulkDeviceUpgradeResponse, DeviceDeleteResult, DeviceRequest, DeviceTestResult, DeviceUpgradeResult, SSHConfigHostsResponse, TailscalePeersResponse, TailscaleStatus } from "../contracts/devices"
-import type { DeployBKC, DeployRequest, DeployResult, HFModel, VLLMMemoryEstimate, WorkloadType } from "../contracts/deploy"
+import type { DeployBKC, DeployRequest, DeployResult, GGUFVariantsResponse, HFModel, VLLMMemoryEstimate, WorkloadType } from "../contracts/deploy"
 import type { DevicesResponse, LogTarget, MetricsResponse } from "../contracts/fleet"
 import type { DeployHistory, HFSettings, HFTokenValidation, IntegrationsConfigureRequest, IntegrationsConfigureResponse, OpenAIEndpoint, SettingsDocument, SettingsPatch } from "../contracts/settings"
 import { readSSEStream } from "./sse"
@@ -59,6 +59,11 @@ export async function getMetrics() {
 export async function getHFModels(query: string, workload: WorkloadType) {
   const response = await daemonRequest<{ models: HFModel[] }>(`/hf/models?query=${encodeURIComponent(query)}&workload=${encodeURIComponent(workload)}`)
   return response.models ?? []
+}
+
+export async function getGGUFVariants(model: string) {
+  const response = await daemonRequest<GGUFVariantsResponse>(`/hf/gguf-variants?model=${encodeURIComponent(model)}`)
+  return response.variants ?? []
 }
 
 export async function getDeployBKC(workload: WorkloadType, model: string, deviceId?: string) {

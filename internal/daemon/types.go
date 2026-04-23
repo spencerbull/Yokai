@@ -9,6 +9,8 @@ type DeployRequest struct {
 	Image       string                `json:"image"`
 	Name        string                `json:"name"`
 	Model       string                `json:"model"`
+	GGUFVariant string                `json:"gguf_variant,omitempty"`
+	GGUFFiles   []string              `json:"gguf_files,omitempty"`
 	Ports       map[string]string     `json:"ports"`
 	Env         map[string]string     `json:"env"`
 	GPUIDs      string                `json:"gpu_ids"`

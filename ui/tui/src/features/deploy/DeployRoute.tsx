@@ -10,7 +10,7 @@ type DeployRouteProps = {
   terminalHeight?: number
 }
 
-const STEP_LABELS = ["Workload", "Device", "Image", "Model", "Config", "Deploy"]
+const STEP_LABELS = ["Workload", "Device", "Image", "Model", "Variant", "Config", "Deploy"]
 
 export function DeployRoute(props: DeployRouteProps) {
   const theme = useTheme()
@@ -54,6 +54,7 @@ export function DeployRoute(props: DeployRouteProps) {
           <Line label="Device" value={props.controller.form.deviceId || "-"} />
           <Line label="Image" value={props.controller.form.image || "-"} />
           <Line label="Model" value={props.controller.form.workload === "comfyui" ? "n/a" : props.controller.form.model || "-"} />
+          <Line label="Variant" value={props.controller.form.workload === "comfyui" ? "n/a" : variantSummary(props.controller.form.ggufVariant, props.controller.form.ggufFiles.length)} />
           <Line label="Port" value={props.controller.form.port || "-"} />
           <Line label="Args" value={firstArgLine(props.controller.form.extraArgs) || "-"} />
           <text fg={theme.colors.textSubtle}>Use Esc to go back a step.</text>
@@ -74,6 +75,8 @@ function renderStep(controller: DeployController) {
       return <ImageStep controller={controller} />
     case "model":
       return <ModelStep controller={controller} />
+    case "variant":
+      return <VariantStep controller={controller} />
     case "config":
       return <ConfigStep controller={controller} />
     default:
@@ -170,6 +173,64 @@ function ModelStep(props: { controller: DeployController }) {
       {history.map((model) => (
         <ActionChip key={model} onSelect={() => props.controller.setValue("model", model)}>{model}</ActionChip>
       ))}
+    </box>
+  )
+}
+
+function VariantStep(props: { controller: DeployController }) {
+  const theme = useTheme()
+  const variants = props.controller.ggufVariants
+
+  if (props.controller.ggufLoading) {
+    return <text fg={theme.colors.textMuted}>Looking up GGUF variants for {props.controller.form.model}...</text>
+  }
+
+  if (props.controller.ggufError) {
+    return (
+      <box flexDirection="column" gap={1}>
+        <text fg={theme.colors.warning}>Could not list GGUF variants: {props.controller.ggufError}</text>
+        <text fg={theme.colors.textSubtle}>Press Enter or S to skip and continue without a pre-downloaded variant.</text>
+      </box>
+    )
+  }
+
+  if (variants.length === 0) {
+    return (
+      <box flexDirection="column" gap={1}>
+        <text fg={theme.colors.textMuted}>No GGUF files were found in this repo.</text>
+        <text fg={theme.colors.textSubtle}>Press Enter to continue. The container will load the model directly.</text>
+      </box>
+    )
+  }
+
+  return (
+    <box flexDirection="column" gap={1}>
+      <text fg={theme.colors.textMuted}>Choose a GGUF quantization. All shards for the selected variant are downloaded to the device before the container starts.</text>
+      {variants.map((variant, index) => {
+        const highlighted = index === props.controller.cursor
+        const selected = props.controller.form.ggufVariant === variant.quantization
+        const sizeGB = (variant.total_size_mb / 1024).toFixed(1)
+        const shardLabel = variant.shard_count > 1 ? `${variant.shard_count} shards` : "single file"
+        return (
+          <box
+            key={`${variant.quantization}-${variant.primary}`}
+            border
+            borderStyle={selected ? "double" : "single"}
+            borderColor={selected ? theme.colors.borderStrong : highlighted ? theme.colors.accent : theme.colors.border}
+            backgroundColor={theme.colors.panel}
+            padding={1}
+            flexDirection="column"
+            onMouseDown={() => props.controller.selectVariant(index)}
+          >
+            <text fg={selected ? theme.colors.accent : theme.colors.text}>
+              <strong>{highlighted ? `▸ ${variant.quantization}` : variant.quantization}</strong>
+              <span fg={theme.colors.textMuted}> · {sizeGB} GB · {shardLabel}</span>
+            </text>
+            <text fg={theme.colors.textSubtle}>{variant.primary}</text>
+          </box>
+        )
+      })}
+      <text fg={theme.colors.textSubtle}>Arrow keys or j/k choose. Enter selects. S skips. Esc returns to Model.</text>
     </box>
   )
 }
@@ -388,6 +449,16 @@ function formatArgsPreview(args: string) {
 
 function firstArgLine(args: string) {
   return formatArgsPreview(args)[0] ?? ""
+}
+
+function variantSummary(quant: string, shardCount: number) {
+  if (!quant) {
+    return "-"
+  }
+  if (shardCount > 1) {
+    return `${quant} (${shardCount} shards)`
+  }
+  return quant
 }
 
 function noticeColor(theme: ReturnType<typeof useTheme>, level: "info" | "success" | "warning" | "error") {

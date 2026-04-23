@@ -1,11 +1,11 @@
 import { startTransition, useEffect, useMemo, useState } from "react"
 
-import type { DeployBKC, DeployForm, HFModel, VLLMMemoryEstimate, WorkloadType } from "../../contracts/deploy"
+import type { DeployBKC, DeployForm, GGUFVariant, HFModel, VLLMMemoryEstimate, WorkloadType } from "../../contracts/deploy"
 import type { DeviceRecord } from "../../contracts/fleet"
 import type { SettingsDocument } from "../../contracts/settings"
-import { deployService, getDeployBKC, getDevices, getHFModels, getSettings, getVLLMMemoryEstimate, putDeployHistory } from "../../services/daemon-client"
+import { deployService, getDeployBKC, getDevices, getGGUFVariants, getHFModels, getSettings, getVLLMMemoryEstimate, putDeployHistory } from "../../services/daemon-client"
 
-type DeployStep = "workload" | "device" | "image" | "model" | "config" | "review"
+type DeployStep = "workload" | "device" | "image" | "model" | "variant" | "config" | "review"
 type ConfigField = "port" | "extraArgs" | "bkcAction" | "contextLength" | "overheadGB" | "hfmemCalculate" | "hfmemApply"
 type ReviewAction = "back" | "deploy"
 
@@ -27,7 +27,7 @@ type KeyLike = {
   shift?: boolean
 }
 
-const STEPS: DeployStep[] = ["workload", "device", "image", "model", "config", "review"]
+const STEPS: DeployStep[] = ["workload", "device", "image", "model", "variant", "config", "review"]
 const WORKLOADS: WorkloadType[] = ["vllm", "llamacpp", "comfyui"]
 
 const EMPTY_SETTINGS: SettingsDocument = {
@@ -62,6 +62,9 @@ export function useDeployController(active: boolean, onComplete: () => void) {
   const [searchError, setSearchError] = useState<string>()
   const [bkc, setBkc] = useState<DeployBKC | null>(null)
   const [appliedBKCId, setAppliedBKCId] = useState("")
+  const [ggufVariants, setGGUFVariants] = useState<GGUFVariant[]>([])
+  const [ggufLoading, setGGUFLoading] = useState(false)
+  const [ggufError, setGGUFError] = useState<string>()
   const [vllmHelper, setVLLMHelper] = useState<VLLMHelperState>({
     contextLength: "32768",
     estimate: null,
@@ -175,6 +178,43 @@ export function useDeployController(active: boolean, onComplete: () => void) {
   }, [active, form.deviceId, form.model, form.workload])
 
   useEffect(() => {
+    if (!active) {
+      return
+    }
+    if (form.workload === "comfyui") {
+      setGGUFVariants([])
+      setGGUFError(undefined)
+      return
+    }
+    const model = form.model.trim()
+    if (model === "") {
+      setGGUFVariants([])
+      setGGUFError(undefined)
+      return
+    }
+
+    let cancelled = false
+    setGGUFLoading(true)
+    setGGUFError(undefined)
+    void getGGUFVariants(model)
+      .then((variants) => {
+        if (cancelled) return
+        setGGUFVariants(variants)
+        setGGUFLoading(false)
+      })
+      .catch((cause) => {
+        if (cancelled) return
+        setGGUFVariants([])
+        setGGUFError(cause instanceof Error ? cause.message : "failed to fetch GGUF variants")
+        setGGUFLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [active, form.model, form.workload])
+
+  useEffect(() => {
     if (!notice) {
       return
     }
@@ -190,12 +230,48 @@ export function useDeployController(active: boolean, onComplete: () => void) {
     secondary: device.host,
   })), [devices])
 
+  function advanceFromModel() {
+    if (form.workload === "comfyui") {
+      setStep("config")
+      setCursor(0)
+      return
+    }
+    // Go to variant step when variants are known and non-empty, or when a
+    // request is still in flight so the user sees the spinner. If the repo
+    // has no GGUF files, skip the step entirely.
+    if (ggufLoading || ggufVariants.length > 0) {
+      setStep("variant")
+      setCursor(0)
+      return
+    }
+    setStep("config")
+    setCursor(0)
+  }
+
+  function selectVariantByIndex(index: number) {
+    const variant = ggufVariants[index]
+    if (!variant) {
+      return
+    }
+    const files = variant.shards.map((shard) => shard.rfilename)
+    setForm((current) => ({
+      ...current,
+      ggufVariant: variant.quantization,
+      ggufFiles: files,
+    }))
+    setStep("config")
+    setCursor(0)
+  }
+
   return {
     activeBKC: bkc && appliedBKCId === bkc.id ? bkc : null,
     availableBKC: bkc,
     applyBKC() {
       applyBKCToForm()
     },
+    ggufVariants,
+    ggufLoading,
+    ggufError,
     configField,
     cursor,
     calculateVLLMMemory: () => void calculateVLLMMemory(),
@@ -203,7 +279,7 @@ export function useDeployController(active: boolean, onComplete: () => void) {
     form,
     extraArgsEditing,
     hasAppliedBKC: Boolean(bkc && appliedBKCId === bkc.id),
-    locksGlobalNav: step === "image" || step === "model" || step === "config",
+    locksGlobalNav: step === "image" || step === "model" || step === "variant" || step === "config",
     modelResults,
     notice,
     pendingAction,
@@ -235,6 +311,8 @@ export function useDeployController(active: boolean, onComplete: () => void) {
           return handleImageKey(key)
         case "model":
           return handleModelKey(key)
+        case "variant":
+          return handleVariantKey(key)
         case "config":
           return handleConfigKey(key)
         case "review":
@@ -252,10 +330,22 @@ export function useDeployController(active: boolean, onComplete: () => void) {
       setReviewAction(action)
     },
     selectModel(modelId: string) {
-      setForm((current) => ({ ...current, model: modelId }))
-      setStep("config")
+      setForm((current) => ({ ...current, model: modelId, ggufVariant: "", ggufFiles: [] }))
       setSearchError(undefined)
       setModelResults([])
+      // Defer the step advance to the next render so the new model has a
+      // chance to kick off the variants fetch; the flow tries to route via
+      // the variant step when any variants exist.
+      if (form.workload === "comfyui") {
+        setStep("config")
+        setCursor(0)
+        return
+      }
+      setStep("variant")
+      setCursor(0)
+    },
+    selectVariant(index: number) {
+      selectVariantByIndex(index)
     },
     selectWorkload(workload: WorkloadType) {
       setForm((current) => applyWorkloadDefaults(current, settings, workload))
@@ -362,14 +452,46 @@ export function useDeployController(active: boolean, onComplete: () => void) {
       case "return":
       case "enter":
         if (modelResults.length > 0 && cursor < modelResults.length) {
-          setForm((current) => ({ ...current, model: modelResults[cursor].id }))
+          setForm((current) => ({ ...current, model: modelResults[cursor].id, ggufVariant: "", ggufFiles: [] }))
         }
         if (form.model.trim() === "") {
           setNotice({ level: "error", message: "Model is required" })
           return true
         }
+        advanceFromModel()
+        return true
+      default:
+        return false
+    }
+  }
+
+  function handleVariantKey(key: KeyLike) {
+    switch (key.name) {
+      case "escape":
+        setStep("model")
+        return true
+      case "up":
+      case "k":
+        setCursor((current) => Math.max(0, current - 1))
+        return true
+      case "down":
+      case "j":
+        setCursor((current) => Math.min(Math.max(0, ggufVariants.length - 1), current + 1))
+        return true
+      case "s":
+        // Skip variant selection (deploy without pre-downloading GGUF files).
+        setForm((current) => ({ ...current, ggufVariant: "", ggufFiles: [] }))
         setStep("config")
         setCursor(0)
+        return true
+      case "return":
+      case "enter":
+        if (ggufVariants.length === 0) {
+          setStep("config")
+          setCursor(0)
+          return true
+        }
+        selectVariantByIndex(cursor)
         return true
       default:
         return false
@@ -383,7 +505,13 @@ export function useDeployController(active: boolean, onComplete: () => void) {
 
     switch (key.name) {
       case "escape":
-        setStep(form.workload === "comfyui" ? "image" : "model")
+        if (form.workload === "comfyui") {
+          setStep("image")
+        } else if (ggufVariants.length > 0) {
+          setStep("variant")
+        } else {
+          setStep("model")
+        }
         return true
       case "tab":
         setConfigField((current) => nextConfigField(current, form.workload, key.shift ? -1 : 1))
@@ -565,6 +693,8 @@ function emptyForm(): DeployForm {
     extraArgs: "",
     image: "",
     model: "",
+    ggufVariant: "",
+    ggufFiles: [],
     name: "",
     port: "8000",
     workload: "vllm",
@@ -576,6 +706,7 @@ function applyDefaults(form: DeployForm, settings: SettingsDocument) {
 }
 
 function applyWorkloadDefaults(form: DeployForm, settings: SettingsDocument, workload: WorkloadType): DeployForm {
+  const resetGGUF = workload !== form.workload
   switch (workload) {
     case "llamacpp":
       return {
@@ -584,6 +715,8 @@ function applyWorkloadDefaults(form: DeployForm, settings: SettingsDocument, wor
         name: defaultName(workload, form.model),
         port: "8080",
         extraArgs: workload === form.workload ? form.extraArgs : "",
+        ggufVariant: resetGGUF ? "" : form.ggufVariant,
+        ggufFiles: resetGGUF ? [] : form.ggufFiles,
         workload,
       }
     case "comfyui":
@@ -594,6 +727,8 @@ function applyWorkloadDefaults(form: DeployForm, settings: SettingsDocument, wor
         name: defaultName(workload, "comfyui"),
         port: "8188",
         extraArgs: workload === form.workload ? form.extraArgs : "",
+        ggufVariant: "",
+        ggufFiles: [],
         workload,
       }
     default:
@@ -603,6 +738,8 @@ function applyWorkloadDefaults(form: DeployForm, settings: SettingsDocument, wor
         name: defaultName(workload, form.model),
         port: "8000",
         extraArgs: workload === form.workload ? form.extraArgs : "",
+        ggufVariant: resetGGUF ? "" : form.ggufVariant,
+        ggufFiles: resetGGUF ? [] : form.ggufFiles,
         workload,
       }
   }
@@ -630,6 +767,8 @@ function buildDeployRequest(form: DeployForm, bkc: DeployBKC | null) {
     image: form.image.trim(),
     name: defaultName(form.workload, form.model),
     model: form.workload === "comfyui" ? "" : form.model.trim(),
+    gguf_variant: form.ggufVariant || undefined,
+    gguf_files: form.ggufFiles.length > 0 ? [...form.ggufFiles] : undefined,
     ports: { [port]: port },
     env: cloneMap(bkc?.env),
     gpu_ids: "all",
