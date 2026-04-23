@@ -61,8 +61,12 @@ export async function getHFModels(query: string, workload: WorkloadType) {
   return response.models ?? []
 }
 
-export async function getDeployBKC(workload: WorkloadType, model: string) {
-  const response = await daemonRequest<{ config?: DeployBKC }>(`/deploy/bkc?workload=${encodeURIComponent(workload)}&model=${encodeURIComponent(model)}`)
+export async function getDeployBKC(workload: WorkloadType, model: string, deviceId?: string) {
+  const params = new URLSearchParams({ workload, model })
+  if (deviceId) {
+    params.set("device_id", deviceId)
+  }
+  const response = await daemonRequest<{ config?: DeployBKC }>(`/deploy/bkc?${params.toString()}`)
   return response.config ?? null
 }
 
