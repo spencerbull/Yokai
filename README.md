@@ -10,16 +10,33 @@
 yokai is a terminal-based fleet manager for running **vLLM**, **llama.cpp**, and **ComfyUI** on any number of GPU machines. Connect your devices, deploy curated Best-Known-Configs (or roll your own through a guided wizard), and watch everything on a btop-style dashboard -- all from a single binary with zero dependencies on the target machines.
 
 ```
-╭─ yokai ─────────[ Dashboard │ Devices │ Deploy │ Settings ]──── 2 devices ─╮
-│ ╭─ gaming-rig · 100.64.0.2 ● ────────────────────────────────────────────╮ │
-│ │ GPU 0: RTX 4090  Util 87% [█████████████████░░░]  VRAM 20.1/24.0 GB   │ │
-│ ╰────────────────────────────────────────────────────────────────────────╯ │
-│ ╭─ Services ─────────────────────────────────────────────────────────────╮ │
-│ │▸ vLLM       Llama-3.1-8B-Instruct  gaming-rig  ● live  :8000  142 t/s │ │
-│ │  llama.cpp  Mistral-7B-Q4_K_M      gaming-rig  ● live  :8080   38 t/s │ │
-│ ╰────────────────────────────────────────────────────────────────────────╯ │
-│ Tab switch · j/k move · enter open · g home · esc esc to quit              │
-╰────────────────────────────────────────────────────────────────────────────╯
+ ┌───────────┐ ╔══════════════════╗ ┌──────────────┐ ┌─────────────┐ ┌───────────────┐
+ │  G. Home  │ ║  ▸ 1. Dashboard  ║ │  2. Devices  │ │  3. Deploy  │ │  4. Settings  │
+ └───────────┘ ╚══════════════════╝ └──────────────┘ └─────────────┘ └───────────────┘
+
+ ╭────────────────────────────────────────────────────────────────────────────────────╮
+ │ Dashboard                                                                          │
+ │ Fleet services, inspector details, and contextual live logs.                       │
+ │                                                                                    │
+ │ ┌─ AI Fleet ───────────────────────────────────────────────────────────────────┐   │
+ │ │ GPU  73%  ▁▂▃▅▆▇█▇▆▅▆▇█▇▆▅▆▇█▇▆▅▆▇█▇▆▅▆▇█▇▆▅▆▇█▇▆▅▆▇█▇▆▅▆▇█▇▆▅▆▇█▇▆▅▆▇█▇▆ │   │
+ │ │ VRAM 84%  20.1 / 24.0 GB                                                     │   │
+ │ │ GPUs 2 active / 2 total · Svc 3 total · 0 alert(s)                           │   │
+ │ └──────────────────────────────────────────────────────────────────────────────┘   │
+ │                                                                                    │
+ │ ╔═ AI Services [2] ════════════════════════════════════════════════════════════╗   │
+ │ ║ ▌ vllm-llama-3.1-8b      · Gaming Rig   · live                               ║   │
+ │ ║ ●  llamacpp-mistral-7b   · Gaming Rig   · live                               ║   │
+ │ ╚══════════════════════════════════════════════════════════════════════════════╝   │
+ │                                                                                    │
+ │ ┌─ Monitoring Services [1] ────────────────────────────────────────────────────┐   │
+ │ │ ●  grafana                · Gaming Rig   · live                              │   │
+ │ └──────────────────────────────────────────────────────────────────────────────┘   │
+ ╰────────────────────────────────────────────────────────────────────────────────────╯
+
+ ╭────────────────────────────────────────────────────────────────────────────────────╮
+ │ G home  |  Tab next section  |  Shift+Tab previous section  |  1-4 jump            │
+ ╰────────────────────────────────────────────────────────────────────────────────────╯
 ```
 
 ---
