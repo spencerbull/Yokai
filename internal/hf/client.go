@@ -103,7 +103,7 @@ func (c *Client) SearchModelsWithOptions(query string, opts SearchOptions) ([]Mo
 
 // ListGGUFFiles lists .gguf files in a model repo (for llama.cpp).
 func (c *Client) ListGGUFFiles(modelID string) ([]GGUFFile, error) {
-	reqURL := fmt.Sprintf("%s/models/%s/tree/main", baseURL, modelID)
+	reqURL := fmt.Sprintf("%s/models/%s/tree/main?recursive=1", baseURL, modelID)
 	req, err := http.NewRequest("GET", reqURL, nil)
 	if err != nil {
 		return nil, err
@@ -141,6 +141,17 @@ func (c *Client) ListGGUFFiles(modelID string) ([]GGUFFile, error) {
 	}
 
 	return ggufFiles, nil
+}
+
+// ListGGUFVariants returns the GGUF files in a repo grouped by quantization.
+// Multi-shard variants collapse into a single GGUFVariant whose Shards field
+// lists every `<N>-of-<M>` file in order.
+func (c *Client) ListGGUFVariants(modelID string) ([]GGUFVariant, error) {
+	files, err := c.ListGGUFFiles(modelID)
+	if err != nil {
+		return nil, err
+	}
+	return GroupGGUFVariants(files), nil
 }
 
 // ValidateToken checks if the token is valid by hitting the whoami endpoint.

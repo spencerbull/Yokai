@@ -311,6 +311,62 @@ All state lives in `~/.config/yokai/config.json`. Copy this file to another mach
 
 ---
 
+## Best Known Configurations (BKC)
+
+The BKC catalog is a library of pre-validated deploy recipes. Each entry pins the Docker image, tensor-parallel size, quantization flags, GPU memory utilization, chat template, tool-call parser, and any runtime options (`--ipc=host`, `--shm-size`, `ulimit`s) needed for a given model on a given GPU. The deploy wizard matches your model against the catalog, filters recipes by the target device's VRAM and GPU count, and offers one-click apply.
+
+**86 vLLM configs across 82 models from 23 publishers** (as of this commit). Entries are grouped by publisher and live in `internal/bkc/catalog_*.go`:
+
+| Publisher | Unique models | vLLM configs | Catalog file |
+|---|---:|---:|---|
+| `Qwen` | 20 | 20 | [`catalog_qwen.go`](internal/bkc/catalog_qwen.go) |
+| `nvidia` | 12 | 14 | [`catalog_nvidia.go`](internal/bkc/catalog_nvidia.go), [`catalog_llama.go`](internal/bkc/catalog_llama.go), [`catalog_moonshotai.go`](internal/bkc/catalog_moonshotai.go), [`catalog_qwen.go`](internal/bkc/catalog_qwen.go) |
+| `zai-org` (GLM) | 7 | 7 | [`catalog_glm.go`](internal/bkc/catalog_glm.go) |
+| `deepseek-ai` | 6 | 6 | [`catalog_deepseek.go`](internal/bkc/catalog_deepseek.go) |
+| `google` | 5 | 5 | [`catalog_google.go`](internal/bkc/catalog_google.go) |
+| `mistralai` | 5 | 5 | [`catalog_mistral.go`](internal/bkc/catalog_mistral.go) |
+| `baidu` (ERNIE) | 4 | 4 | [`catalog_others.go`](internal/bkc/catalog_others.go) |
+| `moonshotai` | 4 | 4 | [`catalog_moonshotai.go`](internal/bkc/catalog_moonshotai.go) |
+| `openai` | 2 | 4 | [`catalog_openai.go`](internal/bkc/catalog_openai.go) |
+| `meta-llama` | 2 | 2 | [`catalog_llama.go`](internal/bkc/catalog_llama.go) |
+| `internlm` | 2 | 2 | [`catalog_others.go`](internal/bkc/catalog_others.go) |
+| `tencent` | 2 | 2 | [`catalog_others.go`](internal/bkc/catalog_others.go) |
+| `microsoft` (Phi) | 1 | 1 | [`catalog_microsoft.go`](internal/bkc/catalog_microsoft.go) |
+| `amd` | 1 | 1 | [`catalog_openai.go`](internal/bkc/catalog_openai.go) |
+| `ByteDance-Seed` | 1 | 1 | [`catalog_others.go`](internal/bkc/catalog_others.go) |
+| `MiniMaxAI` | 1 | 1 | [`catalog_others.go`](internal/bkc/catalog_others.go) |
+| `OpenGVLab` (InternVL) | 1 | 1 | [`catalog_others.go`](internal/bkc/catalog_others.go) |
+| `PaddlePaddle` | 1 | 1 | [`catalog_others.go`](internal/bkc/catalog_others.go) |
+| `XiaomiMiMo` | 1 | 1 | [`catalog_others.go`](internal/bkc/catalog_others.go) |
+| `arcee-ai` | 1 | 1 | [`catalog_others.go`](internal/bkc/catalog_others.go) |
+| `inclusionAI` | 1 | 1 | [`catalog_others.go`](internal/bkc/catalog_others.go) |
+| `jinaai` | 1 | 1 | [`catalog_others.go`](internal/bkc/catalog_others.go) |
+| `stepfun-ai` | 1 | 1 | [`catalog_others.go`](internal/bkc/catalog_others.go) |
+| **Total** | **82** | **86** | |
+
+### Notable recipes
+
+- **Frontier reasoning / MoE** — DeepSeek R1 / V3.1 / V3.2 (FP8, 8× H200/B200), Qwen3-Coder-480B-A35B, Qwen3.5-397B-A17B-FP8, Qwen3-Next-80B-A3B (BF16 and FP8 variants), Moonshot Kimi K2.
+- **Gated Meta / NVIDIA** — Llama 3.3 70B (BF16 on Meta base, FP8 on Hopper, FP4 on Blackwell), nvidia/Llama-3.1-Nemotron-Ultra / Super, NGC images validated on DGX Spark GB10 and Jetson Thor (aarch64).
+- **Vision-language** — Qwen2.5-VL-7B/72B, Qwen3-VL-235B (BF16 + FP8), InternVL3.5-8B, ERNIE-4.5-VL-28B / VL-424B, PaddleOCR-VL, DeepSeek-OCR.
+- **Small / edge-friendly** — Qwen3-0.6B / 1.7B / 4B / 8B, Qwen3Guard-Gen-0.6B, Phi-4, Gemma 3 2B/4B/12B, validated for RTX 4090, RTX 5090, L40S, GB10, and Jetson Thor.
+- **AMD CDNA4** — `amd/gpt-oss-120b-w-mxfp4-a-fp8` tuned for MI355X with the ROCm vLLM image.
+
+### Device-aware selection
+
+BKC entries carry explicit hardware tags so the deploy wizard can hand you the right recipe for the device you selected:
+
+- NVIDIA: `gb10` (DGX Spark), `jetson-thor`, `rtx-pro-6000`, `rtx-5090`, `rtx-4090`, `l40s`, `a100-80`, `h100-80`, `h100-94`, `h200`, `h20`, `b200`, `gb200`
+- AMD: `mi300x`, `mi325x`, `mi355x`, `radeon-r9700`
+
+When multiple BKCs target the same model (e.g. Llama 3.3 70B has BF16, FP8, and FP4 variants), the daemon prefers the most specialised recipe whose `TargetDevices` include your device profile, then falls back to the first recipe whose `MinVRAMGBPerGPU` and `MinGPUCount` the device can satisfy.
+
+### Adding a BKC
+
+Drop a new entry into the appropriate `catalog_<vendor>.go` file (create one if your vendor doesn't have one yet) and register it in the `catalog` slice in `catalog_data.go`. Every entry needs a stable `ID`, a human-readable `Name`, the Docker image, port, exact runtime flags, and the hardware gates (`TargetDevices`, `MinVRAMGBPerGPU`, `MinGPUCount`, `Quantization`, `Arch`). See `catalog_llama.go` for a multi-variant example.
+
+---
+
 ## Supported Platforms
 
 ### User Machine (where you run `yokai`)

@@ -14,9 +14,29 @@ export type DeployForm = {
   extraArgs: string
   image: string
   model: string
+  ggufVariant: string
+  ggufFiles: string[]
   name: string
   port: string
   workload: WorkloadType
+}
+
+export type GGUFFile = {
+  rfilename: string
+  SizeMB?: number
+}
+
+export type GGUFVariant = {
+  quantization: string
+  shards: GGUFFile[]
+  shard_count: number
+  total_size_mb: number
+  primary: string
+}
+
+export type GGUFVariantsResponse = {
+  model: string
+  variants: GGUFVariant[]
 }
 
 export type DeployRequest = {
@@ -25,6 +45,8 @@ export type DeployRequest = {
   image: string
   name: string
   model: string
+  gguf_variant?: string
+  gguf_files?: string[]
   ports: Record<string, string>
   env: Record<string, string>
   gpu_ids: string

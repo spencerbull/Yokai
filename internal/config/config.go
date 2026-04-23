@@ -52,19 +52,21 @@ func (d Device) SSHPortOrDefault() int {
 }
 
 type Service struct {
-	ID          string            `json:"id"`
-	DeviceID    string            `json:"device_id"`
-	Type        string            `json:"type"` // "vllm", "llamacpp", "comfyui"
-	Image       string            `json:"image"`
-	Model       string            `json:"model,omitempty"`
-	Port        int               `json:"port"`
-	GPUIDs      string            `json:"gpu_ids,omitempty"`
-	ExtraArgs   string            `json:"extra_args,omitempty"`
-	Env         map[string]string `json:"env,omitempty"`
-	Volumes     map[string]string `json:"volumes,omitempty"`
-	Plugins     []string          `json:"plugins,omitempty"`
-	Runtime     RuntimeOptions    `json:"runtime,omitempty"`
-	ContainerID string            `json:"container_id,omitempty"`
+	ID           string            `json:"id"`
+	DeviceID     string            `json:"device_id"`
+	Type         string            `json:"type"` // "vllm", "llamacpp", "comfyui"
+	Image        string            `json:"image"`
+	Model        string            `json:"model,omitempty"`
+	GGUFVariant  string            `json:"gguf_variant,omitempty"`
+	GGUFFiles    []string          `json:"gguf_files,omitempty"`
+	Port         int               `json:"port"`
+	GPUIDs       string            `json:"gpu_ids,omitempty"`
+	ExtraArgs    string            `json:"extra_args,omitempty"`
+	Env          map[string]string `json:"env,omitempty"`
+	Volumes      map[string]string `json:"volumes,omitempty"`
+	Plugins      []string          `json:"plugins,omitempty"`
+	Runtime      RuntimeOptions    `json:"runtime,omitempty"`
+	ContainerID  string            `json:"container_id,omitempty"`
 }
 
 type RuntimeOptions struct {

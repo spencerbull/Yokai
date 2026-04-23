@@ -63,6 +63,7 @@ func Run(version string) error {
 	mux.HandleFunc("POST /bootstrap/device", d.handleBootstrapDevice)
 	mux.HandleFunc("GET /devices", d.handleDevices)
 	mux.HandleFunc("GET /hf/models", d.handleHFModels)
+	mux.HandleFunc("GET /hf/gguf-variants", d.handleHFGGUFVariants)
 	mux.HandleFunc("GET /deploy/bkc", d.handleDeployBKC)
 	mux.HandleFunc("POST /deploy/vllm-memory-estimate", d.handleVLLMMemoryEstimate)
 	mux.HandleFunc("POST /devices", d.handleCreateDevice)
@@ -423,6 +424,8 @@ func (d *Daemon) persistDeployResult(req DeployRequest, result *DeployResult) er
 		Type:        serviceType,
 		Image:       strings.TrimSpace(req.Image),
 		Model:       strings.TrimSpace(req.Model),
+		GGUFVariant: strings.TrimSpace(req.GGUFVariant),
+		GGUFFiles:   append([]string(nil), req.GGUFFiles...),
 		Port:        port,
 		GPUIDs:      strings.TrimSpace(req.GPUIDs),
 		ExtraArgs:   strings.TrimSpace(req.ExtraArgs),

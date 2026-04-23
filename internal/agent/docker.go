@@ -55,17 +55,20 @@ type Container struct {
 
 // ContainerRequest represents a container deployment request.
 type ContainerRequest struct {
-	Image     string                `json:"image"`
-	Name      string                `json:"name"`
-	Model     string                `json:"model"`
-	Ports     map[string]string     `json:"ports"`
-	Env       map[string]string     `json:"env"`
-	GPUIDs    string                `json:"gpu_ids"`
-	ExtraArgs string                `json:"extra_args"`
-	Volumes   map[string]string     `json:"volumes"`
-	Plugins   []string              `json:"plugins"`
-	Runtime   config.RuntimeOptions `json:"runtime"`
-	SkipPull  bool                  `json:"skip_pull,omitempty"`
+	Image       string                `json:"image"`
+	Name        string                `json:"name"`
+	Model       string                `json:"model"`
+	GGUFVariant string                `json:"gguf_variant,omitempty"`
+	GGUFFiles   []string              `json:"gguf_files,omitempty"`
+	HFToken     string                `json:"hf_token,omitempty"`
+	Ports       map[string]string     `json:"ports"`
+	Env         map[string]string     `json:"env"`
+	GPUIDs      string                `json:"gpu_ids"`
+	ExtraArgs   string                `json:"extra_args"`
+	Volumes     map[string]string     `json:"volumes"`
+	Plugins     []string              `json:"plugins"`
+	Runtime     config.RuntimeOptions `json:"runtime"`
+	SkipPull    bool                  `json:"skip_pull,omitempty"`
 }
 
 // ContainerResponse represents a container deployment response.
@@ -186,13 +189,31 @@ func runContainer(req ContainerRequest) (*ContainerResponse, error) {
 	// Sanitize container name
 	containerName := fmt.Sprintf("yokai-%s", sanitizeName(req.Name))
 
+	// If the deploy targets a specific GGUF variant, pre-download every shard
+	// to the agent's shared models directory so the container can mmap the
+	// file(s) directly. The returned path is container-local (/models/...).
+	ggufPath, err := ensureGGUFFiles(&req)
+	if err != nil {
+		return nil, err
+	}
+	if ggufPath != "" {
+		if req.Volumes == nil {
+			req.Volumes = make(map[string]string)
+		}
+		ensureGGUFVolume(req.Volumes)
+	}
+
 	if isLlamaCppImage(req.Image) {
 		if req.Model != "" {
 			if req.Volumes == nil {
 				req.Volumes = make(map[string]string)
 			}
 			ensureModelsVolume(req.Volumes)
-			req.ExtraArgs = withLlamaModelArg(req.ExtraArgs, req.Model)
+			modelArg := req.Model
+			if ggufPath != "" {
+				modelArg = ggufPath
+			}
+			req.ExtraArgs = withLlamaModelArg(req.ExtraArgs, modelArg)
 		}
 		req.Ports = normalizeServicePorts(req.Ports, "8080")
 		req.ExtraArgs = withHostArg(req.ExtraArgs, "--host", "0.0.0.0")
@@ -204,7 +225,15 @@ func runContainer(req ContainerRequest) (*ContainerResponse, error) {
 				req.Volumes = make(map[string]string)
 			}
 			ensureHFCacheVolume(req.Volumes)
-			req.ExtraArgs = withVLLMModelArg(req.ExtraArgs, req.Model)
+			modelArg := req.Model
+			if ggufPath != "" {
+				// vLLM 0.6+ loads GGUF directly when --model points at the
+				// on-disk file. The tokenizer still resolves from the original
+				// HF repo unless the user overrode it in extra args.
+				modelArg = ggufPath
+				req.ExtraArgs = withVLLMTokenizerArg(req.ExtraArgs, req.Model)
+			}
+			req.ExtraArgs = withVLLMModelArg(req.ExtraArgs, modelArg)
 		}
 		req.Ports = normalizeServicePorts(req.Ports, "8000")
 		req.ExtraArgs = withHostArg(req.ExtraArgs, "--host", "0.0.0.0")
@@ -440,6 +469,23 @@ func ensurePluginAsset(pluginID string, asset plugins.Asset) error {
 		return fmt.Errorf("writing plugin asset %s: %w", hostPath, err)
 	}
 	return nil
+}
+
+// withVLLMTokenizerArg injects `--tokenizer <repo>` when the model arg is a
+// local GGUF path. Without this, vLLM tries to auto-load the tokenizer from
+// the file path, which fails since GGUF files do not ship a HF tokenizer
+// config. Callers should only invoke this when a GGUF variant is deployed.
+func withVLLMTokenizerArg(extraArgs, modelRepo string) string {
+	if modelRepo == "" {
+		return extraArgs
+	}
+	tokens := strings.Fields(extraArgs)
+	for _, t := range tokens {
+		if hasFlag(t, "--tokenizer") {
+			return extraArgs
+		}
+	}
+	return appendArg(extraArgs, fmt.Sprintf("--tokenizer %s", modelRepo))
 }
 
 func withVLLMModelArg(extraArgs, model string) string {
