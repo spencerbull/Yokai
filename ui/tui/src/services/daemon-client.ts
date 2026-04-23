@@ -62,8 +62,22 @@ export async function getHFModels(query: string, workload: WorkloadType) {
 }
 
 export async function getGGUFVariants(model: string) {
-  const response = await daemonRequest<GGUFVariantsResponse>(`/hf/gguf-variants?model=${encodeURIComponent(model)}`)
-  return response.variants ?? []
+  try {
+    const response = await daemonRequest<GGUFVariantsResponse>(`/hf/gguf-variants?model=${encodeURIComponent(model)}`)
+    return response.variants ?? []
+  } catch (cause) {
+    const message = cause instanceof Error ? cause.message : String(cause)
+    // A plain 404 here means the daemon doesn't register `/hf/gguf-variants`
+    // yet — i.e. the daemon process is running an older binary than the TUI.
+    // Rewrite the error into something the user can act on rather than
+    // surfacing the raw "daemon request failed: 404 Not Found".
+    if (/\b404\b/.test(message) && !/HF API/i.test(message)) {
+      throw new Error(
+        "GGUF variant listing is not available on this daemon. Restart `yokai daemon` after upgrading yokai to enable it.",
+      )
+    }
+    throw cause
+  }
 }
 
 export async function getDeployBKC(workload: WorkloadType, model: string, deviceId?: string) {

@@ -186,10 +186,18 @@ function VariantStep(props: { controller: DeployController }) {
   }
 
   if (props.controller.ggufError) {
+    const outdated = props.controller.ggufError.includes("GGUF variant listing is not available")
     return (
       <box flexDirection="column" gap={1}>
-        <text fg={theme.colors.warning}>Could not list GGUF variants: {props.controller.ggufError}</text>
-        <text fg={theme.colors.textSubtle}>Press Enter or S to skip and continue without a pre-downloaded variant.</text>
+        <text fg={theme.colors.warning}>{outdated ? props.controller.ggufError : `Could not list GGUF variants: ${props.controller.ggufError}`}</text>
+        {outdated ? (
+          <>
+            <text fg={theme.colors.textSubtle}>On Linux/macOS: `pkill -f "yokai daemon" && yokai daemon &` — then reopen the deploy wizard.</text>
+            <text fg={theme.colors.textSubtle}>Press Enter or S to skip for now and deploy without a pre-downloaded variant.</text>
+          </>
+        ) : (
+          <text fg={theme.colors.textSubtle}>Press Enter or S to skip and continue without a pre-downloaded variant.</text>
+        )}
       </box>
     )
   }
