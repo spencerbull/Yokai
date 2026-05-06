@@ -66,6 +66,7 @@ func GenerateMonitoringCompose(cfg MonitoringConfig) string {
   node_exporter:
     container_name: yokai-mon-node-exporter
     image: prom/node-exporter:latest
+    user: '0:0'
     network_mode: host
     pid: host
     volumes:

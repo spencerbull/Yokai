@@ -119,7 +119,7 @@ func (d *Daemon) handleDeployBKC(w http.ResponseWriter, r *http.Request) {
 
 	warning := ""
 	if matchType == bkc.MatchSuggested {
-		warning = "Suggested BKC for a similar model. Review image, port, and flags before deploying."
+		warning = fmt.Sprintf("Suggested BKC for a similar model. Applying it will use %s and its image, port, and flags.", cfg.ModelID)
 	}
 
 	writeJSON(w, http.StatusOK, deployBKCResponse{Config: &deployBKCRecord{

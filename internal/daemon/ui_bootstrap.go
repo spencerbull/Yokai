@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -39,6 +40,7 @@ func (d *Daemon) handleBootstrapDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.deviceUpsertRequest = preferTailscaleHostInRequest(req.deviceUpsertRequest)
+	log.Printf("bootstrap device %s requested (monitoring=%t)", req.Host, req.InstallMonitoring)
 
 	client, err := sshpkg.Connect(sshpkg.ClientConfig{
 		Host:           req.Host,
@@ -52,12 +54,14 @@ func (d *Daemon) handleBootstrapDevice(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var authErr *sshpkg.TailscaleAuthError
 		if errors.As(err, &authErr) {
+			log.Printf("bootstrap device %s failed: tailscale ssh auth required: %s", req.Host, authErr.URL)
 			writeJSON(w, http.StatusBadGateway, map[string]string{
 				"error":   "tailscale_auth_required",
 				"message": fmt.Sprintf("tailscale ssh requires browser authentication: %s", authErr.URL),
 			})
 			return
 		}
+		log.Printf("bootstrap device %s failed: ssh connect: %v", req.Host, err)
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "ssh_connect_failed", "message": err.Error()})
 		return
 	}
@@ -65,10 +69,12 @@ func (d *Daemon) handleBootstrapDevice(w http.ResponseWriter, r *http.Request) {
 
 	preflight, err := sshpkg.Preflight(client)
 	if err != nil {
+		log.Printf("bootstrap device %s failed: preflight: %v", req.Host, err)
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "preflight_failed", "message": err.Error()})
 		return
 	}
 	if !preflight.DockerInstalled {
+		log.Printf("bootstrap device %s failed: docker is not installed", req.Host)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "docker_missing", "message": "docker is not installed on the remote device"})
 		return
 	}
@@ -91,17 +97,20 @@ func (d *Daemon) handleBootstrapDevice(w http.ResponseWriter, r *http.Request) {
 	defer func() { _ = os.RemoveAll(filepath.Dir(binaryPath)) }()
 
 	if err := sshpkg.DeployAgent(client, binaryPath, agentToken); err != nil {
+		log.Printf("bootstrap device %s failed: deploy agent: %v", req.Host, err)
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "agent_deploy_failed", "message": err.Error()})
 		return
 	}
 
 	monitoringInstalled := false
+	var monitoringErr error
 	if req.InstallMonitoring {
 		if err := deployMonitoringStack(client, req.Host, req.AgentPort, agentToken, preflight); err != nil {
-			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "monitoring_deploy_failed", "message": err.Error()})
-			return
+			log.Printf("bootstrap device %s monitoring failed: %v", req.Host, err)
+			monitoringErr = err
+		} else {
+			monitoringInstalled = true
 		}
-		monitoringInstalled = true
 	}
 
 	nextCfg := cloneConfigCurrent(d)
@@ -122,6 +131,8 @@ func (d *Daemon) handleBootstrapDevice(w http.ResponseWriter, r *http.Request) {
 	message := fmt.Sprintf("Bootstrapped %s and deployed the Yokai agent", device.Label)
 	if monitoringInstalled {
 		message += " plus monitoring"
+	} else if monitoringErr != nil {
+		message += fmt.Sprintf(", but monitoring failed: %s", monitoringErr.Error())
 	}
 	writeJSON(w, http.StatusCreated, bootstrapDeviceResponse{
 		Device:              d.deviceStatus(device.ID),
@@ -131,6 +142,7 @@ func (d *Daemon) handleBootstrapDevice(w http.ResponseWriter, r *http.Request) {
 		MonitoringInstalled: monitoringInstalled,
 		Message:             message,
 	})
+	log.Printf("bootstrap device %s completed (monitoring_installed=%t)", device.ID, monitoringInstalled)
 }
 
 func decodeBootstrapRequest(r *http.Request) (bootstrapDeviceRequest, error) {
@@ -177,6 +189,11 @@ func deployMonitoringStack(client *sshpkg.Client, host string, agentPort int, ag
 	pullCmd := fmt.Sprintf("cd %s && docker compose pull 2>&1", tmpDir)
 	if out, err := client.Exec(pullCmd); err != nil {
 		return fmt.Errorf("pulling monitoring images: %w — stderr: %s", err, out)
+	}
+
+	cleanupCmd := "docker rm -f yokai-mon-prometheus yokai-mon-grafana yokai-mon-node-exporter yokai-mon-dcgm-exporter 2>/dev/null || true"
+	if out, err := client.Exec(cleanupCmd); err != nil {
+		return fmt.Errorf("removing existing monitoring containers: %w — stderr: %s", err, out)
 	}
 
 	deployCmd := fmt.Sprintf("cd %s && docker compose up -d 2>&1", tmpDir)
