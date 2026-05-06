@@ -55,6 +55,9 @@ func (d *Daemon) ensureConfiguredServices(device config.Device) (int, error) {
 				return reconciled, fmt.Errorf("removing existing container for %s: %w", service.ID, err)
 			}
 		}
+		if conflict := portConflictContainer(containers, expectedName, service.Port); conflict != "" {
+			return reconciled, fmt.Errorf("deploying %s: port %d is already used by running container %s", service.ID, service.Port, conflict)
+		}
 
 		result, err := d.deployConfiguredService(device, service)
 		if err != nil {
@@ -67,6 +70,24 @@ func (d *Daemon) ensureConfiguredServices(device config.Device) (int, error) {
 	}
 
 	return reconciled, nil
+}
+
+func portConflictContainer(containers []agentContainerRecord, expectedName string, externalPort int) string {
+	if externalPort <= 0 {
+		return ""
+	}
+	port := strconv.Itoa(externalPort)
+	for _, container := range containers {
+		if container.Name == expectedName || container.Status != "running" {
+			continue
+		}
+		for _, mappedExternalPort := range container.Ports {
+			if mappedExternalPort == port {
+				return firstNonEmpty(container.Name, container.ID)
+			}
+		}
+	}
+	return ""
 }
 
 func (d *Daemon) servicesForDevice(deviceID string) []config.Service {

@@ -267,14 +267,14 @@ async function readErrorMessage(response: Response) {
 
   try {
     const payload = (await response.json()) as ErrorEnvelope
+    if (payload.message) {
+      return payload.message
+    }
     if (typeof payload.error === "string" && payload.error) {
       return payload.error
     }
     if (payload.error && typeof payload.error === "object" && payload.error.message) {
       return payload.error.message
-    }
-    if (payload.message) {
-      return payload.message
     }
   } catch {
     return fallback

@@ -799,7 +799,7 @@ export function useDevicesController(active: boolean) {
       const failed = response.results.length - succeeded
       setNotice({
         level: failed > 0 ? "warning" : "success",
-        message: `Bulk upgrade complete: ${succeeded} succeeded, ${failed} failed`,
+        message: formatBulkUpgradeNotice(response.results, succeeded, failed),
       })
     } catch (cause) {
       setNotice({ level: "error", message: cause instanceof Error ? cause.message : "failed to upgrade all devices" })
@@ -949,6 +949,21 @@ function bootstrapRequestFromForm(form: DeviceEditorForm) {
     ssh_key_passphrase: form.authMethod === "key" ? form.sshKeyPassphrase : "",
     ssh_password: form.authMethod === "password" ? form.sshPassword : "",
   }
+}
+
+function formatBulkUpgradeNotice(results: Awaited<ReturnType<typeof upgradeAllDevices>>["results"], succeeded: number, failed: number) {
+  const summary = `Bulk upgrade complete: ${succeeded} succeeded, ${failed} failed`
+  if (failed === 0) {
+    return summary
+  }
+
+  const firstFailure = results.find((result) => !result.ok)
+  if (!firstFailure) {
+    return summary
+  }
+
+  const message = firstFailure.message.length > 300 ? `${firstFailure.message.slice(0, 300)}...` : firstFailure.message
+  return `${summary}. First failure (${firstFailure.device_id}): ${message}`
 }
 
 export type DevicesController = ReturnType<typeof useDevicesController>

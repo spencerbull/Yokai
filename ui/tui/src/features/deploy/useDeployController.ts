@@ -687,6 +687,7 @@ export function useDeployController(active: boolean, onComplete: () => void) {
     setAppliedBKCId(bkc.id)
     setForm((current) => ({
       ...current,
+      model: bkc.model_id,
       image: bkc.image,
       port: bkc.port,
       extraArgs: formatArgsForEditor(bkc.extra_args),

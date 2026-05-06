@@ -1,6 +1,10 @@
 apiVersion: 1
+deleteDatasources:
+  - name: Prometheus
+    orgId: 1
 datasources:
   - name: Prometheus
+    uid: yokai-prometheus
     type: prometheus
     access: proxy
     url: http://prometheus:9090

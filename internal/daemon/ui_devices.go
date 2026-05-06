@@ -3,6 +3,7 @@ package daemon
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -190,8 +191,10 @@ func (d *Daemon) handleTestDevice(w http.ResponseWriter, r *http.Request) {
 
 func (d *Daemon) handleUpgradeDevice(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.PathValue("deviceID")
+	log.Printf("upgrade device %s requested", deviceID)
 	device := d.lookupDevice(deviceID)
 	if device == nil {
+		log.Printf("upgrade device %s failed: device not found", deviceID)
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "device_not_found", "message": fmt.Sprintf("device %q was not found", deviceID)})
 		return
 	}
@@ -199,7 +202,10 @@ func (d *Daemon) handleUpgradeDevice(w http.ResponseWriter, r *http.Request) {
 	result := d.upgradeSingleDevice(*device)
 	status := http.StatusOK
 	if !result.OK {
+		log.Printf("upgrade device %s failed: %s", deviceID, result.Message)
 		status = http.StatusBadGateway
+	} else {
+		log.Printf("upgrade device %s completed: %s", deviceID, result.Message)
 	}
 	writeJSON(w, status, result)
 }
@@ -214,10 +220,17 @@ func (d *Daemon) handleTestAllDevices(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *Daemon) handleUpgradeAllDevices(w http.ResponseWriter, r *http.Request) {
+	log.Printf("upgrade all devices requested")
 	devices := d.allDevices()
 	results := make([]interface{}, 0, len(devices))
 	for _, device := range devices {
-		results = append(results, d.upgradeSingleDevice(device))
+		result := d.upgradeSingleDevice(device)
+		if !result.OK {
+			log.Printf("upgrade device %s failed: %s", device.ID, result.Message)
+		} else {
+			log.Printf("upgrade device %s completed: %s", device.ID, result.Message)
+		}
+		results = append(results, result)
 	}
 	writeJSON(w, http.StatusOK, bulkDeviceActionResponse{Results: results})
 }

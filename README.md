@@ -315,12 +315,12 @@ All state lives in `~/.config/yokai/config.json`. Copy this file to another mach
 
 The BKC catalog is a library of pre-validated deploy recipes. Each entry pins the Docker image, tensor-parallel size, quantization flags, GPU memory utilization, chat template, tool-call parser, and any runtime options (`--ipc=host`, `--shm-size`, `ulimit`s) needed for a given model on a given GPU. The deploy wizard matches your model against the catalog, filters recipes by the target device's VRAM and GPU count, and offers one-click apply.
 
-**86 vLLM configs across 82 models from 23 publishers** (as of this commit). Entries are grouped by publisher and live in `internal/bkc/catalog_*.go`:
+**87 vLLM configs across 83 models from 23 publishers** (as of this commit). Entries are grouped by publisher and live in `internal/bkc/catalog_*.go`:
 
 | Publisher | Unique models | vLLM configs | Catalog file |
 |---|---:|---:|---|
 | `Qwen` | 20 | 20 | [`catalog_qwen.go`](internal/bkc/catalog_qwen.go) |
-| `nvidia` | 12 | 14 | [`catalog_nvidia.go`](internal/bkc/catalog_nvidia.go), [`catalog_llama.go`](internal/bkc/catalog_llama.go), [`catalog_moonshotai.go`](internal/bkc/catalog_moonshotai.go), [`catalog_qwen.go`](internal/bkc/catalog_qwen.go) |
+| `nvidia` | 13 | 15 | [`catalog_nvidia.go`](internal/bkc/catalog_nvidia.go), [`catalog_google.go`](internal/bkc/catalog_google.go), [`catalog_llama.go`](internal/bkc/catalog_llama.go), [`catalog_moonshotai.go`](internal/bkc/catalog_moonshotai.go), [`catalog_qwen.go`](internal/bkc/catalog_qwen.go) |
 | `zai-org` (GLM) | 7 | 7 | [`catalog_glm.go`](internal/bkc/catalog_glm.go) |
 | `deepseek-ai` | 6 | 6 | [`catalog_deepseek.go`](internal/bkc/catalog_deepseek.go) |
 | `google` | 5 | 5 | [`catalog_google.go`](internal/bkc/catalog_google.go) |
@@ -342,7 +342,7 @@ The BKC catalog is a library of pre-validated deploy recipes. Each entry pins th
 | `inclusionAI` | 1 | 1 | [`catalog_others.go`](internal/bkc/catalog_others.go) |
 | `jinaai` | 1 | 1 | [`catalog_others.go`](internal/bkc/catalog_others.go) |
 | `stepfun-ai` | 1 | 1 | [`catalog_others.go`](internal/bkc/catalog_others.go) |
-| **Total** | **82** | **86** | |
+| **Total** | **83** | **87** | |
 
 ### Notable recipes
 
