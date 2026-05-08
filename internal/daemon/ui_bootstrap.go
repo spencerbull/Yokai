@@ -187,5 +187,9 @@ func deployMonitoringStack(client *sshpkg.Client, host string, agentPort int, ag
 		}
 	}
 
+	if err := monitoring.ConfigureHostScrapeFirewall(client, agentPort); err != nil {
+		return err
+	}
+
 	return nil
 }
