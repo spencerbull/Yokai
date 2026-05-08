@@ -117,6 +117,7 @@ function renderBackground(width: number, height: number, phase: number, theme: R
     const density = y / Math.max(1, height - 1)
     const topLift = (1 - density) * 0.22
     const bottomBoost = Math.pow(density, 1.45) * 0.045
+    const bottomFill = Math.max(0, density - 0.52) * 0.34
 
     for (let x = 0; x < width; x += 1) {
       const jitter = noise(x + phase * 5, y * 3 + phase)
@@ -134,7 +135,7 @@ function renderBackground(width: number, height: number, phase: number, theme: R
 
       const threshold = 0.58 - density * 0.08 - topLift - bottomBoost * 0.18 + (jitter - 0.5) * 0.045
       const band = normalized - threshold
-      const shaped = Math.max(0, Math.min(1, band * (1.55 + density * 0.68) + topLift * 0.95 + bottomBoost * 0.2 + baseField * 0.16))
+      const shaped = Math.max(0, Math.min(1, band * (1.55 + density * 0.68) + topLift * 0.95 + bottomBoost * 0.2 + bottomFill + baseField * 0.16))
 
       if (shaped <= 0) {
         if (band > -0.045 && jitter < 0.3 + topLift * 0.8 + bottomBoost * 0.12) {

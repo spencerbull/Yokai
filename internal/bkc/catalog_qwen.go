@@ -344,6 +344,45 @@ func init() {
 			Arch:            ArchHopper,
 		},
 
+		// Qwen3.6 27B VLM NVFP4 compressed-tensors baseline (Blackwell).
+		Config{
+			ID:       "qwen3-6-27b-nvfp4",
+			Name:     "Qwen3.6-27B",
+			Workload: WorkloadVLLM,
+			ModelID:  "sakamakismile/Qwen3.6-27B-NVFP4",
+			Image:    imageVLLMCU130_019,
+			Port:     "8000",
+			ExtraArgs: strings.Join([]string{
+				"--trust-remote-code",
+				"--served-model-name Qwen3.6-27B",
+				"--tensor-parallel-size 1",
+				"--max-model-len 262144",
+				"--max-num-seqs 2",
+				"--kv-cache-dtype fp8",
+				"--gpu-memory-utilization 0.90",
+				"--limit-mm-per-prompt {\"image\":4,\"video\":0}",
+				"--reasoning-parser qwen3",
+				"--enable-auto-tool-choice",
+				"--tool-call-parser qwen3_xml",
+			}, " "),
+			Volumes:         hfMountDefault,
+			Runtime:         runtimeDefault,
+			Description:     "Compressed-tensors NVFP4 Qwen3.6 27B VLM on a single RTX PRO 6000 Blackwell; serves as Qwen3.6-27B with image input enabled.",
+			Source:          "Hugging Face sakamakismile/Qwen3.6-27B-NVFP4 model card",
+			TargetDevices:   []string{DeviceRTXPRO6000, DeviceB200},
+			MinVRAMGBPerGPU: 96,
+			MinGPUCount:     1,
+			Quantization:    QuantNVFP4,
+			Arch:            ArchBlackwell,
+			Notes: []string{
+				"Do not pass --quantization modelopt; this repo declares compressed-tensors in its model config.",
+				"Uses the model card's production launch: 256K context, FP8 KV cache, max-num-seqs 2, and gpu-memory-utilization 0.90.",
+				"Keeps image input enabled with an explicit multimodal prompt limit.",
+				"Enables qwen3_xml tool calling for Qwen3.6 chat templates.",
+				"The model card notes faster modelopt + MTP siblings exist, but this BKC intentionally targets this exact compressed-tensors repo.",
+			},
+		},
+
 		// Qwen3.5 397B A17B FP8.
 		Config{
 			ID:       "qwen3-5-397b-a17b-fp8",

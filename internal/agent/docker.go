@@ -22,23 +22,23 @@ import (
 
 // VLLMMetrics holds vLLM inference throughput metrics.
 type VLLMMetrics struct {
-	Model                 string             `json:"model,omitempty"`
-	GenerationTokPerSec   float64            `json:"generation_tok_per_s"`
-	PromptTokPerSec       float64            `json:"prompt_tok_per_s"`
-	RequestsRunning       float64            `json:"requests_running,omitempty"`
-	RequestsWaiting       float64            `json:"requests_waiting,omitempty"`
-	PromptTokensTotal     float64            `json:"prompt_tokens_total,omitempty"`
-	GenerationTokensTotal float64            `json:"generation_tokens_total,omitempty"`
-	TTFTBuckets           map[string]float64 `json:"-"`
-	TTFTSum               float64            `json:"-"`
-	TTFTCount             float64            `json:"-"`
-	HasGenerationTokPerSec   bool `json:"-"`
-	HasPromptTokPerSec       bool `json:"-"`
-	HasRequestsRunning       bool `json:"-"`
-	HasRequestsWaiting       bool `json:"-"`
-	HasPromptTokensTotal     bool `json:"-"`
-	HasGenerationTokensTotal bool `json:"-"`
-	HasTTFT                  bool `json:"-"`
+	Model                    string             `json:"model,omitempty"`
+	GenerationTokPerSec      float64            `json:"generation_tok_per_s"`
+	PromptTokPerSec          float64            `json:"prompt_tok_per_s"`
+	RequestsRunning          float64            `json:"requests_running,omitempty"`
+	RequestsWaiting          float64            `json:"requests_waiting,omitempty"`
+	PromptTokensTotal        float64            `json:"prompt_tokens_total,omitempty"`
+	GenerationTokensTotal    float64            `json:"generation_tokens_total,omitempty"`
+	TTFTBuckets              map[string]float64 `json:"-"`
+	TTFTSum                  float64            `json:"-"`
+	TTFTCount                float64            `json:"-"`
+	HasGenerationTokPerSec   bool               `json:"-"`
+	HasPromptTokPerSec       bool               `json:"-"`
+	HasRequestsRunning       bool               `json:"-"`
+	HasRequestsWaiting       bool               `json:"-"`
+	HasPromptTokensTotal     bool               `json:"-"`
+	HasGenerationTokensTotal bool               `json:"-"`
+	HasTTFT                  bool               `json:"-"`
 }
 
 // Container represents a running container.
@@ -295,9 +295,10 @@ func runContainer(req ContainerRequest) (*ContainerResponse, error) {
 
 	// Run the container
 	cmd := exec.Command("docker", args...)
-	out, err := cmd.Output()
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return nil, fmt.Errorf("docker run failed: %w", err)
+		_ = exec.Command("docker", "rm", "-f", containerName).Run()
+		return nil, fmt.Errorf("docker run failed: %w — output: %s", err, strings.TrimSpace(string(out)))
 	}
 
 	containerID := strings.TrimSpace(string(out))

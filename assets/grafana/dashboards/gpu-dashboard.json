@@ -12,13 +12,17 @@
       "type": "stat",
       "targets": [
         {
-          "expr": "sum(yokai_llm_decode_tokens_per_second) or sum(rate(yokai_llm_generated_tokens_total[5m]))",
-          "refId": "A"
+          "expr": "sum(yokai_llm_decode_tokens_per_second) or sum(irate(yokai_llm_generated_tokens_total[1m]))",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "ops"
+          "unit": "suffix: tok/s"
         }
       },
       "gridPos": {
@@ -26,6 +30,10 @@
         "w": 4,
         "x": 0,
         "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
       }
     },
     {
@@ -34,13 +42,17 @@
       "type": "stat",
       "targets": [
         {
-          "expr": "sum(yokai_llm_prefill_tokens_per_second) or sum(rate(yokai_llm_prompt_tokens_total[5m]))",
-          "refId": "A"
+          "expr": "sum(yokai_llm_prefill_tokens_per_second) or sum(irate(yokai_llm_prompt_tokens_total[1m]))",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "ops"
+          "unit": "suffix: tok/s"
         }
       },
       "gridPos": {
@@ -48,6 +60,10 @@
         "w": 4,
         "x": 4,
         "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
       }
     },
     {
@@ -57,7 +73,11 @@
       "targets": [
         {
           "expr": "sum(yokai_llm_requests_in_flight)",
-          "refId": "A"
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
         }
       ],
       "gridPos": {
@@ -65,6 +85,10 @@
         "w": 4,
         "x": 8,
         "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
       }
     },
     {
@@ -74,7 +98,11 @@
       "targets": [
         {
           "expr": "sum(yokai_llm_requests_queued)",
-          "refId": "A"
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
         }
       ],
       "gridPos": {
@@ -82,6 +110,10 @@
         "w": 4,
         "x": 12,
         "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
       }
     },
     {
@@ -91,7 +123,11 @@
       "targets": [
         {
           "expr": "sum(increase(yokai_llm_generated_tokens_total[1h]))",
-          "refId": "A"
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
         }
       ],
       "fieldConfig": {
@@ -104,6 +140,10 @@
         "w": 4,
         "x": 16,
         "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
       }
     },
     {
@@ -113,7 +153,11 @@
       "targets": [
         {
           "expr": "sum(yokai_service_up)",
-          "refId": "A"
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
         }
       ],
       "gridPos": {
@@ -121,16 +165,24 @@
         "w": 4,
         "x": 20,
         "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
       }
     },
     {
-      "id": 21,
+      "id": 22,
       "title": "Total Generated Tokens",
       "type": "stat",
       "targets": [
         {
           "expr": "sum(yokai_llm_generated_tokens_total)",
-          "refId": "A"
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
         }
       ],
       "fieldConfig": {
@@ -143,6 +195,10 @@
         "w": 4,
         "x": 0,
         "y": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
       }
     },
     {
@@ -151,14 +207,18 @@
       "type": "timeseries",
       "targets": [
         {
-          "expr": "sum by (service) (yokai_llm_decode_tokens_per_second) or sum by (service) (rate(yokai_llm_generated_tokens_total[5m]))",
+          "expr": "sum by (service) (yokai_llm_decode_tokens_per_second) or sum by (service) (irate(yokai_llm_generated_tokens_total[1m]))",
           "legendFormat": "{{service}}",
-          "refId": "A"
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "ops"
+          "unit": "suffix: tok/s"
         }
       },
       "gridPos": {
@@ -166,6 +226,10 @@
         "w": 12,
         "x": 0,
         "y": 10
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
       }
     },
     {
@@ -174,14 +238,18 @@
       "type": "timeseries",
       "targets": [
         {
-          "expr": "sum by (service) (yokai_llm_prefill_tokens_per_second) or sum by (service) (rate(yokai_llm_prompt_tokens_total[5m]))",
+          "expr": "sum by (service) (yokai_llm_prefill_tokens_per_second) or sum by (service) (irate(yokai_llm_prompt_tokens_total[1m]))",
           "legendFormat": "{{service}}",
-          "refId": "A"
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "ops"
+          "unit": "suffix: tok/s"
         }
       },
       "gridPos": {
@@ -189,6 +257,10 @@
         "w": 12,
         "x": 12,
         "y": 10
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
       }
     },
     {
@@ -199,7 +271,11 @@
         {
           "expr": "sum by (service) (yokai_llm_requests_in_flight)",
           "legendFormat": "{{service}}",
-          "refId": "A"
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
         }
       ],
       "gridPos": {
@@ -207,6 +283,10 @@
         "w": 12,
         "x": 0,
         "y": 18
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
       }
     },
     {
@@ -217,7 +297,11 @@
         {
           "expr": "sum by (service) (yokai_llm_requests_queued)",
           "legendFormat": "{{service}}",
-          "refId": "A"
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
         }
       ],
       "gridPos": {
@@ -225,6 +309,10 @@
         "w": 12,
         "x": 12,
         "y": 18
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
       }
     },
     {
@@ -234,7 +322,11 @@
       "targets": [
         {
           "expr": "histogram_quantile(0.95, sum by (le) (rate(yokai_llm_ttft_seconds_bucket[5m])))",
-          "refId": "A"
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
         }
       ],
       "fieldConfig": {
@@ -247,6 +339,10 @@
         "w": 8,
         "x": 0,
         "y": 26
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
       }
     },
     {
@@ -255,14 +351,18 @@
       "type": "timeseries",
       "targets": [
         {
-          "expr": "sum by (service) (rate(yokai_llm_generated_tokens_total[5m]))",
+          "expr": "sum by (service) (irate(yokai_llm_generated_tokens_total[1m]))",
           "legendFormat": "{{service}}",
-          "refId": "A"
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "ops"
+          "unit": "suffix: tok/s"
         }
       },
       "gridPos": {
@@ -270,6 +370,10 @@
         "w": 8,
         "x": 8,
         "y": 26
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
       }
     },
     {
@@ -278,8 +382,12 @@
       "type": "timeseries",
       "targets": [
         {
-          "expr": "(sum(yokai_llm_decode_tokens_per_second) or sum(rate(yokai_llm_generated_tokens_total[5m]))) / clamp_min((sum(DCGM_FI_DEV_POWER_USAGE) or sum(yokai_gpu_power_draw_watts) or vector(0)) + (sum(rate({__name__=~\"node_rapl(_package_.*)?_joules_total\"}[1m])) or vector(0)), 1)",
-          "refId": "A"
+          "expr": "(sum(yokai_llm_decode_tokens_per_second) or sum(irate(yokai_llm_generated_tokens_total[1m]))) / clamp_min((sum(DCGM_FI_DEV_POWER_USAGE) or sum(yokai_gpu_power_draw_watts) or vector(0)) + (sum(irate({__name__=~\"node_rapl(_package_.*)?_joules_total\"}[1m])) or vector(0)), 1)",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
         }
       ],
       "fieldConfig": {
@@ -292,6 +400,10 @@
         "w": 8,
         "x": 16,
         "y": 26
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
       }
     },
     {
@@ -302,7 +414,11 @@
         {
           "expr": "avg by (instance, gpu) (DCGM_FI_DEV_POWER_USAGE) or avg by (instance, gpu) (yokai_gpu_power_draw_watts)",
           "legendFormat": "{{instance}} GPU {{gpu}}",
-          "refId": "A"
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
         }
       ],
       "fieldConfig": {
@@ -315,6 +431,10 @@
         "w": 8,
         "x": 0,
         "y": 34
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
       }
     },
     {
@@ -325,7 +445,11 @@
         {
           "expr": "sum by (instance) (rate({__name__=~\"node_rapl(_package_.*)?_joules_total\"}[1m]))",
           "legendFormat": "{{instance}}",
-          "refId": "A"
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
         }
       ],
       "fieldConfig": {
@@ -338,6 +462,10 @@
         "w": 8,
         "x": 8,
         "y": 34
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
       }
     },
     {
@@ -348,7 +476,11 @@
         {
           "expr": "avg by (instance, gpu) (DCGM_FI_DEV_FB_USED) * 1024 * 1024 or avg by (instance, gpu) (yokai_gpu_vram_used_bytes)",
           "legendFormat": "{{instance}} GPU {{gpu}}",
-          "refId": "A"
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
         }
       ],
       "fieldConfig": {
@@ -361,6 +493,10 @@
         "w": 8,
         "x": 16,
         "y": 34
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
       }
     },
     {
@@ -371,7 +507,11 @@
         {
           "expr": "avg by (instance, gpu) (DCGM_FI_DEV_GPU_UTIL) or avg by (instance, gpu) (yokai_gpu_utilization)",
           "legendFormat": "{{instance}} GPU {{gpu}}",
-          "refId": "A"
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
         }
       ],
       "fieldConfig": {
@@ -384,6 +524,41 @@
         "w": 6,
         "x": 0,
         "y": 42
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
+      }
+    },
+    {
+      "id": 21,
+      "title": "VRAM Utilization",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "100 * avg by (instance, gpu) (DCGM_FI_DEV_FB_USED / clamp_min(DCGM_FI_DEV_FB_USED + DCGM_FI_DEV_FB_FREE, 1)) or 100 * avg by (instance, gpu) (yokai_gpu_vram_used_bytes / clamp_min(yokai_gpu_vram_total_bytes, 1))",
+          "legendFormat": "{{instance}} GPU {{gpu}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 0,
+        "y": 50
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
       }
     },
     {
@@ -394,7 +569,11 @@
         {
           "expr": "avg by (instance, gpu) (DCGM_FI_DEV_GPU_TEMP) or avg by (instance, gpu) (yokai_gpu_temperature_celsius)",
           "legendFormat": "{{instance}} GPU {{gpu}}",
-          "refId": "A"
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
         }
       ],
       "fieldConfig": {
@@ -407,6 +586,10 @@
         "w": 6,
         "x": 6,
         "y": 42
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
       }
     },
     {
@@ -417,7 +600,11 @@
         {
           "expr": "100 - (avg by (instance) (irate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100) or yokai_cpu_percent",
           "legendFormat": "{{instance}}",
-          "refId": "A"
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
         }
       ],
       "fieldConfig": {
@@ -430,6 +617,10 @@
         "w": 6,
         "x": 12,
         "y": 42
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
       }
     },
     {
@@ -440,7 +631,11 @@
         {
           "expr": "100 * (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) or 100 * (yokai_ram_used_bytes / clamp_min(yokai_ram_total_bytes, 1))",
           "legendFormat": "{{instance}}",
-          "refId": "A"
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
         }
       ],
       "fieldConfig": {
@@ -453,6 +648,10 @@
         "w": 6,
         "x": 18,
         "y": 42
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
       }
     }
   ],
@@ -473,5 +672,5 @@
   "timezone": "browser",
   "title": "Yokai LLM Monitoring",
   "uid": "yokai-monitoring",
-  "version": 2
+  "version": 8
 }
