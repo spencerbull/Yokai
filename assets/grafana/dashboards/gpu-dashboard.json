@@ -172,6 +172,36 @@
       }
     },
     {
+      "id": 22,
+      "title": "Total Generated Tokens",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "sum(yokai_llm_generated_tokens_total)",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 0,
+        "y": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
+      }
+    },
+    {
       "id": 7,
       "title": "Decode Throughput by Service",
       "type": "timeseries",
@@ -195,7 +225,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 5
+        "y": 10
       },
       "datasource": {
         "type": "prometheus",
@@ -226,7 +256,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 5
+        "y": 10
       },
       "datasource": {
         "type": "prometheus",
@@ -252,7 +282,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 13
+        "y": 18
       },
       "datasource": {
         "type": "prometheus",
@@ -278,7 +308,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 13
+        "y": 18
       },
       "datasource": {
         "type": "prometheus",
@@ -308,7 +338,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 21
+        "y": 26
       },
       "datasource": {
         "type": "prometheus",
@@ -339,7 +369,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 21
+        "y": 26
       },
       "datasource": {
         "type": "prometheus",
@@ -369,7 +399,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 21
+        "y": 26
       },
       "datasource": {
         "type": "prometheus",
@@ -400,7 +430,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 29
+        "y": 34
       },
       "datasource": {
         "type": "prometheus",
@@ -431,7 +461,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 29
+        "y": 34
       },
       "datasource": {
         "type": "prometheus",
@@ -462,7 +492,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 29
+        "y": 34
       },
       "datasource": {
         "type": "prometheus",
@@ -493,7 +523,7 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 37
+        "y": 42
       },
       "datasource": {
         "type": "prometheus",
@@ -524,7 +554,7 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 45
+        "y": 50
       },
       "datasource": {
         "type": "prometheus",
@@ -555,7 +585,7 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 37
+        "y": 42
       },
       "datasource": {
         "type": "prometheus",
@@ -586,7 +616,7 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 37
+        "y": 42
       },
       "datasource": {
         "type": "prometheus",
@@ -617,7 +647,7 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 37
+        "y": 42
       },
       "datasource": {
         "type": "prometheus",
@@ -642,5 +672,5 @@
   "timezone": "browser",
   "title": "Yokai LLM Monitoring",
   "uid": "yokai-monitoring",
-  "version": 7
+  "version": 8
 }
