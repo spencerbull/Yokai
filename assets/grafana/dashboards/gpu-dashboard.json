@@ -8,11 +8,12 @@
   "panels": [
     {
       "id": 1,
-      "title": "Decode Tok/s",
+      "title": "Active Avg Decode Tok/s",
       "type": "stat",
       "targets": [
         {
-          "expr": "sum(yokai_llm_decode_tokens_per_second) or sum(irate(yokai_llm_generated_tokens_total[1m]))",
+          "expr": "sum(avg_over_time((yokai_llm_decode_tokens_per_second > 0)[$__range:])) or sum(avg_over_time((irate(yokai_llm_generated_tokens_total[1m]) > 0)[$__range:])) or vector(0)",
+          "instant": true,
           "refId": "A",
           "datasource": {
             "type": "prometheus",
@@ -38,11 +39,12 @@
     },
     {
       "id": 2,
-      "title": "Prefill Tok/s",
+      "title": "Active Avg Prefill Tok/s",
       "type": "stat",
       "targets": [
         {
-          "expr": "sum(yokai_llm_prefill_tokens_per_second) or sum(irate(yokai_llm_prompt_tokens_total[1m]))",
+          "expr": "sum(avg_over_time((yokai_llm_prefill_tokens_per_second > 0)[$__range:])) or sum(avg_over_time((irate(yokai_llm_prompt_tokens_total[1m]) > 0)[$__range:])) or vector(0)",
+          "instant": true,
           "refId": "A",
           "datasource": {
             "type": "prometheus",
@@ -68,11 +70,12 @@
     },
     {
       "id": 3,
-      "title": "Current Sessions",
+      "title": "Avg Nonzero Sessions",
       "type": "stat",
       "targets": [
         {
-          "expr": "sum(yokai_llm_requests_in_flight)",
+          "expr": "sum(avg_over_time((yokai_llm_requests_in_flight > 0)[$__range:])) or vector(0)",
+          "instant": true,
           "refId": "A",
           "datasource": {
             "type": "prometheus",
@@ -93,11 +96,12 @@
     },
     {
       "id": 4,
-      "title": "Queue Depth",
+      "title": "Avg Nonzero Queue",
       "type": "stat",
       "targets": [
         {
-          "expr": "sum(yokai_llm_requests_queued)",
+          "expr": "sum(avg_over_time((yokai_llm_requests_queued > 0)[$__range:])) or vector(0)",
+          "instant": true,
           "refId": "A",
           "datasource": {
             "type": "prometheus",
@@ -118,11 +122,12 @@
     },
     {
       "id": 5,
-      "title": "Generated Tokens (1h)",
+      "title": "Active Avg Generated Tok/s",
       "type": "stat",
       "targets": [
         {
-          "expr": "sum(increase(yokai_llm_generated_tokens_total[1h]))",
+          "expr": "sum(avg_over_time((irate(yokai_llm_generated_tokens_total[1m]) > 0)[$__range:])) or vector(0)",
+          "instant": true,
           "refId": "A",
           "datasource": {
             "type": "prometheus",
@@ -132,7 +137,7 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "short"
+          "unit": "suffix: tok/s"
         }
       },
       "gridPos": {
@@ -148,11 +153,12 @@
     },
     {
       "id": 6,
-      "title": "Services Up",
+      "title": "Avg Services Up",
       "type": "stat",
       "targets": [
         {
-          "expr": "sum(yokai_service_up)",
+          "expr": "sum(avg_over_time(yokai_service_up[$__range]))",
+          "instant": true,
           "refId": "A",
           "datasource": {
             "type": "prometheus",
@@ -173,11 +179,12 @@
     },
     {
       "id": 22,
-      "title": "Total Generated Tokens",
+      "title": "Active Avg Prompt Tok/s",
       "type": "stat",
       "targets": [
         {
-          "expr": "sum(yokai_llm_generated_tokens_total)",
+          "expr": "sum(avg_over_time((irate(yokai_llm_prompt_tokens_total[1m]) > 0)[$__range:])) or vector(0)",
+          "instant": true,
           "refId": "A",
           "datasource": {
             "type": "prometheus",
@@ -187,7 +194,7 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "short"
+          "unit": "suffix: tok/s"
         }
       },
       "gridPos": {
@@ -672,5 +679,5 @@
   "timezone": "browser",
   "title": "Yokai LLM Monitoring",
   "uid": "yokai-monitoring",
-  "version": 8
+  "version": 10
 }
