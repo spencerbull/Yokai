@@ -29,6 +29,67 @@ func TestLookupFindsNemotronSuperVLLM(t *testing.T) {
 	}
 }
 
+func TestLookupFindsNemotronNanoOmniNVFP4(t *testing.T) {
+	t.Parallel()
+
+	cfg, ok := Lookup(WorkloadVLLM, "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4")
+	if !ok {
+		t.Fatal("expected matching BKC")
+	}
+	if cfg.Image != imageVLLM020Audio {
+		t.Fatalf("expected vLLM 0.20.0 audio image, got %q", cfg.Image)
+	}
+	if cfg.Quantization != QuantNVFP4 {
+		t.Fatalf("expected NVFP4 quantization, got %q", cfg.Quantization)
+	}
+	if cfg.Arch != ArchBlackwell {
+		t.Fatalf("expected Blackwell arch, got %q", cfg.Arch)
+	}
+	for _, unwanted := range []string{DeviceGB10, DeviceJetsonThor} {
+		for _, got := range cfg.TargetDevices {
+			if got == unwanted {
+				t.Fatalf("generic BKC should not target %s; use a platform-specific BKC", unwanted)
+			}
+		}
+	}
+	for _, want := range []string{
+		"--max-model-len 131072",
+		"--max-num-seqs 384",
+		"--video-pruning-rate 0.5",
+		`--media-io-kwargs {"video":{"fps":2,"num_frames":256}}`,
+		"--reasoning-parser nemotron_v3",
+		"--tool-call-parser qwen3_coder",
+		"--kv-cache-dtype fp8",
+	} {
+		if !strings.Contains(cfg.ExtraArgs, want) {
+			t.Fatalf("expected %q in extra args, got %q", want, cfg.ExtraArgs)
+		}
+	}
+}
+
+func TestLookupForDevicePicksNemotronNanoOmniGB10Variant(t *testing.T) {
+	t.Parallel()
+
+	cfg, ok := LookupForDevice(WorkloadVLLM, "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4", DeviceGB10, 0, 0)
+	if !ok {
+		t.Fatal("expected a GB10-specific BKC")
+	}
+	if cfg.ID != "nemotron-3-nano-omni-30b-a3b-reasoning-nvfp4-gb10" {
+		t.Fatalf("expected GB10-specific config, got %q", cfg.ID)
+	}
+	for _, want := range []string{
+		"--max-num-seqs 8",
+		"--gpu-memory-utilization 0.8",
+		`--limit-mm-per-prompt {"video":1,"image":1,"audio":1}`,
+		"--enable-prefix-caching",
+		"--max-num-batched-tokens 32768",
+	} {
+		if !strings.Contains(cfg.ExtraArgs, want) {
+			t.Fatalf("expected %q in extra args, got %q", want, cfg.ExtraArgs)
+		}
+	}
+}
+
 func TestLookupRejectsWrongWorkload(t *testing.T) {
 	t.Parallel()
 

@@ -19,34 +19,34 @@ const (
 // and integrated systems that the config has been validated against, so the
 // deploy wizard can filter or hint which configs fit which hardware.
 const (
-	DeviceGB10        = "gb10"          // NVIDIA DGX Spark GB10 (aarch64, 128 GB unified)
-	DeviceJetsonThor  = "jetson-thor"   // NVIDIA Jetson Thor (aarch64)
-	DeviceRTXPRO6000  = "rtx-pro-6000"  // NVIDIA RTX PRO 6000 Blackwell, 96 GB
-	DeviceRTX5090     = "rtx-5090"      // NVIDIA GeForce RTX 5090, 32 GB
-	DeviceRTX4090     = "rtx-4090"      // NVIDIA GeForce RTX 4090, 24 GB
-	DeviceL40S        = "l40s"          // NVIDIA L40S, 48 GB
-	DeviceA100_80     = "a100-80"       // NVIDIA A100 SXM4/PCIe 80 GB
-	DeviceH100_80     = "h100-80"       // NVIDIA H100 SXM5/PCIe 80 GB
-	DeviceH100_94     = "h100-94"       // NVIDIA H100 NVL 94 GB
-	DeviceH200        = "h200"          // NVIDIA H200, 141 GB
-	DeviceH20         = "h20"           // NVIDIA H20, 141 GB (China-market Hopper)
-	DeviceB200        = "b200"          // NVIDIA B200, 192 GB
-	DeviceGB200       = "gb200"         // NVIDIA GB200 NVL72 node
-	DeviceMI300X      = "mi300x"        // AMD Instinct MI300X, 192 GB
-	DeviceMI325X      = "mi325x"        // AMD Instinct MI325X, 256 GB
-	DeviceMI355X      = "mi355x"        // AMD Instinct MI355X
-	DeviceR9700       = "radeon-r9700"  // AMD Radeon AI PRO R9700, 32 GB
+	DeviceGB10       = "gb10"         // NVIDIA DGX Spark GB10 (aarch64, 128 GB unified)
+	DeviceJetsonThor = "jetson-thor"  // NVIDIA Jetson Thor (aarch64)
+	DeviceRTXPRO6000 = "rtx-pro-6000" // NVIDIA RTX PRO 6000 Blackwell, 96 GB
+	DeviceRTX5090    = "rtx-5090"     // NVIDIA GeForce RTX 5090, 32 GB
+	DeviceRTX4090    = "rtx-4090"     // NVIDIA GeForce RTX 4090, 24 GB
+	DeviceL40S       = "l40s"         // NVIDIA L40S, 48 GB
+	DeviceA100_80    = "a100-80"      // NVIDIA A100 SXM4/PCIe 80 GB
+	DeviceH100_80    = "h100-80"      // NVIDIA H100 SXM5/PCIe 80 GB
+	DeviceH100_94    = "h100-94"      // NVIDIA H100 NVL 94 GB
+	DeviceH200       = "h200"         // NVIDIA H200, 141 GB
+	DeviceH20        = "h20"          // NVIDIA H20, 141 GB (China-market Hopper)
+	DeviceB200       = "b200"         // NVIDIA B200, 192 GB
+	DeviceGB200      = "gb200"        // NVIDIA GB200 NVL72 node
+	DeviceMI300X     = "mi300x"       // AMD Instinct MI300X, 192 GB
+	DeviceMI325X     = "mi325x"       // AMD Instinct MI325X, 256 GB
+	DeviceMI355X     = "mi355x"       // AMD Instinct MI355X
+	DeviceR9700      = "radeon-r9700" // AMD Radeon AI PRO R9700, 32 GB
 )
 
 // Quantization strings used consistently across the catalog.
 const (
-	QuantBF16   = "BF16"
-	QuantFP16   = "FP16"
-	QuantFP8    = "FP8"
-	QuantFP4    = "FP4"
-	QuantNVFP4  = "NVFP4"
-	QuantMXFP4  = "MXFP4"
-	QuantINT4   = "INT4"
+	QuantBF16  = "BF16"
+	QuantFP16  = "FP16"
+	QuantFP8   = "FP8"
+	QuantFP4   = "FP4"
+	QuantNVFP4 = "NVFP4"
+	QuantMXFP4 = "MXFP4"
+	QuantINT4  = "INT4"
 )
 
 // Architecture hints — used for display and future filtering.
@@ -303,6 +303,8 @@ const (
 	imageVLLMLatest    = "vllm/vllm-openai:latest"
 	imageVLLMCU130     = "vllm/vllm-openai:v0.14.1-cu130"
 	imageVLLMCU130_019 = "vllm/vllm-openai:v0.19.1-cu130"
+	imageVLLM020       = "vllm/vllm-openai:v0.20.0"
+	imageVLLM020Audio  = "ghcr.io/spencerbull/yokai/vllm-openai-audio:v0.20.0"
 	imageVLLMNGC       = "nvcr.io/nvidia/vllm:25.12.post1-py3"
 	imageVLLMJetson    = "ghcr.io/nvidia-ai-iot/vllm:latest-jetson-thor"
 	imageVLLMGemma4    = "vllm/vllm-openai:gemma4"
