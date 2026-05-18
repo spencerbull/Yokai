@@ -304,6 +304,7 @@ const (
 	imageVLLMCU130     = "vllm/vllm-openai:v0.14.1-cu130"
 	imageVLLMCU130_019 = "vllm/vllm-openai:v0.19.1-cu130"
 	imageVLLM020       = "vllm/vllm-openai:v0.20.0"
+	imageVLLM020Audio  = "ghcr.io/spencerbull/yokai/vllm-openai-audio:v0.20.0"
 	imageVLLMNGC       = "nvcr.io/nvidia/vllm:25.12.post1-py3"
 	imageVLLMJetson    = "ghcr.io/nvidia-ai-iot/vllm:latest-jetson-thor"
 	imageVLLMGemma4    = "vllm/vllm-openai:gemma4"
