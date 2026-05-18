@@ -87,6 +87,7 @@ func init() {
 				"--tool-call-parser gemma4",
 				"--reasoning-parser gemma4",
 				"--enable-auto-tool-choice",
+				"--chat-template examples/tool_chat_template_gemma4.jinja",
 				"--trust-remote-code",
 			}, " "),
 			Volumes:         hfMountDefault,
@@ -100,6 +101,7 @@ func init() {
 			Arch:            ArchBlackwell,
 			Notes: []string{
 				"NVIDIA currently documents this checkpoint as TP=1 only in vLLM.",
+				"Uses the Gemma 4 vLLM chat template so reasoning and tool calls are parsed correctly.",
 				"Allows up to 4 images per request and disables audio allocation for this text/image checkpoint.",
 				"Sets --max-num-seqs 30 with a 256K context window; full-context concurrency still depends on available KV-cache memory and image token budget.",
 			},

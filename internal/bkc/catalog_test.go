@@ -53,6 +53,12 @@ func TestLookupFindsNvidiaGemma4NVFP4(t *testing.T) {
 	if !strings.Contains(cfg.ExtraArgs, "--tool-call-parser gemma4") {
 		t.Fatalf("expected Gemma 4 tool parser flag, got %q", cfg.ExtraArgs)
 	}
+	if !strings.Contains(cfg.ExtraArgs, "--reasoning-parser gemma4") {
+		t.Fatalf("expected Gemma 4 reasoning parser flag, got %q", cfg.ExtraArgs)
+	}
+	if !strings.Contains(cfg.ExtraArgs, "--chat-template examples/tool_chat_template_gemma4.jinja") {
+		t.Fatalf("expected Gemma 4 tool chat template flag, got %q", cfg.ExtraArgs)
+	}
 	if !strings.Contains(cfg.ExtraArgs, "--tensor-parallel-size 1") {
 		t.Fatalf("expected TP=1 flag, got %q", cfg.ExtraArgs)
 	}
