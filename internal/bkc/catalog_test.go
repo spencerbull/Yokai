@@ -29,6 +29,37 @@ func TestLookupFindsNemotronSuperVLLM(t *testing.T) {
 	}
 }
 
+func TestLookupFindsNemotronNanoOmniNVFP4(t *testing.T) {
+	t.Parallel()
+
+	cfg, ok := Lookup(WorkloadVLLM, "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4")
+	if !ok {
+		t.Fatal("expected matching BKC")
+	}
+	if cfg.Image != imageVLLM020 {
+		t.Fatalf("expected vLLM 0.20.0 image, got %q", cfg.Image)
+	}
+	if cfg.Quantization != QuantNVFP4 {
+		t.Fatalf("expected NVFP4 quantization, got %q", cfg.Quantization)
+	}
+	if cfg.Arch != ArchBlackwell {
+		t.Fatalf("expected Blackwell arch, got %q", cfg.Arch)
+	}
+	for _, want := range []string{
+		"--max-model-len 131072",
+		"--max-num-seqs 384",
+		"--video-pruning-rate 0.5",
+		`--media-io-kwargs {"video":{"fps":2,"num_frames":256}}`,
+		"--reasoning-parser nemotron_v3",
+		"--tool-call-parser qwen3_coder",
+		"--kv-cache-dtype fp8",
+	} {
+		if !strings.Contains(cfg.ExtraArgs, want) {
+			t.Fatalf("expected %q in extra args, got %q", want, cfg.ExtraArgs)
+		}
+	}
+}
+
 func TestLookupRejectsWrongWorkload(t *testing.T) {
 	t.Parallel()
 

@@ -49,6 +49,44 @@ func init() {
 			},
 		},
 
+		// Nemotron-3-Nano-Omni-30B-A3B-Reasoning NVFP4 — multimodal (video/audio/image/text)
+		// vLLM config for single-GPU Blackwell deployments.
+		Config{
+			ID:       "nemotron-3-nano-omni-30b-a3b-reasoning-nvfp4",
+			Name:     "Nemotron 3 Nano Omni 30B A3B Reasoning NVFP4",
+			Workload: WorkloadVLLM,
+			ModelID:  "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4",
+			Image:    imageVLLM020,
+			Port:     "8000",
+			ExtraArgs: strings.Join([]string{
+				"--trust-remote-code",
+				"--tensor-parallel-size 1",
+				"--max-model-len 131072",
+				"--max-num-seqs 384",
+				"--video-pruning-rate 0.5",
+				"--allowed-local-media-path /",
+				`--media-io-kwargs {"video":{"fps":2,"num_frames":256}}`,
+				"--reasoning-parser nemotron_v3",
+				"--enable-auto-tool-choice",
+				"--tool-call-parser qwen3_coder",
+				"--kv-cache-dtype fp8",
+			}, " "),
+			Volumes:         hfMountDefault,
+			Runtime:         runtimeDefault,
+			Description:     "NVIDIA Nemotron-3-Nano-Omni-30B-A3B-Reasoning NVFP4 vLLM config for multimodal Blackwell inference.",
+			Source:          "https://huggingface.co/nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4",
+			TargetDevices:   []string{DeviceRTX5090, DeviceGB10, DeviceJetsonThor, DeviceRTXPRO6000, DeviceB200},
+			MinVRAMGBPerGPU: 32,
+			MinGPUCount:     1,
+			Quantization:    QuantNVFP4,
+			Arch:            ArchBlackwell,
+			Notes: []string{
+				"Requires vLLM 0.20.0; the base image should install vllm[audio] before serving if audio inputs or video audio tracks are used.",
+				"Uses NVIDIA's 128K-context vLLM launch recipe, FP8 KV cache, nemotron_v3 reasoning parser, and Qwen3 Coder tool-call parser.",
+				"NVFP4 weights are about 21 GB; NVIDIA lists RTX 5090 32 GB as the minimum GPU and B200 / RTX PRO 6000 / DGX Spark as preferred targets.",
+			},
+		},
+
 		// Nemotron-3-Nano-30B-A3B FP8 — fits single GPU >= 40 GB (H100 80 GB,
 		// H200, B200, RTX PRO 6000, GB10 via NGC container).
 		Config{
@@ -69,8 +107,8 @@ func init() {
 				"--tool-call-parser qwen3_coder",
 			}, " "),
 			Env: map[string]string{
-				"VLLM_USE_FLASHINFER_MOE_FP8":  "1",
-				"VLLM_FLASHINFER_MOE_BACKEND":  "throughput",
+				"VLLM_USE_FLASHINFER_MOE_FP8": "1",
+				"VLLM_FLASHINFER_MOE_BACKEND": "throughput",
 			},
 			Volumes:         hfMountDefault,
 			Runtime:         runtimeDefault,
