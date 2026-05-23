@@ -383,6 +383,42 @@ func init() {
 			},
 		},
 
+		// Qwen3.6 27B Text NVFP4 + MTP (Blackwell).
+		Config{
+			ID:       "qwen3-6-27b-text-nvfp4-mtp",
+			Name:     "Qwen3.6-27B Text NVFP4 MTP",
+			Workload: WorkloadVLLM,
+			ModelID:  "sakamakismile/Qwen3.6-27B-Text-NVFP4-MTP",
+			Image:    imageVLLMCU130_019,
+			Port:     "8000",
+			ExtraArgs: strings.Join([]string{
+				"--trust-remote-code",
+				"--quantization modelopt",
+				"--language-model-only",
+				"--tensor-parallel-size 1",
+				"--max-model-len 262144",
+				"--max-num-seqs 2",
+				"--kv-cache-dtype fp8",
+				"--gpu-memory-utilization 0.90",
+				"--reasoning-parser qwen3",
+				"--speculative-config.method qwen3_5_mtp",
+				"--speculative-config.num_speculative_tokens 3",
+			}, " "),
+			Volumes:         hfMountDefault,
+			Runtime:         runtimeDefault,
+			Description:     "ModelOpt NVFP4 Qwen3.6 27B text-only checkpoint with Qwen3.5 MTP speculation for single-GPU Blackwell.",
+			Source:          "Hugging Face sakamakismile/Qwen3.6-27B-Text-NVFP4-MTP model card",
+			TargetDevices:   []string{DeviceB200, DeviceRTXPRO6000, DeviceGB10},
+			MinVRAMGBPerGPU: 96,
+			MinGPUCount:     1,
+			Quantization:    QuantNVFP4,
+			Arch:            ArchBlackwell,
+			Notes: []string{
+				"Uses dotted speculative-config arguments instead of JSON so Yokai passes them as clean argv tokens.",
+				"Targets GB10 / DGX Spark, single RTX PRO 6000 Blackwell, and larger Blackwell GPUs.",
+			},
+		},
+
 		// Qwen3.5 397B A17B FP8.
 		Config{
 			ID:       "qwen3-5-397b-a17b-fp8",

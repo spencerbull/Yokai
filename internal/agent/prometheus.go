@@ -65,6 +65,7 @@ func renderPrometheusMetrics(metrics *SystemMetrics, containers []Container) str
 	writeMetricHeader(&b, "yokai_llm_requests_queued", "Current queued requests", "gauge")
 	writeMetricHeader(&b, "yokai_llm_prompt_tokens_total", "Total prompt tokens processed", "counter")
 	writeMetricHeader(&b, "yokai_llm_generated_tokens_total", "Total generated output tokens", "counter")
+	writeMetricHeader(&b, "yokai_llm_cached_prompt_tokens_total", "Total cached prompt tokens reused", "counter")
 	writeMetricHeader(&b, "yokai_llm_ttft_seconds", "Time to first token", "histogram")
 
 	sort.Slice(containers, func(i, j int) bool {
@@ -114,6 +115,9 @@ func renderPrometheusMetrics(metrics *SystemMetrics, containers []Container) str
 		}
 		if vllm.HasGenerationTokensTotal {
 			writePrometheusSample(&b, "yokai_llm_generated_tokens_total", labels, formatFloat(vllm.GenerationTokensTotal))
+		}
+		if vllm.HasCachedPromptTokens {
+			writePrometheusSample(&b, "yokai_llm_cached_prompt_tokens_total", labels, formatFloat(vllm.CachedPromptTokensTotal))
 		}
 		if vllm.HasTTFT {
 			for _, le := range sortedHistogramBounds(vllm.TTFTBuckets) {

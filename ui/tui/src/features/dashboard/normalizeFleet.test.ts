@@ -41,6 +41,9 @@ describe("normalizeFleetSnapshot", () => {
             status: "running",
             health: "healthy",
             generation_tok_per_s: 35.5,
+            prompt_tokens_total: 1200,
+            generation_tokens_total: 900,
+            cached_prompt_tokens_total: 300,
           },
         ],
       },
@@ -73,6 +76,9 @@ describe("normalizeFleetSnapshot", () => {
     expect(snapshot.services[0].serviceId).toBe("alert")
     expect(snapshot.services[0].deviceLabel).toBe("beta")
     expect(snapshot.services[1].generationTokPerSec).toBe(35.5)
+    expect(snapshot.services[1].promptTokensTotal).toBe(1200)
+    expect(snapshot.services[1].generationTokensTotal).toBe(900)
+    expect(snapshot.services[1].cachedPromptTokensTotal).toBe(300)
   })
 
   test("computes gpu totals and per-device gpu summary", () => {

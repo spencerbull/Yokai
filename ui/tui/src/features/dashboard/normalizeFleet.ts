@@ -95,6 +95,9 @@ function toFleetService(device: FleetDevice, container: ContainerMetrics): Fleet
     uptimeSeconds: container.uptime_seconds ?? 0,
     generationTokPerSec: container.generation_tok_per_s ?? 0,
     promptTokPerSec: container.prompt_tok_per_s ?? 0,
+    promptTokensTotal: container.prompt_tokens_total ?? 0,
+    generationTokensTotal: container.generation_tokens_total ?? 0,
+    cachedPromptTokensTotal: container.cached_prompt_tokens_total ?? 0,
   }
 }
 

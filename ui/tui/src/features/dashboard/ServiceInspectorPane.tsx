@@ -36,6 +36,9 @@ export function ServiceInspectorPane(props: ServiceInspectorPaneProps) {
           <MetricLine label="GPU" value={formatMemory(props.service.gpuMemoryMB)} />
           <MetricLine label="Output" value={formatRate(props.service.generationTokPerSec, "tok/s")} />
           <MetricLine label="Prefill" value={formatRate(props.service.promptTokPerSec, "tok/s")} />
+          <MetricLine label="Input Total" value={formatTokens(props.service.promptTokensTotal)} />
+          <MetricLine label="Output Total" value={formatTokens(props.service.generationTokensTotal)} />
+          <MetricLine label="Cached Total" value={formatTokens(props.service.cachedPromptTokensTotal)} />
           <MetricLine label="Uptime" value={formatUptime(props.service.uptimeSeconds)} />
           {props.pendingAction ? <text fg={theme.colors.accent}>Running {props.pendingAction}...</text> : null}
         </>
@@ -75,6 +78,13 @@ function formatRate(value: number, unit: string) {
     return "-"
   }
   return `${value.toFixed(1)} ${unit}`
+}
+
+function formatTokens(value: number) {
+  if (value <= 0) {
+    return "-"
+  }
+  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(value)
 }
 
 function formatUptime(seconds: number) {

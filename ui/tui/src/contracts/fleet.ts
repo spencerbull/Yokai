@@ -54,6 +54,9 @@ export type ContainerMetrics = {
   health?: string
   generation_tok_per_s?: number
   prompt_tok_per_s?: number
+  prompt_tokens_total?: number
+  generation_tokens_total?: number
+  cached_prompt_tokens_total?: number
 }
 
 export type DeviceMetrics = {
@@ -107,6 +110,9 @@ export type FleetService = {
   uptimeSeconds: number
   generationTokPerSec: number
   promptTokPerSec: number
+  promptTokensTotal: number
+  generationTokensTotal: number
+  cachedPromptTokensTotal: number
 }
 
 export type FleetSnapshot = {
