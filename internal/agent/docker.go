@@ -29,6 +29,7 @@ type VLLMMetrics struct {
 	RequestsWaiting          float64            `json:"requests_waiting,omitempty"`
 	PromptTokensTotal        float64            `json:"prompt_tokens_total,omitempty"`
 	GenerationTokensTotal    float64            `json:"generation_tokens_total,omitempty"`
+	CachedPromptTokensTotal  float64            `json:"cached_prompt_tokens_total,omitempty"`
 	TTFTBuckets              map[string]float64 `json:"-"`
 	TTFTSum                  float64            `json:"-"`
 	TTFTCount                float64            `json:"-"`
@@ -38,6 +39,7 @@ type VLLMMetrics struct {
 	HasRequestsWaiting       bool               `json:"-"`
 	HasPromptTokensTotal     bool               `json:"-"`
 	HasGenerationTokensTotal bool               `json:"-"`
+	HasCachedPromptTokens    bool               `json:"-"`
 	HasTTFT                  bool               `json:"-"`
 }
 
@@ -698,6 +700,7 @@ func scrapeVLLMMetrics(port string) (*VLLMMetrics, error) {
 	}
 
 	m := &VLLMMetrics{}
+	cachedPromptTokensFallback := 0.0
 	for _, line := range strings.Split(string(body), "\n") {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "#") || line == "" {
@@ -734,6 +737,11 @@ func scrapeVLLMMetrics(port string) (*VLLMMetrics, error) {
 		case "vllm:generation_tokens_total", "vllm:generation_tokens":
 			m.GenerationTokensTotal += value
 			m.HasGenerationTokensTotal = true
+		case "vllm:prompt_tokens_cached_total", "vllm:prompt_tokens_cached":
+			m.CachedPromptTokensTotal += value
+			m.HasCachedPromptTokens = true
+		case "vllm:prefix_cache_hits_total", "vllm:prefix_cache_hits", "vllm:external_prefix_cache_hits_total", "vllm:external_prefix_cache_hits":
+			cachedPromptTokensFallback += value
 		case "vllm:time_to_first_token_seconds_bucket":
 			le := labels["le"]
 			if le == "" {
@@ -751,6 +759,10 @@ func scrapeVLLMMetrics(port string) (*VLLMMetrics, error) {
 			m.TTFTCount += value
 			m.HasTTFT = true
 		}
+	}
+	if !m.HasCachedPromptTokens && cachedPromptTokensFallback > 0 {
+		m.CachedPromptTokensTotal = cachedPromptTokensFallback
+		m.HasCachedPromptTokens = true
 	}
 	return m, nil
 }

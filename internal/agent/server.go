@@ -228,6 +228,9 @@ func mergeContainerMetrics(metricContainers []ContainerMetrics, dockerContainers
 			if container.VLLMMetrics != nil {
 				metricContainers[idx].GenerationTokPerSec = container.VLLMMetrics.GenerationTokPerSec
 				metricContainers[idx].PromptTokPerSec = container.VLLMMetrics.PromptTokPerSec
+				metricContainers[idx].PromptTokensTotal = container.VLLMMetrics.PromptTokensTotal
+				metricContainers[idx].GenerationTokensTotal = container.VLLMMetrics.GenerationTokensTotal
+				metricContainers[idx].CachedPromptTokensTotal = container.VLLMMetrics.CachedPromptTokensTotal
 			}
 			continue
 		}
@@ -243,6 +246,9 @@ func mergeContainerMetrics(metricContainers []ContainerMetrics, dockerContainers
 		if container.VLLMMetrics != nil {
 			cm.GenerationTokPerSec = container.VLLMMetrics.GenerationTokPerSec
 			cm.PromptTokPerSec = container.VLLMMetrics.PromptTokPerSec
+			cm.PromptTokensTotal = container.VLLMMetrics.PromptTokensTotal
+			cm.GenerationTokensTotal = container.VLLMMetrics.GenerationTokensTotal
+			cm.CachedPromptTokensTotal = container.VLLMMetrics.CachedPromptTokensTotal
 		}
 		metricContainers = append(metricContainers, cm)
 

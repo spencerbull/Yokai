@@ -209,6 +209,99 @@
       }
     },
     {
+      "id": 23,
+      "title": "Prompt Tokens (In)",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "sum(increase(yokai_llm_prompt_tokens_total[$__range])) or vector(0)",
+          "instant": true,
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix: tok"
+        }
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 4,
+        "y": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
+      }
+    },
+    {
+      "id": 24,
+      "title": "Decode Tokens (Out)",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "sum(increase(yokai_llm_generated_tokens_total[$__range])) or vector(0)",
+          "instant": true,
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix: tok"
+        }
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 8,
+        "y": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
+      }
+    },
+    {
+      "id": 25,
+      "title": "Cached Tokens",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "sum(increase(yokai_llm_cached_prompt_tokens_total[$__range])) or vector(0)",
+          "instant": true,
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix: tok"
+        }
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 12,
+        "y": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
+      }
+    },
+    {
       "id": 7,
       "title": "Decode Throughput by Service",
       "type": "timeseries",
@@ -679,5 +772,5 @@
   "timezone": "browser",
   "title": "Yokai LLM Monitoring",
   "uid": "yokai-monitoring",
-  "version": 10
+  "version": 11
 }

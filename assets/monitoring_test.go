@@ -126,6 +126,58 @@ func TestDefaultGrafanaDashboardStatTilesAverageSelectedRange(t *testing.T) {
 	}
 }
 
+func TestDefaultGrafanaDashboardTokenCounterTilesUseSelectedRangeIncrease(t *testing.T) {
+	t.Parallel()
+
+	var dashboard struct {
+		Panels []struct {
+			Type    string `json:"type"`
+			Title   string `json:"title"`
+			Targets []struct {
+				Expr    string `json:"expr"`
+				Instant bool   `json:"instant"`
+			} `json:"targets"`
+		} `json:"panels"`
+	}
+	if err := json.Unmarshal([]byte(DefaultGrafanaDashboard), &dashboard); err != nil {
+		t.Fatalf("dashboard JSON should be valid: %v", err)
+	}
+
+	counterPanels := map[string]string{
+		"Prompt Tokens (In)":  "yokai_llm_prompt_tokens_total",
+		"Decode Tokens (Out)": "yokai_llm_generated_tokens_total",
+		"Cached Tokens":       "yokai_llm_cached_prompt_tokens_total",
+	}
+	seen := make(map[string]bool, len(counterPanels))
+
+	for _, panel := range dashboard.Panels {
+		metric, ok := counterPanels[panel.Title]
+		if !ok || panel.Type != "stat" {
+			continue
+		}
+		if len(panel.Targets) == 0 {
+			t.Fatalf("stat panel %q should have a target", panel.Title)
+		}
+		expr := panel.Targets[0].Expr
+		if !strings.Contains(expr, metric) {
+			t.Fatalf("stat panel %q should query %s: %s", panel.Title, metric, expr)
+		}
+		if !strings.Contains(expr, "increase(") || !strings.Contains(expr, "$__range") {
+			t.Fatalf("stat panel %q should increase over Grafana's selected range: %s", panel.Title, expr)
+		}
+		if !panel.Targets[0].Instant {
+			t.Fatalf("stat panel %q should query one selected-range value", panel.Title)
+		}
+		seen[panel.Title] = true
+	}
+
+	for title := range counterPanels {
+		if !seen[title] {
+			t.Fatalf("dashboard should include token counter stat panel %q", title)
+		}
+	}
+}
+
 func TestDefaultGrafanaDashboardWorkloadStatTilesIgnoreZeroSamples(t *testing.T) {
 	t.Parallel()
 
