@@ -880,6 +880,8 @@ func inferToolCallParser(model string) string {
 		return "internlm"
 	case strings.Contains(m, "granite"):
 		return "granite"
+	case strings.Contains(m, "qwen3.6"), strings.Contains(m, "qwen3-6"), strings.Contains(m, "qwen3_6"):
+		return "qwen3_xml"
 	case strings.Contains(m, "qwen3-coder"), strings.Contains(m, "qwen3coder"):
 		return "qwen3_xml"
 	case strings.Contains(m, "qwen3.5"), strings.Contains(m, "qwen3_5"):

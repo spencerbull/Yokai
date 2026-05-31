@@ -245,6 +245,7 @@ func TestDefaultArgsRespectUserOverrides(t *testing.T) {
 		{name: "llama model equals form", got: withLlamaModelArg("--model=/tmp/model.gguf", "foo/bar.gguf"), wants: []string{"--model=/tmp/model.gguf"}},
 		{name: "host equals form", got: withHostArg("--host=127.0.0.1", "--host", "0.0.0.0"), wants: []string{"--host=127.0.0.1"}},
 		{name: "tool parser equals form", got: withVLLMToolCallArgs("--tool-call-parser=hermes", "meta-llama/Llama-3.1-8B-Instruct"), wants: []string{"--enable-auto-tool-choice", "--tool-call-parser=hermes"}},
+		{name: "qwen3.6 tool parser", got: withVLLMToolCallArgs("", "sakamakismile/Qwen3.6-27B-Text-NVFP4-MTP"), wants: []string{"--enable-auto-tool-choice", "--tool-call-parser qwen3_xml"}},
 	}
 
 	for _, tt := range tests {
