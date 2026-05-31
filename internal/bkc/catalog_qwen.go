@@ -404,7 +404,6 @@ func init() {
 				"--reasoning-parser qwen3",
 				"--speculative-config.method qwen3_5_mtp",
 				"--speculative-config.num_speculative_tokens 3",
-				"--default-chat-template-kwargs {\"enable_thinking\":false}",
 				"--enable-auto-tool-choice",
 				"--tool-call-parser qwen3_xml",
 			}, " "),
@@ -420,7 +419,6 @@ func init() {
 			Notes: []string{
 				"Pins vLLM to v0.19.1-cu130; do not use Docker latest for this production BKC.",
 				"Uses dotted speculative-config arguments instead of JSON so Yokai passes them as clean argv tokens.",
-				"Disables thinking in the default chat template so OpenAI-compatible clients receive text in message.content instead of message.reasoning.",
 				"Enables qwen3_xml tool calling for Qwen3.6 chat templates.",
 				"Targets GB10 / DGX Spark, single RTX PRO 6000 Blackwell, and larger Blackwell GPUs.",
 			},
