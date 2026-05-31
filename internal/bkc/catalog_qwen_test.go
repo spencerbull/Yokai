@@ -82,6 +82,8 @@ func TestLookupFindsQwen36TextNVFP4MTP(t *testing.T) {
 		"--kv-cache-dtype fp8",
 		"--gpu-memory-utilization 0.90",
 		"--reasoning-parser qwen3",
+		"--speculative-config.method qwen3_5_mtp",
+		"--speculative-config.num_speculative_tokens 3",
 		"--default-chat-template-kwargs {\"enable_thinking\":false}",
 		"--enable-auto-tool-choice",
 		"--tool-call-parser qwen3_xml",
@@ -103,7 +105,7 @@ func TestLookupFindsQwen36TextNVFP4MTP(t *testing.T) {
 		}
 	}
 	for _, unwanted := range []string{
-		"--speculative-config",
+		"--speculative-config {",
 		"--limit-mm-per-prompt",
 	} {
 		if strings.Contains(cfg.ExtraArgs, unwanted) {
