@@ -256,6 +256,44 @@ func TestDefaultArgsRespectUserOverrides(t *testing.T) {
 	}
 }
 
+func TestVLLMImageDetectionSupportsDigestPins(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		image string
+		want  bool
+	}{
+		{image: "vllm/vllm-openai:v0.22.0", want: true},
+		{image: "vllm/vllm-openai@sha256:cb082d13c67a7916bb7aa94ab35738b0e2f9fe053cabc54a6d5c66304bec56d6", want: true},
+		{image: "ghcr.io/spencerbull/yokai/vllm-openai-audio:v0.20.0", want: true},
+		{image: "nginx:latest", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.image, func(t *testing.T) {
+			if got := isVLLMImage(tt.image); got != tt.want {
+				t.Fatalf("isVLLMImage(%q) = %v, want %v", tt.image, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestImageSupportsPlatformHandlesSingleDigestManifest(t *testing.T) {
+	t.Parallel()
+
+	manifest := []byte(`{"architecture":"amd64","os":"linux"}`)
+	supported, platforms, err := imageSupportsPlatform(manifest, "linux", "amd64")
+	if err != nil {
+		t.Fatalf("imageSupportsPlatform returned error: %v", err)
+	}
+	if !supported {
+		t.Fatalf("expected linux/amd64 digest manifest to be supported, platforms=%v", platforms)
+	}
+	if len(platforms) != 1 || platforms[0] != "linux/amd64" {
+		t.Fatalf("expected linux/amd64 platform, got %#v", platforms)
+	}
+}
+
 func TestApplyPluginsAddsAssetsMountsAndArgs(t *testing.T) {
 	t.Setenv("YOKAI_PLUGIN_DIR", t.TempDir())
 
