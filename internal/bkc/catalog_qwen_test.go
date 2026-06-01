@@ -109,3 +109,82 @@ func TestLookupFindsQwen36TextNVFP4MTP(t *testing.T) {
 		}
 	}
 }
+
+func TestLookupFindsNvidiaQwen36_35BNVFP4(t *testing.T) {
+	t.Parallel()
+
+	cfg, ok := Lookup(WorkloadVLLM, "nvidia/Qwen3.6-35B-A3B-NVFP4")
+	if !ok {
+		t.Fatal("expected matching BKC")
+	}
+	if cfg.ID != "qwen3-6-35b-a3b-nvfp4" {
+		t.Fatalf("expected qwen3.6 35B NVFP4 BKC, got %q", cfg.ID)
+	}
+	if cfg.Image != imageVLLMQwen36NVFP4Nightly {
+		t.Fatalf("expected validated vLLM nightly digest image, got %q", cfg.Image)
+	}
+	if cfg.Quantization != QuantNVFP4 {
+		t.Fatalf("expected NVFP4 quantization, got %q", cfg.Quantization)
+	}
+	if cfg.Arch != ArchBlackwell {
+		t.Fatalf("expected Blackwell arch, got %q", cfg.Arch)
+	}
+	for _, want := range []string{
+		"--trust-remote-code",
+		"--dtype auto",
+		"--quantization modelopt",
+		"--tensor-parallel-size 1",
+		"--max-model-len 65536",
+		"--max-num-seqs 4",
+		"--max-num-batched-tokens 8192",
+		"--kv-cache-dtype fp8",
+		"--attention-backend flashinfer",
+		"--moe-backend marlin",
+		"--gpu-memory-utilization 0.85",
+		"--enable-chunked-prefill",
+		"--async-scheduling",
+		"--enable-prefix-caching",
+		"--reasoning-parser qwen3",
+		"--speculative-config.method mtp",
+		"--speculative-config.num_speculative_tokens 3",
+		"--speculative-config.moe_backend triton",
+		"--enable-auto-tool-choice",
+		"--tool-call-parser qwen3_xml",
+	} {
+		if !strings.Contains(cfg.ExtraArgs, want) {
+			t.Fatalf("expected %q in extra args, got %q", want, cfg.ExtraArgs)
+		}
+	}
+	for _, want := range []string{DeviceGB10, DeviceRTXPRO6000, DeviceB200} {
+		found := false
+		for _, got := range cfg.TargetDevices {
+			if got == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected target device %q in %#v", want, cfg.TargetDevices)
+		}
+	}
+	for _, key := range []string{
+		"FLASHINFER_DISABLE_VERSION_CHECK",
+	} {
+		if cfg.Env[key] == "" {
+			t.Fatalf("expected env %q in %#v", key, cfg.Env)
+		}
+	}
+	for _, unwanted := range []string{
+		"--speculative-config {",
+		"--default-chat-template-kwargs",
+		"--language-model-only",
+		"CUTE_DSL_ARCH",
+	} {
+		if strings.Contains(cfg.ExtraArgs, unwanted) {
+			t.Fatalf("did not expect %q in extra args: %q", unwanted, cfg.ExtraArgs)
+		}
+	}
+	if _, ok := cfg.Env["CUTE_DSL_ARCH"]; ok {
+		t.Fatalf("did not expect global CUTE_DSL_ARCH override in %#v", cfg.Env)
+	}
+}
