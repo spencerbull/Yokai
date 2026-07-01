@@ -223,6 +223,39 @@ func TestContainerResponseStructure(t *testing.T) {
 	}
 }
 
+func TestInferToolCallParserForQwen3Coder(t *testing.T) {
+	t.Parallel()
+
+	parser := inferToolCallParser("RedHatAI/Qwen3-Coder-Next-NVFP4")
+	if parser != "qwen3_coder" {
+		t.Fatalf("parser = %q, want qwen3_coder", parser)
+	}
+}
+
+func TestVLLMToolCallArgsForQwen3Coder(t *testing.T) {
+	t.Parallel()
+
+	args := withVLLMToolCallArgs("--max-model-len 262144", "Qwen/Qwen3-Coder-Next")
+	if !strings.Contains(args, "--enable-auto-tool-choice") {
+		t.Fatalf("args missing auto tool choice: %q", args)
+	}
+	if !strings.Contains(args, "--tool-call-parser qwen3_coder") {
+		t.Fatalf("args missing qwen3_coder parser: %q", args)
+	}
+}
+
+func TestVLLMToolCallArgsKeepExplicitParser(t *testing.T) {
+	t.Parallel()
+
+	args := withVLLMToolCallArgs("--tool-call-parser qwen3_coder", "Qwen/Qwen3-Coder-Next")
+	if strings.Count(args, "--tool-call-parser") != 1 {
+		t.Fatalf("args should not duplicate explicit parser: %q", args)
+	}
+	if !strings.Contains(args, "--tool-call-parser qwen3_coder") {
+		t.Fatalf("args should keep explicit parser: %q", args)
+	}
+}
+
 func TestImagePullRequestStructure(t *testing.T) {
 	t.Parallel()
 

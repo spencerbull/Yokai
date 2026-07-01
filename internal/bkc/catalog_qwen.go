@@ -148,6 +148,64 @@ func init() {
 			Arch:            ArchHopper,
 		},
 
+		// Qwen3-Coder-Next 80B A3B NVFP4.
+		//
+		// No NVIDIA-owned Qwen3-Coder-Next NVFP4 checkpoint was available on
+		// Hugging Face when this BKC was added. Use the public, ungated Red Hat
+		// Coder NVFP4 checkpoint rather than NVIDIA's Instruct NVFP4 sibling.
+		Config{
+			ID:       "qwen3-coder-next-80b-a3b-nvfp4-rtx-pro-6000",
+			Name:     "Qwen3-Coder-Next 80B A3B NVFP4 - RTX PRO 6000",
+			Workload: WorkloadVLLM,
+			ModelID:  "RedHatAI/Qwen3-Coder-Next-NVFP4",
+			Image:    "vllm/vllm-openai:v0.14.1-x86_64-cu130",
+			Port:     "8000",
+			ExtraArgs: strings.Join([]string{
+				"--max-model-len 262144",
+				"--kv-cache-dtype fp8",
+				"--gpu-memory-utilization 0.85",
+				"--tensor-parallel-size 1",
+				"--enable-auto-tool-choice",
+				"--tool-call-parser qwen3_coder",
+			}, " "),
+			Volumes:         hfMountDefault,
+			Runtime:         runtimeDefault,
+			Description:     "Public NVFP4 Qwen3-Coder-Next profile for a single 96 GB RTX PRO 6000 Blackwell GPU.",
+			Source:          "RedHatAI/Qwen3-Coder-Next-NVFP4 model card; hf-mem weights 47.5 GB + 262K FP8 KV cache 6.4 GB",
+			Notes:           []string{"NVIDIA publishes Qwen3-Next Instruct NVFP4, but no NVIDIA-owned Qwen3-Coder-Next NVFP4 checkpoint was found on HF.", "Uses FP8 KV cache; keep this on Blackwell-class targets."},
+			TargetDevices:   []string{DeviceRTXPRO6000},
+			MinVRAMGBPerGPU: 64,
+			MinGPUCount:     1,
+			Quantization:    QuantNVFP4,
+			Arch:            ArchBlackwell,
+		},
+		Config{
+			ID:       "qwen3-coder-next-80b-a3b-nvfp4-gb10",
+			Name:     "Qwen3-Coder-Next 80B A3B NVFP4 - 1x GB10",
+			Workload: WorkloadVLLM,
+			ModelID:  "RedHatAI/Qwen3-Coder-Next-NVFP4",
+			Image:    "vllm/vllm-openai:v0.14.1-aarch64-cu130",
+			Port:     "8000",
+			ExtraArgs: strings.Join([]string{
+				"--max-model-len 262144",
+				"--kv-cache-dtype fp8",
+				"--gpu-memory-utilization 0.75",
+				"--tensor-parallel-size 1",
+				"--enable-auto-tool-choice",
+				"--tool-call-parser qwen3_coder",
+			}, " "),
+			Volumes:         hfMountDefault,
+			Runtime:         runtimeDefault,
+			Description:     "Public NVFP4 Qwen3-Coder-Next profile for one GB10 / DGX Spark with conservative unified-memory headroom.",
+			Source:          "RedHatAI/Qwen3-Coder-Next-NVFP4 model card; hf-mem weights 47.5 GB + 262K FP8 KV cache 6.4 GB",
+			Notes:           []string{"The GB10-tagged saricles/Qwen3-Coder-Next-NVFP4-GB10 repo is gated; this BKC uses the public ungated Red Hat checkpoint.", "Uses FP8 KV cache and an aarch64 CUDA 13 vLLM image for GB10."},
+			TargetDevices:   []string{DeviceGB10},
+			MinVRAMGBPerGPU: 64,
+			MinGPUCount:     1,
+			Quantization:    QuantNVFP4,
+			Arch:            ArchBlackwell,
+		},
+
 		// Qwen3-Coder 480B A35B — 8x TP expert-parallel.
 		Config{
 			ID:       "qwen3-coder-480b-a35b",
