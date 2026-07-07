@@ -1,0 +1,74 @@
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+    - go generate ./...
+    - bun install --cwd ui/tui --frozen-lockfile --os='*' --cpu='*'
+
+builds:
+  - id: yokai
+    main: ./cmd/yokai
+    binary: yokai
+    env:
+      - CGO_ENABLED=0 # Static binary for easier distribution
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      # Strip debug info and inject version/build time
+      - -s -w -X main.version={{.Version}} -X main.buildTime={{.Date}}
+
+  - id: yokai-tui
+    builder: bun
+    binary: yokai-tui
+    dir: ui/tui
+    main: src/index.tsx
+    targets:
+      - bun-linux-x64
+      - bun-linux-arm64
+      - bun-darwin-x64
+      - bun-darwin-arm64
+      - bun-windows-x64
+    flags:
+      - --compile
+      - --format=esm
+      - --minify
+      - --bytecode
+
+archives:
+  - formats:
+      - tar.gz
+    allow_different_binary_count: true
+    ids:
+      - yokai
+      - yokai-tui
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+
+checksum:
+  name_template: 'checksums.txt'
+
+snapshot:
+  # Version template for development builds
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^ci:'
+      - '^chore:'
+      - 'merge conflict'
+      - Merge pull request
+      - Merge remote-tracking branch
+      - Merge branch

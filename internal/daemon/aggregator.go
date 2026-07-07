@@ -1,0 +1,494 @@
+package daemon
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"sync"
+	"time"
+
+	"github.com/spencerbull/yokai/internal/config"
+	"github.com/spencerbull/yokai/internal/docker"
+)
+
+// Aggregator polls agents for metrics and forwards commands
+type Aggregator struct {
+	cfg     *config.Config
+	tunnels *TunnelPool
+	catalog *docker.Catalog
+	metrics map[string]*AgentMetrics // keyed by device ID
+	mu      sync.RWMutex
+	cancel  context.CancelFunc
+	client  *http.Client
+}
+
+// hfToken returns the HuggingFace token available to the daemon, falling back
+// to the environment when no value is configured. Used when forwarding deploy
+// requests that require downloading GGUF shards from the Hub.
+func (a *Aggregator) hfToken() string {
+	a.mu.RLock()
+	token := ""
+	if a.cfg != nil {
+		token = a.cfg.HFToken
+	}
+	a.mu.RUnlock()
+	if token == "" {
+		token = loadHFTokenFromEnv()
+	}
+	return token
+}
+
+// agentRequest creates an HTTP request with the agent's auth token (if configured).
+func (a *Aggregator) agentRequest(method, url, deviceID string, body io.Reader) (*http.Request, error) {
+	req, err := http.NewRequest(method, url, body)
+	if err != nil {
+		return nil, err
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if device := a.cfg.FindDevice(deviceID); device != nil && device.AgentToken != "" {
+		req.Header.Set("Authorization", "Bearer "+device.AgentToken)
+	}
+	return req, nil
+}
+
+// agentDo is a shortcut: build an agent request and execute it.
+func (a *Aggregator) agentDo(method, url, deviceID string, body io.Reader) (*http.Response, error) {
+	req, err := a.agentRequest(method, url, deviceID, body)
+	if err != nil {
+		return nil, err
+	}
+	return a.client.Do(req)
+}
+
+// AgentMetrics represents metrics from a single device agent
+type AgentMetrics struct {
+	DeviceID   string          `json:"device_id"`
+	Timestamp  time.Time       `json:"timestamp"`
+	Online     bool            `json:"online"`
+	CPU        json.RawMessage `json:"cpu"`
+	RAM        json.RawMessage `json:"ram"`
+	Swap       json.RawMessage `json:"swap"`
+	Disk       json.RawMessage `json:"disk"`
+	GPUs       json.RawMessage `json:"gpus"`
+	Containers json.RawMessage `json:"containers"`
+}
+
+// NewAggregator creates a new metrics aggregator
+func NewAggregator(cfg *config.Config, tunnels *TunnelPool) *Aggregator {
+	return &Aggregator{
+		cfg:     cfg,
+		tunnels: tunnels,
+		catalog: docker.NewCatalog(),
+		metrics: make(map[string]*AgentMetrics),
+		client:  &http.Client{Timeout: 10 * time.Second},
+	}
+}
+
+// UpdateConfig replaces the config pointer (caller holds Daemon.mu).
+func (a *Aggregator) UpdateConfig(cfg *config.Config) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.cfg = cfg
+}
+
+// Start begins polling device agents for metrics
+func (a *Aggregator) Start() {
+	ctx, cancel := context.WithCancel(context.Background())
+	a.cancel = cancel
+
+	go a.pollMetrics(ctx)
+}
+
+// Stop cancels the polling goroutine
+func (a *Aggregator) Stop() {
+	if a.cancel != nil {
+		a.cancel()
+	}
+}
+
+// pollMetrics polls each device's agent at regular intervals
+func (a *Aggregator) pollMetrics(ctx context.Context) {
+	interval := time.Duration(a.cfg.Daemon.MetricsPollInterval) * time.Second
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			a.pollAllDevices()
+		}
+	}
+}
+
+// pollAllDevices polls metrics from all configured devices
+func (a *Aggregator) pollAllDevices() {
+	for _, device := range a.cfg.Devices {
+		go a.pollDevice(device.ID)
+	}
+}
+
+// pollDevice polls metrics from a single device
+func (a *Aggregator) pollDevice(deviceID string) {
+	localPort := a.tunnels.LocalPort(deviceID)
+	if localPort == 0 {
+		a.setDeviceOffline(deviceID)
+		return
+	}
+
+	url := fmt.Sprintf("http://localhost:%d/metrics", localPort)
+	resp, err := a.agentDo("GET", url, deviceID, nil)
+	if err != nil {
+		log.Printf("metrics poll %s failed: %v", deviceID, err)
+		a.setDeviceOffline(deviceID)
+		return
+	}
+	defer func() {
+		_ = resp.Body.Close() // Best-effort close of response body.
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("metrics poll %s returned %d", deviceID, resp.StatusCode)
+		a.setDeviceOffline(deviceID)
+		return
+	}
+
+	var metricsData map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&metricsData); err != nil {
+		log.Printf("metrics parse %s failed: %v", deviceID, err)
+		a.setDeviceOffline(deviceID)
+		return
+	}
+
+	// Convert to AgentMetrics
+	metrics := &AgentMetrics{
+		DeviceID:  deviceID,
+		Timestamp: time.Now(),
+		Online:    true,
+	}
+
+	// Extract individual components as raw JSON
+	if cpu, ok := metricsData["cpu"]; ok {
+		if cpuBytes, err := json.Marshal(cpu); err == nil {
+			metrics.CPU = json.RawMessage(cpuBytes)
+		}
+	}
+
+	if ram, ok := metricsData["ram"]; ok {
+		if ramBytes, err := json.Marshal(ram); err == nil {
+			metrics.RAM = json.RawMessage(ramBytes)
+		}
+	}
+
+	if swap, ok := metricsData["swap"]; ok {
+		if swapBytes, err := json.Marshal(swap); err == nil {
+			metrics.Swap = json.RawMessage(swapBytes)
+		}
+	}
+
+	if disk, ok := metricsData["disk"]; ok {
+		if diskBytes, err := json.Marshal(disk); err == nil {
+			metrics.Disk = json.RawMessage(diskBytes)
+		}
+	}
+
+	if gpus, ok := metricsData["gpus"]; ok {
+		if gpuBytes, err := json.Marshal(gpus); err == nil {
+			metrics.GPUs = json.RawMessage(gpuBytes)
+		}
+	}
+
+	if containers, ok := metricsData["containers"]; ok {
+		if containerBytes, err := json.Marshal(containers); err == nil {
+			metrics.Containers = json.RawMessage(containerBytes)
+		}
+	}
+
+	a.mu.Lock()
+	a.metrics[deviceID] = metrics
+	a.mu.Unlock()
+}
+
+// setDeviceOffline marks a device as offline
+func (a *Aggregator) setDeviceOffline(deviceID string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if existing, exists := a.metrics[deviceID]; exists {
+		existing.Online = false
+		existing.Timestamp = time.Now()
+	} else {
+		a.metrics[deviceID] = &AgentMetrics{
+			DeviceID:  deviceID,
+			Timestamp: time.Now(),
+			Online:    false,
+		}
+	}
+}
+
+// AllMetrics returns all cached metrics
+func (a *Aggregator) AllMetrics() map[string]*AgentMetrics {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	result := make(map[string]*AgentMetrics)
+	for k, v := range a.metrics {
+		result[k] = v
+	}
+	return result
+}
+
+// DeviceMetrics returns metrics for a specific device
+func (a *Aggregator) DeviceMetrics(deviceID string) (*AgentMetrics, bool) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	metrics, exists := a.metrics[deviceID]
+	return metrics, exists
+}
+
+// Deploy forwards a deploy request to the target device's agent
+func (a *Aggregator) Deploy(req DeployRequest) (*DeployResult, error) {
+	localPort := a.tunnels.LocalPort(req.DeviceID)
+	if localPort == 0 {
+		return nil, fmt.Errorf("device %s is not connected", req.DeviceID)
+	}
+
+	// Inject the HF token so the agent can fetch gated GGUF shards. The token
+	// is never persisted on the agent; it lives only for the duration of this
+	// deploy request.
+	payload := struct {
+		DeployRequest
+		HFToken string `json:"hf_token,omitempty"`
+	}{
+		DeployRequest: req,
+		HFToken:       a.hfToken(),
+	}
+
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling request: %w", err)
+	}
+
+	url := fmt.Sprintf("http://localhost:%d/containers", localPort)
+	deployClient := &http.Client{Timeout: 5 * time.Minute}
+	deployReq, err := a.agentRequest("POST", url, req.DeviceID, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("creating deploy request: %w", err)
+	}
+	resp, err := deployClient.Do(deployReq)
+	if err != nil {
+		return nil, fmt.Errorf("deploy request: %w", err)
+	}
+	defer func() {
+		_ = resp.Body.Close() // Best-effort close of response body.
+	}()
+
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		// Read agent error body for better diagnostics
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		var agentErr struct {
+			Error   string `json:"error"`
+			Message string `json:"message"`
+		}
+		if json.Unmarshal(body, &agentErr) == nil && agentErr.Message != "" {
+			return nil, fmt.Errorf("agent %s: %s", agentErr.Error, agentErr.Message)
+		}
+		return nil, fmt.Errorf("deploy failed with status %d", resp.StatusCode)
+	}
+
+	var agentResult struct {
+		ID          string            `json:"id"`
+		ContainerID string            `json:"container_id"`
+		Status      string            `json:"status"`
+		Ports       map[string]string `json:"ports"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&agentResult); err != nil {
+		return nil, fmt.Errorf("parsing deploy result: %w", err)
+	}
+
+	result := DeployResult{
+		ContainerID: agentResult.ContainerID,
+		Status:      agentResult.Status,
+		Ports:       agentResult.Ports,
+	}
+	if result.ContainerID == "" {
+		result.ContainerID = agentResult.ID
+	}
+
+	return &result, nil
+}
+
+// StopContainer forwards a stop request to the agent (stop only, no remove)
+func (a *Aggregator) StopContainer(deviceID, containerID string) error {
+	localPort := a.tunnels.LocalPort(deviceID)
+	if localPort == 0 {
+		return fmt.Errorf("device %s is not connected", deviceID)
+	}
+
+	url := fmt.Sprintf("http://localhost:%d/containers/%s/stop", localPort, containerID)
+	resp, err := a.agentDo("POST", url, deviceID, nil)
+	if err != nil {
+		return fmt.Errorf("stop request: %w", err)
+	}
+	defer func() {
+		_ = resp.Body.Close() // Best-effort close of response body.
+	}()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("stop failed with status %d", resp.StatusCode)
+	}
+
+	return nil
+}
+
+// RemoveContainer forwards a remove request to the agent (stop + remove)
+func (a *Aggregator) RemoveContainer(deviceID, containerID string) error {
+	localPort := a.tunnels.LocalPort(deviceID)
+	if localPort == 0 {
+		return fmt.Errorf("device %s is not connected", deviceID)
+	}
+
+	url := fmt.Sprintf("http://localhost:%d/containers/%s", localPort, containerID)
+	resp, err := a.agentDo("DELETE", url, deviceID, nil)
+	if err != nil {
+		return fmt.Errorf("remove request: %w", err)
+	}
+	defer func() {
+		_ = resp.Body.Close() // Best-effort close of response body.
+	}()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("remove failed with status %d", resp.StatusCode)
+	}
+
+	return nil
+}
+
+// RestartContainer forwards a restart request to the agent
+func (a *Aggregator) RestartContainer(deviceID, containerID string) error {
+	localPort := a.tunnels.LocalPort(deviceID)
+	if localPort == 0 {
+		return fmt.Errorf("device %s is not connected", deviceID)
+	}
+
+	url := fmt.Sprintf("http://localhost:%d/containers/%s/restart", localPort, containerID)
+	resp, err := a.agentDo("POST", url, deviceID, nil)
+	if err != nil {
+		return fmt.Errorf("restart request: %w", err)
+	}
+	defer func() {
+		_ = resp.Body.Close() // Best-effort close of restart response body.
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("restart failed with status %d", resp.StatusCode)
+	}
+
+	return nil
+}
+
+// TestContainer runs a workload-specific smoke test against a running service.
+func (a *Aggregator) TestContainer(deviceID, containerID string) (*ServiceTestResult, error) {
+	localPort := a.tunnels.LocalPort(deviceID)
+	if localPort == 0 {
+		return nil, fmt.Errorf("device %s is not connected", deviceID)
+	}
+
+	url := fmt.Sprintf("http://localhost:%d/containers/%s/test", localPort, containerID)
+	resp, err := a.agentDo("POST", url, deviceID, bytes.NewBufferString("{}"))
+	if err != nil {
+		return nil, fmt.Errorf("test request: %w", err)
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		var agentErr struct {
+			Error   string `json:"error"`
+			Message string `json:"message"`
+		}
+		if json.Unmarshal(body, &agentErr) == nil && agentErr.Message != "" {
+			return nil, fmt.Errorf("agent %s: %s", agentErr.Error, agentErr.Message)
+		}
+		return nil, fmt.Errorf("service test failed with status %d", resp.StatusCode)
+	}
+
+	var result ServiceTestResult
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("parsing service test result: %w", err)
+	}
+	return &result, nil
+}
+
+// StreamLogs connects to agent's SSE log endpoint and relays lines to the channel
+func (a *Aggregator) StreamLogs(deviceID, containerID string) (<-chan string, error) {
+	localPort := a.tunnels.LocalPort(deviceID)
+	if localPort == 0 {
+		return nil, fmt.Errorf("device %s is not connected", deviceID)
+	}
+
+	url := fmt.Sprintf("http://localhost:%d/containers/%s/logs", localPort, containerID)
+	req, err := a.agentRequest("GET", url, deviceID, nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating request: %w", err)
+	}
+
+	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("Cache-Control", "no-cache")
+
+	resp, err := a.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("log stream request: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		_ = resp.Body.Close() // Best-effort close on non-OK log stream response.
+		return nil, fmt.Errorf("log stream failed with status %d", resp.StatusCode)
+	}
+
+	ch := make(chan string, 100)
+
+	go func() {
+		defer func() {
+			_ = resp.Body.Close() // Best-effort close of log stream response body.
+		}()
+		defer close(ch)
+
+		scanner := bufio.NewScanner(resp.Body)
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if line == "" {
+				continue // Skip empty lines
+			}
+
+			// SSE format: "data: <content>"
+			if len(line) > 6 && line[:6] == "data: " {
+				ch <- line[6:]
+			} else {
+				ch <- line
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			ch <- fmt.Sprintf("[error] log relay scanner: %v", err)
+		}
+	}()
+
+	return ch, nil
+}
+
+// FetchImageTags uses the docker.Catalog to fetch tags
+func (a *Aggregator) FetchImageTags(image string) ([]docker.Tag, error) {
+	return a.catalog.FetchTags(image)
+}

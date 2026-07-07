@@ -1,0 +1,9 @@
+bin/
+*.exe
+*.test
+*.out
+.DS_Store
+.opencode
+**/node_modules
+**/dist
+**/build

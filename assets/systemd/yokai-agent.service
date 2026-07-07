@@ -1,0 +1,14 @@
+[Unit]
+Description=Yokai Agent
+After=network.target docker.service
+Wants=docker.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/yokai agent
+Restart=always
+RestartSec=5
+Environment=YOKAI_TOKEN=%AGENT_TOKEN%
+
+[Install]
+WantedBy=multi-user.target

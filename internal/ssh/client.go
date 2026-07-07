@@ -1,0 +1,402 @@
+package ssh
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"log"
+	"net"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"time"
+
+	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/agent"
+	"golang.org/x/crypto/ssh/knownhosts"
+)
+
+// ClientConfig holds SSH connection parameters.
+type ClientConfig struct {
+	Host           string
+	Port           string
+	User           string
+	ConnectionType string
+	KeyPath        string // path to private key, empty to try defaults
+	KeyPassphrase  string // passphrase for encrypted private key
+	Password       string // fallback password auth
+}
+
+// TailscaleAuthError indicates the remote requires a browser-based Tailscale SSH check.
+type TailscaleAuthError struct {
+	URL    string
+	Output string
+	err    error
+}
+
+func (e *TailscaleAuthError) Error() string {
+	if e.URL == "" {
+		return "tailscale ssh requires browser authentication"
+	}
+	return "tailscale ssh requires browser authentication: " + e.URL
+}
+
+func (e *TailscaleAuthError) Unwrap() error {
+	return e.err
+}
+
+// Client wraps an SSH connection.
+type Client struct {
+	conn   *ssh.Client
+	config ClientConfig
+}
+
+// Connect establishes an SSH connection using the provided config.
+// When KeyPath is set, only that key is used (IdentitiesOnly behavior).
+// Otherwise: SSH agent → default keys → password.
+func Connect(cfg ClientConfig) (*Client, error) {
+	if cfg.Port == "" {
+		cfg.Port = "22"
+	}
+	if cfg.User == "" {
+		cfg.User = currentUser()
+	}
+
+	authMethods, err := resolveAuth(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("resolving SSH auth: %w", err)
+	}
+
+	// Build known_hosts callback that learns first-seen hosts like OpenSSH.
+	hostKeyCallback := ssh.InsecureIgnoreHostKey()
+	knownHostsPath := expandPath("~/.ssh/known_hosts")
+	if _, err := os.Stat(knownHostsPath); err == nil {
+		cb, err := knownhosts.New(knownHostsPath)
+		if err == nil {
+			hostKeyCallback = addUnknownHostToKnownHosts(knownHostsPath, tolerateKnownHostsKeyTypeMismatch(cb))
+		}
+	} else if errors.Is(err, os.ErrNotExist) {
+		hostKeyCallback = addUnknownHostToKnownHosts(knownHostsPath, hostKeyCallback)
+	}
+
+	sshConfig := &ssh.ClientConfig{
+		User:            cfg.User,
+		Auth:            authMethods,
+		HostKeyCallback: hostKeyCallback,
+		Timeout:         10 * time.Second,
+	}
+
+	addr := net.JoinHostPort(cfg.Host, cfg.Port)
+	conn, err := ssh.Dial("tcp", addr, sshConfig)
+	if err != nil {
+		if authErr := probeTailscaleAuth(cfg, err); authErr != nil {
+			return nil, authErr
+		}
+		return nil, fmt.Errorf("SSH dial %s: %w", addr, err)
+	}
+
+	return &Client{conn: conn, config: cfg}, nil
+}
+
+var tailscaleAuthURLPattern = regexp.MustCompile(`https://[^\s"']+`)
+
+func probeTailscaleAuth(cfg ClientConfig, originalErr error) error {
+	if !usesTailscaleSSHProbe(cfg) {
+		return nil
+	}
+	if _, err := exec.LookPath("tailscale"); err != nil {
+		return nil
+	}
+
+	target := cfg.Host
+	if cfg.User != "" {
+		target = cfg.User + "@" + target
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "tailscale", "ssh", target, "--", "true")
+	out, _ := cmd.CombinedOutput()
+	output := strings.TrimSpace(string(out))
+	url := extractTailscaleAuthURL(output)
+	if url == "" {
+		return nil
+	}
+
+	return &TailscaleAuthError{
+		URL:    url,
+		Output: output,
+		err:    originalErr,
+	}
+}
+
+func extractTailscaleAuthURL(output string) string {
+	return tailscaleAuthURLPattern.FindString(output)
+}
+
+func usesTailscaleSSHProbe(cfg ClientConfig) bool {
+	if strings.EqualFold(cfg.ConnectionType, "tailscale") {
+		return true
+	}
+	host := strings.ToLower(strings.TrimSpace(cfg.Host))
+	if host == "" {
+		return false
+	}
+	return strings.HasSuffix(host, ".ts.net") || strings.HasPrefix(host, "100.") || strings.HasPrefix(host, "fd7a:")
+}
+
+func tolerateKnownHostsKeyTypeMismatch(cb ssh.HostKeyCallback) ssh.HostKeyCallback {
+	return func(hostname string, remote net.Addr, key ssh.PublicKey) error {
+		err := cb(hostname, remote, key)
+		if err == nil {
+			return nil
+		}
+
+		var keyErr *knownhosts.KeyError
+		if !errors.As(err, &keyErr) {
+			return err
+		}
+
+		if len(keyErr.Want) == 0 {
+			return err
+		}
+
+		for _, known := range keyErr.Want {
+			if known.Key != nil && bytes.Equal(known.Key.Marshal(), key.Marshal()) {
+				return nil
+			}
+		}
+
+		return nil
+	}
+}
+
+func addUnknownHostToKnownHosts(path string, cb ssh.HostKeyCallback) ssh.HostKeyCallback {
+	return func(hostname string, remote net.Addr, key ssh.PublicKey) error {
+		err := cb(hostname, remote, key)
+		if err == nil {
+			return nil
+		}
+
+		var keyErr *knownhosts.KeyError
+		if !errors.As(err, &keyErr) || len(keyErr.Want) != 0 {
+			return err
+		}
+
+		if writeErr := appendKnownHost(path, hostname, key); writeErr != nil {
+			return fmt.Errorf("adding %s to known_hosts: %w", hostname, writeErr)
+		}
+
+		return nil
+	}
+}
+
+func appendKnownHost(path, hostname string, key ssh.PublicKey) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+
+	line := knownhosts.Line([]string{hostname}, key) + "\n"
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = f.Close()
+	}()
+
+	if _, err := f.WriteString(line); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// Close closes the SSH connection.
+func (c *Client) Close() error {
+	if c.conn != nil {
+		return c.conn.Close()
+	}
+	return nil
+}
+
+// Exec runs a command on the remote host and returns combined output.
+func (c *Client) Exec(cmd string) (string, error) {
+	session, err := c.conn.NewSession()
+	if err != nil {
+		return "", fmt.Errorf("creating session: %w", err)
+	}
+	defer func() {
+		_ = session.Close() // Best-effort session close after command.
+	}()
+
+	out, err := session.CombinedOutput(cmd)
+	return string(out), err
+}
+
+// Upload copies a local file to a remote path via SCP.
+func (c *Client) Upload(localPath, remotePath string) error {
+	f, err := os.Open(localPath)
+	if err != nil {
+		return fmt.Errorf("opening local file: %w", err)
+	}
+	defer func() {
+		_ = f.Close() // Best-effort file close after upload.
+	}()
+
+	stat, err := f.Stat()
+	if err != nil {
+		return fmt.Errorf("stat local file: %w", err)
+	}
+
+	session, err := c.conn.NewSession()
+	if err != nil {
+		return fmt.Errorf("creating session: %w", err)
+	}
+	defer func() {
+		_ = session.Close() // Best-effort session close after upload.
+	}()
+
+	go func() {
+		w, _ := session.StdinPipe()
+		defer func() {
+			_ = w.Close() // Best-effort close of SCP stdin pipe.
+		}()
+		_, _ = fmt.Fprintf(w, "C0755 %d %s\n", stat.Size(), filepath.Base(remotePath))
+		_, _ = io.Copy(w, f)
+		_, _ = fmt.Fprint(w, "\x00")
+	}()
+
+	dir := filepath.Dir(remotePath)
+	err = session.Run(fmt.Sprintf("scp -t %s", dir))
+	if err != nil {
+		return fmt.Errorf("SCP upload: %w", err)
+	}
+
+	return nil
+}
+
+// Underlying returns the raw ssh.Client for advanced use (e.g. tunneling).
+func (c *Client) Underlying() *ssh.Client {
+	return c.conn
+}
+
+// resolveAuth builds auth methods in priority order.
+// When an explicit KeyPath is provided (e.g. from ~/.ssh/config IdentityFile),
+// only that key is used -- mimicking OpenSSH IdentitiesOnly behavior and
+// avoiding "too many authentication failures" from a loaded SSH agent.
+func resolveAuth(cfg ClientConfig) ([]ssh.AuthMethod, error) {
+	var methods []ssh.AuthMethod
+
+	if cfg.KeyPath != "" {
+		// Explicit key takes sole priority to avoid agent key exhaustion.
+		m, err := keyAuth(expandPath(cfg.KeyPath), cfg.KeyPassphrase)
+		if err != nil {
+			var passErr *ssh.PassphraseMissingError
+			if errors.As(err, &passErr) {
+				log.Printf("SSH key %s is encrypted with a passphrase; skipping (add it to ssh-agent with ssh-add)", cfg.KeyPath)
+			}
+		} else {
+			methods = append(methods, m)
+		}
+	} else {
+		// No explicit key -- try agent, then default key paths.
+		if m, err := agentAuth(); err == nil {
+			methods = append(methods, m)
+		}
+
+		for _, k := range []string{"~/.ssh/id_ed25519", "~/.ssh/id_rsa"} {
+			m, err := keyAuth(expandPath(k), "")
+			if err != nil {
+				var passErr *ssh.PassphraseMissingError
+				if errors.As(err, &passErr) {
+					log.Printf("SSH key %s is encrypted with a passphrase; skipping (add it to ssh-agent with ssh-add)", k)
+				}
+				continue
+			}
+			methods = append(methods, m)
+		}
+	}
+
+	// Password as final fallback regardless of key path.
+	if cfg.Password != "" {
+		methods = append(methods, ssh.Password(cfg.Password))
+	}
+
+	if len(methods) == 0 {
+		return nil, fmt.Errorf("no SSH auth methods available (if your key is passphrase-protected, use ssh-agent: eval $(ssh-agent) && ssh-add)")
+	}
+
+	return methods, nil
+}
+
+func keyAuth(path, passphrase string) (ssh.AuthMethod, error) {
+	key, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var signer ssh.Signer
+	if passphrase != "" {
+		signer, err = ssh.ParsePrivateKeyWithPassphrase(key, []byte(passphrase))
+	} else {
+		signer, err = ssh.ParsePrivateKey(key)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return ssh.PublicKeys(signer), nil
+}
+
+func agentAuth() (ssh.AuthMethod, error) {
+	sock := os.Getenv("SSH_AUTH_SOCK")
+	if sock == "" {
+		return nil, fmt.Errorf("SSH_AUTH_SOCK not set")
+	}
+	conn, err := net.Dial("unix", sock)
+	if err != nil {
+		return nil, err
+	}
+	agentClient := agent.NewClient(conn)
+	return ssh.PublicKeysCallback(agentClient.Signers), nil
+}
+
+// IsKeyEncrypted checks whether an SSH private key file is passphrase-protected.
+// Returns true if the key exists and requires a passphrase to decrypt.
+func IsKeyEncrypted(path string) bool {
+	path = expandPath(path)
+	key, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	_, err = ssh.ParsePrivateKey(key)
+	if err != nil {
+		var passErr *ssh.PassphraseMissingError
+		return errors.As(err, &passErr)
+	}
+	return false
+}
+
+func expandPath(path string) string {
+	if strings.HasPrefix(path, "~/") {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			return filepath.Join(home, path[2:])
+		}
+	}
+	return path
+}
+
+func currentUser() string {
+	if u := os.Getenv("USER"); u != "" {
+		return u
+	}
+	if u := os.Getenv("LOGNAME"); u != "" {
+		return u
+	}
+	return "root"
+}

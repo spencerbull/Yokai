@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        go-version: ['1.25']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go-version }}
+          cache: true
+      - name: Build
+        run: go build -v ./...
+      - name: Test
+        run: go test -v -race -coverprofile=coverage.out ./...
+      - name: Upload coverage
+        if: matrix.go-version == '1.25'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.out
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.4
+          skip-cache: true
+
+  tui:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ui/tui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Test
+        run: bun test
+      - name: Build
+        run: bun run build
+      - name: Compile standalone OpenTUI
+        run: bun build --compile --format=esm --minify --bytecode src/index.tsx --outfile=../../bin/yokai-tui

@@ -1,0 +1,776 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "description": "Default Yokai dashboard for LLM generation, throughput, concurrency, system health, and power.",
+  "editable": true,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "id": 1,
+      "title": "Active Avg Decode Tok/s",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "sum(avg_over_time((yokai_llm_decode_tokens_per_second > 0)[$__range:])) or sum(avg_over_time((irate(yokai_llm_generated_tokens_total[1m]) > 0)[$__range:])) or vector(0)",
+          "instant": true,
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix: tok/s"
+        }
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
+      }
+    },
+    {
+      "id": 2,
+      "title": "Active Avg Prefill Tok/s",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "sum(avg_over_time((yokai_llm_prefill_tokens_per_second > 0)[$__range:])) or sum(avg_over_time((irate(yokai_llm_prompt_tokens_total[1m]) > 0)[$__range:])) or vector(0)",
+          "instant": true,
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix: tok/s"
+        }
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 4,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
+      }
+    },
+    {
+      "id": 3,
+      "title": "Avg Nonzero Sessions",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "sum(avg_over_time((yokai_llm_requests_in_flight > 0)[$__range:])) or vector(0)",
+          "instant": true,
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
+        }
+      ],
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 8,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
+      }
+    },
+    {
+      "id": 4,
+      "title": "Avg Nonzero Queue",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "sum(avg_over_time((yokai_llm_requests_queued > 0)[$__range:])) or vector(0)",
+          "instant": true,
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
+        }
+      ],
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 12,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
+      }
+    },
+    {
+      "id": 5,
+      "title": "Active Avg Generated Tok/s",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "sum(avg_over_time((irate(yokai_llm_generated_tokens_total[1m]) > 0)[$__range:])) or vector(0)",
+          "instant": true,
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix: tok/s"
+        }
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 16,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
+      }
+    },
+    {
+      "id": 6,
+      "title": "Avg Services Up",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "sum(avg_over_time(yokai_service_up[$__range]))",
+          "instant": true,
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
+        }
+      ],
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 20,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
+      }
+    },
+    {
+      "id": 22,
+      "title": "Active Avg Prompt Tok/s",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "sum(avg_over_time((irate(yokai_llm_prompt_tokens_total[1m]) > 0)[$__range:])) or vector(0)",
+          "instant": true,
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix: tok/s"
+        }
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 0,
+        "y": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
+      }
+    },
+    {
+      "id": 23,
+      "title": "Prompt Tokens (In)",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "sum(increase(yokai_llm_prompt_tokens_total[$__range])) or vector(0)",
+          "instant": true,
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix: tok"
+        }
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 4,
+        "y": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
+      }
+    },
+    {
+      "id": 24,
+      "title": "Decode Tokens (Out)",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "sum(increase(yokai_llm_generated_tokens_total[$__range])) or vector(0)",
+          "instant": true,
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix: tok"
+        }
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 8,
+        "y": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
+      }
+    },
+    {
+      "id": 25,
+      "title": "Cached Tokens",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "sum(increase(yokai_llm_cached_prompt_tokens_total[$__range])) or vector(0)",
+          "instant": true,
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix: tok"
+        }
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 12,
+        "y": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
+      }
+    },
+    {
+      "id": 7,
+      "title": "Decode Throughput by Service",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum by (service) (yokai_llm_decode_tokens_per_second) or sum by (service) (irate(yokai_llm_generated_tokens_total[1m]))",
+          "legendFormat": "{{service}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix: tok/s"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 10
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
+      }
+    },
+    {
+      "id": 8,
+      "title": "Prefill Throughput by Service",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum by (service) (yokai_llm_prefill_tokens_per_second) or sum by (service) (irate(yokai_llm_prompt_tokens_total[1m]))",
+          "legendFormat": "{{service}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix: tok/s"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 10
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
+      }
+    },
+    {
+      "id": 9,
+      "title": "Current Sessions by Service",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum by (service) (yokai_llm_requests_in_flight)",
+          "legendFormat": "{{service}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 18
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
+      }
+    },
+    {
+      "id": 10,
+      "title": "Queue Depth by Service",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum by (service) (yokai_llm_requests_queued)",
+          "legendFormat": "{{service}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 18
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
+      }
+    },
+    {
+      "id": 11,
+      "title": "TTFT p95",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(yokai_llm_ttft_seconds_bucket[5m])))",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 26
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
+      }
+    },
+    {
+      "id": 12,
+      "title": "Generated Tokens Rate",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum by (service) (irate(yokai_llm_generated_tokens_total[1m]))",
+          "legendFormat": "{{service}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix: tok/s"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 26
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
+      }
+    },
+    {
+      "id": 13,
+      "title": "Tokens per Joule",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "(sum(yokai_llm_decode_tokens_per_second) or sum(irate(yokai_llm_generated_tokens_total[1m]))) / clamp_min((sum(DCGM_FI_DEV_POWER_USAGE) or sum(yokai_gpu_power_draw_watts) or vector(0)) + (sum(irate({__name__=~\"node_rapl(_package_.*)?_joules_total\"}[1m])) or vector(0)), 1)",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 26
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
+      }
+    },
+    {
+      "id": 14,
+      "title": "GPU Power",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "avg by (instance, gpu) (DCGM_FI_DEV_POWER_USAGE) or avg by (instance, gpu) (yokai_gpu_power_draw_watts)",
+          "legendFormat": "{{instance}} GPU {{gpu}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "watt"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 34
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
+      }
+    },
+    {
+      "id": 15,
+      "title": "CPU Package Power",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum by (instance) (rate({__name__=~\"node_rapl(_package_.*)?_joules_total\"}[1m]))",
+          "legendFormat": "{{instance}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "watt"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 34
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
+      }
+    },
+    {
+      "id": 16,
+      "title": "VRAM Used",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "avg by (instance, gpu) (DCGM_FI_DEV_FB_USED) * 1024 * 1024 or avg by (instance, gpu) (yokai_gpu_vram_used_bytes)",
+          "legendFormat": "{{instance}} GPU {{gpu}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 34
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
+      }
+    },
+    {
+      "id": 17,
+      "title": "GPU Utilization",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "avg by (instance, gpu) (DCGM_FI_DEV_GPU_UTIL) or avg by (instance, gpu) (yokai_gpu_utilization)",
+          "legendFormat": "{{instance}} GPU {{gpu}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 0,
+        "y": 42
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
+      }
+    },
+    {
+      "id": 21,
+      "title": "VRAM Utilization",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "100 * avg by (instance, gpu) (DCGM_FI_DEV_FB_USED / clamp_min(DCGM_FI_DEV_FB_USED + DCGM_FI_DEV_FB_FREE, 1)) or 100 * avg by (instance, gpu) (yokai_gpu_vram_used_bytes / clamp_min(yokai_gpu_vram_total_bytes, 1))",
+          "legendFormat": "{{instance}} GPU {{gpu}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 0,
+        "y": 50
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
+      }
+    },
+    {
+      "id": 18,
+      "title": "GPU Temperature",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "avg by (instance, gpu) (DCGM_FI_DEV_GPU_TEMP) or avg by (instance, gpu) (yokai_gpu_temperature_celsius)",
+          "legendFormat": "{{instance}} GPU {{gpu}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 6,
+        "y": 42
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
+      }
+    },
+    {
+      "id": 19,
+      "title": "CPU Usage",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "100 - (avg by (instance) (irate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100) or yokai_cpu_percent",
+          "legendFormat": "{{instance}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 12,
+        "y": 42
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
+      }
+    },
+    {
+      "id": 20,
+      "title": "RAM Usage",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "100 * (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) or 100 * (yokai_ram_used_bytes / clamp_min(yokai_ram_total_bytes, 1))",
+          "legendFormat": "{{instance}}",
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "yokai-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 42
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "yokai-prometheus"
+      }
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 39,
+  "tags": [
+    "yokai",
+    "llm",
+    "monitoring"
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timezone": "browser",
+  "title": "Yokai LLM Monitoring",
+  "uid": "yokai-monitoring",
+  "version": 11
+}
