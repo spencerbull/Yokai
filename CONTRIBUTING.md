@@ -173,11 +173,14 @@ Tests exist for all core packages:
 
 ### CI Checks
 
-Every pull request runs:
+Every pull request targeting `develop`, `staging`, or `main` runs:
 
-1. **Build** -- `go build ./...` across Go 1.22 and 1.23
+1. **Build** -- `go build ./...` with Go 1.25
 2. **Test** -- `go test -v -race -coverprofile=coverage.out ./...`
 3. **Lint** -- `make lint`
+4. **TUI** -- tests, bundle build, and standalone compilation
+5. **Release package** -- snapshot archives for every supported platform
+6. **Firestore rules** -- isolated Firebase Emulator Suite tests
 
 All three must pass before merge.
 
@@ -187,7 +190,7 @@ All three must pass before merge.
 
 ### Before Submitting
 
-1. **Branch from `main`**: Create a feature branch with a descriptive name.
+1. **Branch from `develop`**: Create a feature branch with a descriptive name.
    ```bash
    git checkout -b feat/add-amd-gpu-support
    git checkout -b fix/dashboard-resize-crash
@@ -206,16 +209,20 @@ All three must pass before merge.
 
 ### Submitting
 
-1. Push your branch and open a pull request against `main`.
+1. Push your branch and open a pull request against `develop`.
 2. Fill in the PR description:
    - **What** changed and **why**
    - Any breaking changes or migration notes
    - How to test the change manually (if applicable)
 3. CI will run automatically. Fix any failures before requesting review.
 
-### Review
+### Promotion and review
 
-- PRs require at least one approving review.
+- Feature PRs merge into `develop` and deploy the development backend.
+- Release candidates are promoted with a PR from `develop` to `staging`.
+- Production is promoted with a PR from `staging` to `main`.
+- Long-lived branches require passing CI, resolved threads, and approval from
+  code owner `@spencerbull`; direct pushes and force pushes are blocked.
 - Address review feedback with new commits (don't force-push during review).
 - Once approved and CI is green, the PR will be merged.
 

@@ -54,43 +54,81 @@ Current references:
 - [Firebase API keys are public identifiers](https://firebase.google.com/docs/projects/api-keys)
 - [Google OAuth for desktop apps](https://developers.google.com/identity/protocols/oauth2/native-app)
 
-## Set up the Google backend
+## Environment isolation
+
+Yokai uses three persistent, unbilled Firebase Spark projects. Data, users,
+quotas, API keys, deployment identities, and security-rule releases are isolated
+between them.
+
+| Git branch | GitHub environment | Firebase project | Purpose |
+|---|---|---|---|
+| `develop` | `firebase-development` | `yokai-config-dev-260709-5820` | Integrated development |
+| `staging` | `firebase-staging` | `yokai-config-stg-260709-5820` | Production-like verification |
+| `main` | `firebase-production` | `yokai-config-260709-5820` | User data and releases |
+
+Feature pull requests target `develop`. Promotion pull requests move the same
+commit from `develop` to `staging`, then from `staging` to `main`. Every pull
+request runs the Firestore emulator tests. A merge to a long-lived branch deploys
+only to its matching Firebase project; production deployment and releases also
+wait for approval from `spencerbull`.
+
+## Set up the Google backends
 
 Prerequisites:
 
 1. Install and authenticate the Google Cloud and Firebase CLIs.
-2. Use a Google Cloud project without a billing account to stay on Firebase's
-   Spark plan.
-3. Run the setup script from the repository root:
+2. Keep all three projects disconnected from billing to stay on Firebase's Spark
+   plan.
+3. Run the setup script for each environment from the repository root:
 
 ```bash
-export GCP_PROJECT_ID="your-project-id"
-./deploy/gcp/setup-firebase.sh
+CREATE_PROJECT=1 DEPLOY_STAGE=development \
+  GCP_PROJECT_ID=yokai-config-dev-260709-5820 \
+  ./deploy/gcp/setup-firebase.sh
+
+CREATE_PROJECT=1 DEPLOY_STAGE=staging \
+  GCP_PROJECT_ID=yokai-config-stg-260709-5820 \
+  ./deploy/gcp/setup-firebase.sh
+
+DEPLOY_STAGE=production \
+  GCP_PROJECT_ID=yokai-config-260709-5820 \
+  ./deploy/gcp/setup-firebase.sh
 ```
 
-The script adds Firebase, creates the single free Firestore database in
-`us-central1`, creates a Firebase Web App if necessary, and deploys
-`firestore.rules`. It prints the Firebase project configuration containing the
-public API key.
+The script creates a project when explicitly allowed, verifies billing is off,
+adds Firebase, creates the free Firestore database in
+`us-central1` with delete protection, creates a Firebase Web App, and deploys
+`firestore.rules`. It prints the public app ID and API key.
 
 ### Continuous deployment
 
-Configure keyless GitHub Actions access once:
+Configure keyless GitHub Actions access for each project:
 
 ```bash
-export GCP_PROJECT_ID="your-project-id"
-./deploy/gcp/setup-github-actions.sh
+DEPLOY_STAGE=development GCP_PROJECT_ID=yokai-config-dev-260709-5820 \
+  ./deploy/gcp/setup-github-actions.sh
+DEPLOY_STAGE=staging GCP_PROJECT_ID=yokai-config-stg-260709-5820 \
+  ./deploy/gcp/setup-github-actions.sh
+DEPLOY_STAGE=production GCP_PROJECT_ID=yokai-config-260709-5820 \
+  ./deploy/gcp/setup-github-actions.sh
+
+./deploy/github/setup-branch-governance.sh
 ```
 
-The setup creates a dedicated service account with a narrow custom rules-deployer
-role and a workload identity provider restricted to this repository's immutable
-GitHub ID, the `main` branch, the `firebase-production` environment, and this
-specific deployment workflow. It also creates the required GitHub repository
-variables. It creates no service-account key or GitHub secret. Pull requests run
-the rules against the Firestore emulator; changes merged to `main` rerun those
-tests and deploy the rules only after they pass.
+Each environment receives a dedicated service account with a narrow custom
+rules-deployer role and its own workload identity provider. Trust is restricted
+to this repository's immutable GitHub ID, the environment's exact branch, the
+matching GitHub environment, and this deployment workflow. Public client values
+and deployment coordinates are environment-scoped GitHub variables. No
+service-account key or GitHub secret is created.
 
-Next, in **Google Auth Platform** for the same project:
+The branch-governance script blocks direct pushes, force pushes, and deletion of
+`develop`, `staging`, and `main`; requires the complete CI suite and resolved
+review threads; and requires code-owner approval from `spencerbull`. Spencer can
+bypass approval only while merging a pull request, which permits a sole
+maintainer to merge their own reviewed work without allowing direct pushes.
+
+Next, in **Google Auth Platform** for each project:
 
 1. Configure the branding/audience and add test users while the app is in testing.
 2. Enable Google as a Firebase Authentication sign-in provider.
@@ -98,8 +136,8 @@ Next, in **Google Auth Platform** for the same project:
 4. Configure release builds with the OAuth client values:
 
 ```bash
-gh variable set YOKAI_GOOGLE_CLIENT_ID --body "000000000000-example.apps.googleusercontent.com"
-gh variable set YOKAI_GOOGLE_CLIENT_SECRET --body "desktop-client-secret"
+gh variable set YOKAI_GOOGLE_CLIENT_ID --env firebase-production --body "000000000000-example.apps.googleusercontent.com"
+gh variable set YOKAI_GOOGLE_CLIENT_SECRET --env firebase-production --body "desktop-client-secret"
 ```
 
 Desktop OAuth client secrets identify an installed app but cannot be kept

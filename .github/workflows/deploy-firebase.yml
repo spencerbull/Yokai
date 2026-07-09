@@ -2,7 +2,7 @@ name: Deploy Firebase backend
 
 on:
   push:
-    branches: [main]
+    branches: [develop, staging, main]
     paths:
       - firestore.rules
       - firebase.json
@@ -13,15 +13,31 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: firebase-production
-  cancel-in-progress: false
-
 env:
   FIREBASE_TOOLS_VERSION: 15.22.4
   FIREBASE_TOOLS_SHA256_LINUX: 9f20848be954b4c30d323d10d93311c991ae4508dbc782c4a076530cc84412c1
 
 jobs:
+  select-environment:
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.target.outputs.environment }}
+    steps:
+      - name: Map branch to deployment environment
+        id: target
+        shell: bash
+        run: |
+          case "${GITHUB_REF_NAME}" in
+            develop) environment=firebase-development ;;
+            staging) environment=firebase-staging ;;
+            main) environment=firebase-production ;;
+            *)
+              echo "Unsupported deployment branch: ${GITHUB_REF_NAME}" >&2
+              exit 1
+              ;;
+          esac
+          echo "environment=${environment}" >> "${GITHUB_OUTPUT}"
+
   test-rules:
     runs-on: ubuntu-latest
     steps:
@@ -49,9 +65,12 @@ jobs:
         working-directory: tests/firebase
 
   deploy-rules:
-    needs: test-rules
+    needs: [select-environment, test-rules]
     runs-on: ubuntu-latest
-    environment: firebase-production
+    environment: ${{ needs.select-environment.outputs.environment }}
+    concurrency:
+      group: ${{ needs.select-environment.outputs.environment }}
+      cancel-in-progress: false
     permissions:
       contents: read
       id-token: write
@@ -69,5 +88,11 @@ jobs:
           project_id: ${{ vars.FIREBASE_PROJECT_ID }}
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.GCP_FIREBASE_DEPLOY_SERVICE_ACCOUNT }}
+      - name: Verify environment configuration
+        shell: bash
+        run: |
+          test -n "${{ vars.FIREBASE_PROJECT_ID }}"
+          test -n "${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}"
+          test -n "${{ vars.GCP_FIREBASE_DEPLOY_SERVICE_ACCOUNT }}"
       - name: Deploy Firestore security rules
         run: firebase deploy --only firestore:rules --project "${{ vars.FIREBASE_PROJECT_ID }}" --config firebase.json --non-interactive
