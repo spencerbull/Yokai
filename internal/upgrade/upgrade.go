@@ -20,6 +20,7 @@ const (
 	latestReleaseURL = "https://github.com/spencerbull/yokai/releases/latest"
 	repoBaseURL      = "https://github.com/spencerbull/yokai/releases/download"
 	projectName      = "Yokai"
+	mainBinary       = "yokai"
 	tuiBinary        = "yokai-tui"
 )
 
@@ -142,7 +143,7 @@ func Run(currentVersion string) error {
 		return fmt.Errorf("failed to extract archive: %w", err)
 	}
 
-	newBinaryPath, err := findExtractedBinary(tempDir, "yokai")
+	newBinaryPath, err := findExtractedBinary(tempDir, mainBinaryName())
 	if err != nil {
 		return err
 	}
@@ -176,10 +177,18 @@ func Run(currentVersion string) error {
 }
 
 func companionBinaryName() string {
-	if runtime.GOOS == "windows" {
-		return tuiBinary + ".exe"
+	return binaryNameForOS(tuiBinary, runtime.GOOS)
+}
+
+func mainBinaryName() string {
+	return binaryNameForOS(mainBinary, runtime.GOOS)
+}
+
+func binaryNameForOS(name, goos string) string {
+	if goos == "windows" {
+		return name + ".exe"
 	}
-	return tuiBinary
+	return name
 }
 
 func updateArchivePattern(archiveExt string) string {

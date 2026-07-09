@@ -18,6 +18,26 @@ func TestUpdateArchivePatternPreservesFormat(t *testing.T) {
 	}
 }
 
+func TestBinaryNameForOS(t *testing.T) {
+	tests := []struct {
+		name string
+		goos string
+		want string
+	}{
+		{name: "yokai", goos: "linux", want: "yokai"},
+		{name: "yokai", goos: "darwin", want: "yokai"},
+		{name: "yokai", goos: "windows", want: "yokai.exe"},
+		{name: "yokai-tui", goos: "windows", want: "yokai-tui.exe"},
+	}
+	for _, test := range tests {
+		t.Run(test.goos+"_"+test.name, func(t *testing.T) {
+			if got := binaryNameForOS(test.name, test.goos); got != test.want {
+				t.Fatalf("binaryNameForOS(%q, %q) = %q, want %q", test.name, test.goos, got, test.want)
+			}
+		})
+	}
+}
+
 func TestExtractArchiveUsesZipPath(t *testing.T) {
 	archivePath := filepath.Join(t.TempDir(), "update.zip")
 	archive, err := os.Create(archivePath)
@@ -43,7 +63,11 @@ func TestExtractArchiveUsesZipPath(t *testing.T) {
 	if err := extractArchive(archivePath, destination); err != nil {
 		t.Fatalf("extract zip: %v", err)
 	}
-	assertFileContents(t, filepath.Join(destination, "yokai.exe"), "windows-binary")
+	extractedPath, err := findExtractedBinary(destination, binaryNameForOS(mainBinary, "windows"))
+	if err != nil {
+		t.Fatalf("find extracted Windows binary: %v", err)
+	}
+	assertFileContents(t, extractedPath, "windows-binary")
 }
 
 func TestFindExtractedBinaryFindsArchiveRootBinary(t *testing.T) {
