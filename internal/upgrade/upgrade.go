@@ -141,12 +141,14 @@ func Run(currentVersion string) error {
 		return fmt.Errorf("failed to extract archive: %w", err)
 	}
 
-	// Find the yokai binary in extracted files
-	newBinaryPath := filepath.Join(tempDir, "yokai")
-	if _, err := os.Stat(newBinaryPath); os.IsNotExist(err) {
-		return fmt.Errorf("yokai binary not found in archive")
+	newBinaryPath, err := findExtractedBinary(tempDir, "yokai")
+	if err != nil {
+		return err
 	}
-	newTUIBinaryPath := filepath.Join(tempDir, companionBinaryName())
+	newTUIBinaryPath, err := findExtractedBinary(tempDir, companionBinaryName())
+	if err != nil {
+		return err
+	}
 
 	// 5. Replace current binary
 	currentBinaryPath, err := os.Executable()
@@ -170,13 +172,9 @@ func Run(currentVersion string) error {
 		return fmt.Errorf("failed to backup current binary: %w", err)
 	}
 	oldTUIBinaryPath := currentTUIBinaryPath + ".old"
-	hasNewTUIBinary := false
-	if _, err := os.Stat(newTUIBinaryPath); err == nil {
-		hasNewTUIBinary = true
-		if err := backupCompanionBinary(currentTUIBinaryPath, oldTUIBinaryPath); err != nil {
-			_ = os.Rename(oldBinaryPath, currentBinaryPath)
-			return err
-		}
+	if err := backupCompanionBinary(currentTUIBinaryPath, oldTUIBinaryPath); err != nil {
+		_ = os.Rename(oldBinaryPath, currentBinaryPath)
+		return err
 	}
 
 	// Move new binary to current path
@@ -185,30 +183,24 @@ func Run(currentVersion string) error {
 		_ = os.Rename(oldBinaryPath, currentBinaryPath) // Best-effort rollback to previous binary.
 		return fmt.Errorf("failed to install new binary: %w", err)
 	}
-	if hasNewTUIBinary {
-		if err := os.Rename(newTUIBinaryPath, currentTUIBinaryPath); err != nil {
-			_ = os.Remove(currentBinaryPath)
-			_ = os.Rename(oldBinaryPath, currentBinaryPath)
-			_ = restoreCompanionBinary(currentTUIBinaryPath, oldTUIBinaryPath)
-			return fmt.Errorf("failed to install yokai-tui binary: %w", err)
-		}
+	if err := os.Rename(newTUIBinaryPath, currentTUIBinaryPath); err != nil {
+		_ = os.Remove(currentBinaryPath)
+		_ = os.Rename(oldBinaryPath, currentBinaryPath)
+		_ = restoreCompanionBinary(currentTUIBinaryPath, oldTUIBinaryPath)
+		return fmt.Errorf("failed to install yokai-tui binary: %w", err)
 	}
 
 	// Make it executable
 	if err := platform.ChmodIfSupported(currentBinaryPath, 0755); err != nil {
 		return fmt.Errorf("failed to make binary executable: %w", err)
 	}
-	if hasNewTUIBinary {
-		if err := platform.ChmodIfSupported(currentTUIBinaryPath, 0755); err != nil {
-			return fmt.Errorf("failed to make yokai-tui executable: %w", err)
-		}
+	if err := platform.ChmodIfSupported(currentTUIBinaryPath, 0755); err != nil {
+		return fmt.Errorf("failed to make yokai-tui executable: %w", err)
 	}
 
 	// Remove .old
 	_ = os.Remove(oldBinaryPath) // Best-effort cleanup of backup binary.
-	if hasNewTUIBinary {
-		_ = os.Remove(oldTUIBinaryPath)
-	}
+	_ = os.Remove(oldTUIBinaryPath)
 
 	// 6. Print success message
 	fmt.Printf("✅ Successfully updated to %s!\n", release.TagName)
@@ -222,6 +214,34 @@ func companionBinaryName() string {
 		return tuiBinary + ".exe"
 	}
 	return tuiBinary
+}
+
+func findExtractedBinary(root, name string) (string, error) {
+	var found string
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() || entry.Name() != name {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		found = path
+		return filepath.SkipAll
+	})
+	if err != nil {
+		return "", fmt.Errorf("finding %s in archive: %w", name, err)
+	}
+	if found == "" {
+		return "", fmt.Errorf("%s binary not found in archive", name)
+	}
+	return found, nil
 }
 
 func backupCompanionBinary(currentPath, backupPath string) error {

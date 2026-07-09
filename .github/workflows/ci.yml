@@ -61,3 +61,14 @@ jobs:
         run: bun run build
       - name: Compile standalone OpenTUI
         run: bun build --compile --format=esm --minify --bytecode src/index.tsx --outfile=../../bin/yokai-tui
+
+  release-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate GoReleaser configuration
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: '~> v2'
+          args: check

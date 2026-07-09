@@ -10,6 +10,7 @@ FALLBACK_INSTALL_DIR="$HOME/.local/bin"
 BINARY="yokai"
 TUI_BINARY="yokai-tui"
 PROJECT_NAME="Yokai"
+EXISTING_YOKAI=$(command -v "$BINARY" 2>/dev/null || true)
 
 # Colors
 RED='\033[0;31m'
@@ -95,12 +96,22 @@ TUI_SRC=$(find "$TMP_DIR" -name "$TUI_BINARY" -type f | head -n 1)
 if [ -z "$YOKAI_SRC" ]; then
   fail "Could not find '${BINARY}' in the downloaded archive."
 fi
+if [ -z "$TUI_SRC" ]; then
+  fail "Could not find '${TUI_BINARY}' in the downloaded archive. Refusing to leave an old UI sidecar installed."
+fi
 
 # ── Install ──────────────────────────────────────────────────────
 step "Installing"
 
 USE_SUDO=0
-if [ -w "$INSTALL_DIR" ]; then
+if [ -n "$EXISTING_YOKAI" ] && [ -f "$EXISTING_YOKAI" ] && [ -w "$(dirname "$EXISTING_YOKAI")" ]; then
+  TARGET_DIR=$(dirname "$EXISTING_YOKAI")
+elif [ -n "$EXISTING_YOKAI" ] && [ -f "$EXISTING_YOKAI" ] && command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
+  TARGET_DIR=$(dirname "$EXISTING_YOKAI")
+  USE_SUDO=1
+elif [ -n "$EXISTING_YOKAI" ] && [ -f "$EXISTING_YOKAI" ]; then
+  fail "Existing installation at '${EXISTING_YOKAI}' is not writable. Run 'sudo -v' and rerun the installer so the active installation can be replaced."
+elif [ -w "$INSTALL_DIR" ]; then
   TARGET_DIR="$INSTALL_DIR"
 elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
   TARGET_DIR="$INSTALL_DIR"
@@ -126,9 +137,7 @@ if [ "$TARGET_DIR" = "$FALLBACK_INSTALL_DIR" ]; then
 fi
 
 install_bin "$YOKAI_SRC" "${TARGET_DIR}/${BINARY}"
-if [ -n "$TUI_SRC" ]; then
-  install_bin "$TUI_SRC" "${TARGET_DIR}/${TUI_BINARY}"
-fi
+install_bin "$TUI_SRC" "${TARGET_DIR}/${TUI_BINARY}"
 
 if [ "$TARGET_DIR" = "$FALLBACK_INSTALL_DIR" ]; then
   # Add to PATH in shell rc files
