@@ -48,8 +48,10 @@ jobs:
       - name: Determine version bump
         id: version
         run: |
-          # Get the latest tag, default to v0.0.0 if none exists
-          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          # Select the highest release tag even if repository history was
+          # rewritten and older tags are no longer ancestors of main.
+          LATEST_TAG=$(git tag --list 'v[0-9]*' --sort=-version:refname | head -n 1)
+          LATEST_TAG=${LATEST_TAG:-v0.0.0}
           echo "latest_tag=${LATEST_TAG}" >> "$GITHUB_OUTPUT"
 
           # If this was triggered by a tag push, use that tag directly
