@@ -90,11 +90,13 @@ jobs:
           for platform in darwin_amd64 darwin_arm64 linux_amd64 linux_arm64; do
             archive=$(find dist -maxdepth 1 -type f -name "Yokai_*_${platform}.tar.gz" -print -quit)
             test -n "$archive"
-            tar -tzf "$archive" | grep -qx 'yokai'
-            tar -tzf "$archive" | grep -qx 'yokai-tui'
+            archive_contents=$(tar -tzf "$archive")
+            grep -qx 'yokai' <<< "$archive_contents"
+            grep -qx 'yokai-tui' <<< "$archive_contents"
           done
 
           windows_archive=$(find dist -maxdepth 1 -type f -name 'Yokai_*_windows_amd64.zip' -print -quit)
           test -n "$windows_archive"
-          unzip -Z1 "$windows_archive" | grep -qx 'yokai.exe'
-          unzip -Z1 "$windows_archive" | grep -qx 'yokai-tui.exe'
+          windows_contents=$(unzip -Z1 "$windows_archive")
+          grep -qx 'yokai.exe' <<< "$windows_contents"
+          grep -qx 'yokai-tui.exe' <<< "$windows_contents"
