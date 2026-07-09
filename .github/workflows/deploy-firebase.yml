@@ -1,0 +1,68 @@
+name: Deploy Firebase backend
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - firestore.rules
+      - firebase.json
+      - tests/firebase/**
+      - .github/workflows/deploy-firebase.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: firebase-production
+  cancel-in-progress: false
+
+jobs:
+  test-rules:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: tests/firebase/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install Firebase test dependencies
+        run: npm ci
+        working-directory: tests/firebase
+      - name: Install Firebase CLI
+        run: npm install --global firebase-tools@15.22.4
+      - name: Test Firestore security rules
+        run: npm test
+        working-directory: tests/firebase
+
+  deploy-rules:
+    needs: test-rules
+    runs-on: ubuntu-latest
+    environment: firebase-production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: tests/firebase/package-lock.json
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_FIREBASE_DEPLOY_SERVICE_ACCOUNT }}
+      - name: Install Firebase test dependencies
+        run: npm ci
+        working-directory: tests/firebase
+      - name: Install Firebase CLI
+        run: npm install --global firebase-tools@15.22.4
+      - name: Deploy Firestore security rules
+        run: firebase deploy --only firestore:rules --project "${{ vars.FIREBASE_PROJECT_ID }}" --config firebase.json --non-interactive

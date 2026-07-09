@@ -265,6 +265,14 @@ Your Machine                              GPU Device(s)
 
 All state lives in `~/.config/yokai/config.json`. Copy this file to another machine to reconnect to your fleet instantly.
 
+### Encrypted cloud device backup
+
+Yokai can save and load device records through an optional Firebase backend on
+Google's no-cost Spark plan. Google sign-in isolates each user's record, and
+device details are encrypted locally with a passphrase before upload. See
+[Cloud device configuration](docs/cloud-device-config.md) for deployment,
+security, cost, and usage details.
+
 ```json
 {
   "version": 1,

@@ -100,3 +100,25 @@ jobs:
           windows_contents=$(unzip -Z1 "$windows_archive")
           grep -qx 'yokai.exe' <<< "$windows_contents"
           grep -qx 'yokai-tui.exe' <<< "$windows_contents"
+
+  firestore-rules:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: tests/firebase/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install Firebase test dependencies
+        run: npm ci
+        working-directory: tests/firebase
+      - name: Install Firebase CLI
+        run: npm install --global firebase-tools@15.22.4
+      - name: Test Firestore security rules
+        run: npm test
+        working-directory: tests/firebase

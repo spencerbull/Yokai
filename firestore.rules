@@ -1,0 +1,33 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /device_configs/{userId} {
+      function isOwner() {
+        return request.auth != null && request.auth.uid == userId;
+      }
+
+      function isEncryptedEnvelope() {
+        return request.resource.data.keys().hasOnly([
+          'version', 'cipher', 'kdf', 'salt', 'nonce', 'ciphertext'
+        ])
+        && request.resource.data.version == 1
+        && request.resource.data.cipher == 'aes-256-gcm'
+        && request.resource.data.kdf == 'argon2id-3-65536-4'
+        && request.resource.data.salt is string
+        && request.resource.data.salt.size() <= 32
+        && request.resource.data.nonce is string
+        && request.resource.data.nonce.size() <= 24
+        && request.resource.data.ciphertext is string
+        && request.resource.data.ciphertext.size() <= 900000;
+      }
+
+      allow read, delete: if isOwner();
+      allow create, update: if isOwner() && isEncryptedEnvelope();
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
