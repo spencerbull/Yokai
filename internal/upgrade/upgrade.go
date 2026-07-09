@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"compress/gzip"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -111,7 +112,7 @@ func Run(currentVersion string) error {
 	}
 
 	// Create temp file
-	tempFile, err := os.CreateTemp("", "yokai-update-*.tar.gz")
+	tempFile, err := os.CreateTemp("", updateArchivePattern(archiveExt))
 	if err != nil {
 		return fmt.Errorf("failed to create temp file: %w", err)
 	}
@@ -128,7 +129,7 @@ func Run(currentVersion string) error {
 		return fmt.Errorf("failed to save download: %w", err)
 	}
 
-	// 4. Extract tar.gz
+	// 4. Extract the downloaded release archive.
 	tempDir, err := os.MkdirTemp("", "yokai-extract-*")
 	if err != nil {
 		return fmt.Errorf("failed to create temp directory: %w", err)
@@ -163,44 +164,9 @@ func Run(currentVersion string) error {
 	}
 
 	fmt.Println("Installing update...")
-	currentDir := filepath.Dir(currentBinaryPath)
-	currentTUIBinaryPath := filepath.Join(currentDir, companionBinaryName())
-
-	// Rename current binary to .old
-	oldBinaryPath := currentBinaryPath + ".old"
-	if err := os.Rename(currentBinaryPath, oldBinaryPath); err != nil {
-		return fmt.Errorf("failed to backup current binary: %w", err)
-	}
-	oldTUIBinaryPath := currentTUIBinaryPath + ".old"
-	if err := backupCompanionBinary(currentTUIBinaryPath, oldTUIBinaryPath); err != nil {
-		_ = os.Rename(oldBinaryPath, currentBinaryPath)
+	if err := installUpdatePair(newBinaryPath, newTUIBinaryPath, currentBinaryPath); err != nil {
 		return err
 	}
-
-	// Move new binary to current path
-	if err := os.Rename(newBinaryPath, currentBinaryPath); err != nil {
-		// Try to restore old binary
-		_ = os.Rename(oldBinaryPath, currentBinaryPath) // Best-effort rollback to previous binary.
-		return fmt.Errorf("failed to install new binary: %w", err)
-	}
-	if err := os.Rename(newTUIBinaryPath, currentTUIBinaryPath); err != nil {
-		_ = os.Remove(currentBinaryPath)
-		_ = os.Rename(oldBinaryPath, currentBinaryPath)
-		_ = restoreCompanionBinary(currentTUIBinaryPath, oldTUIBinaryPath)
-		return fmt.Errorf("failed to install yokai-tui binary: %w", err)
-	}
-
-	// Make it executable
-	if err := platform.ChmodIfSupported(currentBinaryPath, 0755); err != nil {
-		return fmt.Errorf("failed to make binary executable: %w", err)
-	}
-	if err := platform.ChmodIfSupported(currentTUIBinaryPath, 0755); err != nil {
-		return fmt.Errorf("failed to make yokai-tui executable: %w", err)
-	}
-
-	// Remove .old
-	_ = os.Remove(oldBinaryPath) // Best-effort cleanup of backup binary.
-	_ = os.Remove(oldTUIBinaryPath)
 
 	// 6. Print success message
 	fmt.Printf("✅ Successfully updated to %s!\n", release.TagName)
@@ -214,6 +180,10 @@ func companionBinaryName() string {
 		return tuiBinary + ".exe"
 	}
 	return tuiBinary
+}
+
+func updateArchivePattern(archiveExt string) string {
+	return "yokai-update-*" + archiveExt
 }
 
 func findExtractedBinary(root, name string) (string, error) {
@@ -244,24 +214,174 @@ func findExtractedBinary(root, name string) (string, error) {
 	return found, nil
 }
 
-func backupCompanionBinary(currentPath, backupPath string) error {
-	if err := os.Rename(currentPath, backupPath); err != nil {
+type updateFileOps struct {
+	rename func(string, string) error
+	chmod  func(string, os.FileMode) error
+}
+
+var defaultUpdateFileOps = updateFileOps{
+	rename: os.Rename,
+	chmod:  platform.ChmodIfSupported,
+}
+
+func installUpdatePair(newBinaryPath, newTUIBinaryPath, currentBinaryPath string) error {
+	return installUpdatePairWithOps(newBinaryPath, newTUIBinaryPath, currentBinaryPath, defaultUpdateFileOps)
+}
+
+func installUpdatePairWithOps(
+	newBinaryPath, newTUIBinaryPath, currentBinaryPath string,
+	ops updateFileOps,
+) error {
+	currentDir := filepath.Dir(currentBinaryPath)
+	currentTUIBinaryPath := filepath.Join(currentDir, companionBinaryName())
+
+	// Stage both files beside the active installation. This avoids cross-device
+	// rename failures after the old pair has already been moved out of the way.
+	stagedBinaryPath, err := stageUpdateBinary(newBinaryPath, currentDir, ".yokai-update-*", ops)
+	if err != nil {
+		return fmt.Errorf("staging yokai binary: %w", err)
+	}
+	defer func() { _ = os.Remove(stagedBinaryPath) }()
+
+	stagedTUIBinaryPath, err := stageUpdateBinary(newTUIBinaryPath, currentDir, ".yokai-tui-update-*", ops)
+	if err != nil {
+		return fmt.Errorf("staging yokai-tui binary: %w", err)
+	}
+	defer func() { _ = os.Remove(stagedTUIBinaryPath) }()
+
+	oldBinaryPath, err := availableBackupPath(currentBinaryPath)
+	if err != nil {
+		return fmt.Errorf("reserving yokai backup path: %w", err)
+	}
+	oldTUIBinaryPath, err := availableBackupPath(currentTUIBinaryPath)
+	if err != nil {
+		return fmt.Errorf("reserving yokai-tui backup path: %w", err)
+	}
+
+	if err := ops.rename(currentBinaryPath, oldBinaryPath); err != nil {
+		return fmt.Errorf("backing up current binary: %w", err)
+	}
+
+	hadOldTUI := true
+	if err := ops.rename(currentTUIBinaryPath, oldTUIBinaryPath); err != nil {
 		if os.IsNotExist(err) {
-			return nil
+			hadOldTUI = false
+		} else {
+			cause := fmt.Errorf("backing up yokai-tui binary: %w", err)
+			return withRollback(cause, ops.rename(oldBinaryPath, currentBinaryPath))
 		}
-		return fmt.Errorf("failed to backup yokai-tui binary: %w", err)
+	}
+
+	if err := ops.rename(stagedBinaryPath, currentBinaryPath); err != nil {
+		cause := fmt.Errorf("installing yokai binary: %w", err)
+		return withRollback(cause, rollbackUpdatePair(
+			currentBinaryPath, currentTUIBinaryPath,
+			oldBinaryPath, oldTUIBinaryPath,
+			hadOldTUI, ops,
+		))
+	}
+	if err := ops.rename(stagedTUIBinaryPath, currentTUIBinaryPath); err != nil {
+		cause := fmt.Errorf("installing yokai-tui binary: %w", err)
+		return withRollback(cause, rollbackUpdatePair(
+			currentBinaryPath, currentTUIBinaryPath,
+			oldBinaryPath, oldTUIBinaryPath,
+			hadOldTUI, ops,
+		))
+	}
+
+	_ = os.Remove(oldBinaryPath)
+	if hadOldTUI {
+		_ = os.Remove(oldTUIBinaryPath)
 	}
 	return nil
 }
 
-func restoreCompanionBinary(currentPath, backupPath string) error {
-	if err := os.Rename(backupPath, currentPath); err != nil {
-		if os.IsNotExist(err) {
-			return nil
+func stageUpdateBinary(sourcePath, targetDir, pattern string, ops updateFileOps) (string, error) {
+	source, err := os.Open(sourcePath)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = source.Close() }()
+
+	staged, err := os.CreateTemp(targetDir, pattern)
+	if err != nil {
+		return "", err
+	}
+	stagedPath := staged.Name()
+	keep := false
+	defer func() {
+		_ = staged.Close()
+		if !keep {
+			_ = os.Remove(stagedPath)
 		}
+	}()
+
+	if _, err := io.Copy(staged, source); err != nil {
+		return "", err
+	}
+	if err := staged.Close(); err != nil {
+		return "", err
+	}
+	if err := ops.chmod(stagedPath, 0755); err != nil {
+		return "", err
+	}
+
+	keep = true
+	return stagedPath, nil
+}
+
+func availableBackupPath(targetPath string) (string, error) {
+	placeholder, err := os.CreateTemp(filepath.Dir(targetPath), "."+filepath.Base(targetPath)+".old-*")
+	if err != nil {
+		return "", err
+	}
+	path := placeholder.Name()
+	if err := placeholder.Close(); err != nil {
+		_ = os.Remove(path)
+		return "", err
+	}
+	if err := os.Remove(path); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+func rollbackUpdatePair(
+	currentBinaryPath, currentTUIBinaryPath string,
+	oldBinaryPath, oldTUIBinaryPath string,
+	hadOldTUI bool,
+	ops updateFileOps,
+) error {
+	var rollbackErrors []error
+	if err := removeIfExists(currentBinaryPath); err != nil {
+		rollbackErrors = append(rollbackErrors, fmt.Errorf("removing new yokai binary: %w", err))
+	}
+	if err := removeIfExists(currentTUIBinaryPath); err != nil {
+		rollbackErrors = append(rollbackErrors, fmt.Errorf("removing new yokai-tui binary: %w", err))
+	}
+	if err := ops.rename(oldBinaryPath, currentBinaryPath); err != nil {
+		rollbackErrors = append(rollbackErrors, fmt.Errorf("restoring yokai binary: %w", err))
+	}
+	if hadOldTUI {
+		if err := ops.rename(oldTUIBinaryPath, currentTUIBinaryPath); err != nil {
+			rollbackErrors = append(rollbackErrors, fmt.Errorf("restoring yokai-tui binary: %w", err))
+		}
+	}
+	return errors.Join(rollbackErrors...)
+}
+
+func removeIfExists(path string) error {
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	return nil
+}
+
+func withRollback(cause, rollbackErr error) error {
+	if rollbackErr == nil {
+		return cause
+	}
+	return errors.Join(cause, fmt.Errorf("rollback failed: %w", rollbackErr))
 }
 
 // extractArchive extracts a release archive to the specified directory.

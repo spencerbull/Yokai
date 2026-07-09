@@ -62,13 +62,39 @@ jobs:
       - name: Compile standalone OpenTUI
         run: bun build --compile --format=esm --minify --bytecode src/index.tsx --outfile=../../bin/yokai-tui
 
-  release-config:
+  release-package:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Validate GoReleaser configuration
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Build snapshot release
         uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
           version: '~> v2'
-          args: check
+          args: release --snapshot --clean
+      - name: Verify release archives contain both binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          archive_count=$(find dist -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.zip' \) | wc -l | tr -d ' ')
+          test "$archive_count" -eq 5
+
+          for platform in darwin_amd64 darwin_arm64 linux_amd64 linux_arm64; do
+            archive=$(find dist -maxdepth 1 -type f -name "Yokai_*_${platform}.tar.gz" -print -quit)
+            test -n "$archive"
+            tar -tzf "$archive" | grep -qx 'yokai'
+            tar -tzf "$archive" | grep -qx 'yokai-tui'
+          done
+
+          windows_archive=$(find dist -maxdepth 1 -type f -name 'Yokai_*_windows_amd64.zip' -print -quit)
+          test -n "$windows_archive"
+          unzip -Z1 "$windows_archive" | grep -qx 'yokai.exe'
+          unzip -Z1 "$windows_archive" | grep -qx 'yokai-tui.exe'
