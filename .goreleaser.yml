@@ -19,6 +19,12 @@ builds:
     goarch:
       - amd64
       - arm64
+    ignore:
+      # Bun cannot currently build the TUI sidecar for Windows ARM64.
+      # Do not publish a partial archive that would leave users with a
+      # stale or missing UI after installation.
+      - goos: windows
+        goarch: arm64
     ldflags:
       # Strip debug info and inject version/build time
       - -s -w -X main.version={{.Version}} -X main.buildTime={{.Date}}
@@ -29,11 +35,11 @@ builds:
     dir: ui/tui
     main: src/index.tsx
     targets:
-      - bun-linux-x64
-      - bun-linux-arm64
-      - bun-darwin-x64
-      - bun-darwin-arm64
-      - bun-windows-x64
+      - linux-x64-modern
+      - linux-arm64
+      - darwin-x64
+      - darwin-arm64
+      - windows-x64-modern
     flags:
       - --compile
       - --format=esm
@@ -43,7 +49,6 @@ builds:
 archives:
   - formats:
       - tar.gz
-    allow_different_binary_count: true
     ids:
       - yokai
       - yokai-tui
