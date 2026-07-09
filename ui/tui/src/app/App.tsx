@@ -19,8 +19,7 @@ import { keymapForRoute } from "./keymap"
 import { APP_ROUTES, type AppRouteId } from "./routes"
 import { getShellContentHeight, getShellContentWidth } from "./shell/layout"
 import { ShellFrame } from "./shell/ShellFrame"
-
-type AppMode = "home" | "app"
+import { resolveAppSurface, type AppMode } from "./surface"
 
 export function App() {
   return (
@@ -42,8 +41,9 @@ function AppShell() {
   const [exitArmed, setExitArmed] = useState<null | "ctrlc" | "escape">(null)
   const dashboard = useDashboardController(activeRoute === "dashboard", width, height)
   const devices = useDevicesController(true)
-  const onboardingVisible = devices.status !== "ready" || devices.devices.length === 0
-  const homeVisible = !onboardingVisible && appMode === "home"
+  const surface = resolveAppSurface(appMode, devices.status, devices.devices.length)
+  const onboardingVisible = surface === "onboarding"
+  const homeVisible = surface === "home"
   const deploy = useDeployController(activeRoute === "deploy" && !onboardingVisible, () => setActiveRoute("dashboard"))
   const settings = useSettingsController(activeRoute === "settings" && !onboardingVisible, theme)
 
@@ -83,7 +83,7 @@ function AppShell() {
       }
     }
 
-    if (!onboardingVisible && key.name === "g") {
+    if (!homeVisible && key.name === "g") {
       activateHome()
       return
     }
@@ -182,9 +182,7 @@ function AppShell() {
 
   const active = APP_ROUTES.find((route) => route.id === activeRoute) ?? APP_ROUTES[0]
   const mainContent =
-    onboardingVisible ? (
-      <OnboardingRoute contentWidth={contentWidth} controller={devices} />
-    ) : homeVisible ? (
+    homeVisible ? (
       <LandingRoute
         onActivate={activateRoute}
         onSelectIndex={setLandingIndex}
@@ -193,6 +191,8 @@ function AppShell() {
         terminalHeight={height}
         terminalWidth={width}
       />
+    ) : onboardingVisible ? (
+      <OnboardingRoute contentWidth={contentWidth} controller={devices} />
     ) : activeRoute === "dashboard" ? (
       <DashboardRoute contentHeight={contentHeight} contentWidth={contentWidth} controller={dashboard} terminalHeight={height} />
     ) : activeRoute === "devices" ? (
