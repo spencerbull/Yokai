@@ -1,7 +1,9 @@
 package cloudsync
 
 import (
+	"fmt"
 	"os"
+	"sync"
 	"testing"
 )
 
@@ -34,5 +36,42 @@ func TestCredentialsUsePrivatePermissions(t *testing.T) {
 	}
 	if loaded.Token.RefreshToken != credentials.Token.RefreshToken {
 		t.Fatal("LoadCredentials() did not preserve refresh token")
+	}
+}
+
+func TestConcurrentCredentialSavesRemainAtomic(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+
+	const writers = 16
+	errors := make(chan error, writers)
+	var wait sync.WaitGroup
+	for i := 0; i < writers; i++ {
+		wait.Add(1)
+		go func(index int) {
+			defer wait.Done()
+			uid := fmt.Sprintf("user-%d", index)
+			errors <- SaveCredentials(&Credentials{
+				ProjectID: "yokai-test",
+				APIKey:    "firebase-api-key",
+				UID:       uid,
+				Token:     StoredToken{IDToken: "id-" + uid, RefreshToken: "refresh-" + uid},
+			})
+		}(i)
+	}
+	wait.Wait()
+	close(errors)
+	for err := range errors {
+		if err != nil {
+			t.Fatalf("SaveCredentials() error = %v", err)
+		}
+	}
+
+	loaded, err := LoadCredentials()
+	if err != nil {
+		t.Fatalf("LoadCredentials() error = %v", err)
+	}
+	if loaded.Token.IDToken != "id-"+loaded.UID || loaded.Token.RefreshToken != "refresh-"+loaded.UID {
+		t.Fatalf("credentials contain mixed writes: %#v", loaded)
 	}
 }

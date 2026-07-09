@@ -50,10 +50,10 @@ func RunCloud(args []string) {
 func runCloudLogin(ctx context.Context, args []string) error {
 	flags := flag.NewFlagSet("cloud login", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
-	projectID := flags.String("project-id", os.Getenv("YOKAI_FIREBASE_PROJECT_ID"), "Firebase project ID")
-	apiKey := flags.String("api-key", os.Getenv("YOKAI_FIREBASE_API_KEY"), "Firebase web API key")
-	clientID := flags.String("client-id", os.Getenv("YOKAI_GOOGLE_CLIENT_ID"), "Google desktop OAuth client ID")
-	clientSecret := flags.String("client-secret", os.Getenv("YOKAI_GOOGLE_CLIENT_SECRET"), "Google desktop OAuth client secret")
+	projectID := flags.String("project-id", envOrDefault("YOKAI_FIREBASE_PROJECT_ID", cloudsync.DefaultProjectID), "Firebase project ID")
+	apiKey := flags.String("api-key", envOrDefault("YOKAI_FIREBASE_API_KEY", cloudsync.DefaultAPIKey), "Firebase web API key")
+	clientID := flags.String("client-id", envOrDefault("YOKAI_GOOGLE_CLIENT_ID", cloudsync.DefaultGoogleClientID), "Google desktop OAuth client ID")
+	clientSecret := flags.String("client-secret", envOrDefault("YOKAI_GOOGLE_CLIENT_SECRET", cloudsync.DefaultGoogleClientSecret), "Google desktop OAuth client secret")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -80,7 +80,7 @@ func runCloudLogin(ctx context.Context, args []string) error {
 }
 
 func runCloudSave(ctx context.Context) error {
-	passphrase, err := readCloudPassphrase("Cloud encryption passphrase: ")
+	passphrase, err := readCloudSavePassphrase()
 	if err != nil {
 		return err
 	}
@@ -141,7 +141,7 @@ func runCloudLoad(ctx context.Context) error {
 	if err := config.Save(cfg); err != nil {
 		return fmt.Errorf("saving loaded config: %w", err)
 	}
-	reloaded := reloadDaemonAfterCloudLoad(cfg)
+	reloaded := reloadDaemonAfterCloudLoad(ctx, cfg)
 	outputJSON(map[string]interface{}{
 		"status":           "loaded",
 		"email":            credentials.Email,
@@ -213,6 +213,31 @@ func readCloudPassphrase(prompt string) (string, error) {
 	return string(value), nil
 }
 
+func readCloudSavePassphrase() (string, error) {
+	if value := os.Getenv("YOKAI_CLOUD_PASSPHRASE"); value != "" {
+		return value, nil
+	}
+	passphrase, err := readCloudPassphrase("Cloud encryption passphrase: ")
+	if err != nil {
+		return "", err
+	}
+	confirmation, err := readCloudPassphrase("Confirm cloud encryption passphrase: ")
+	if err != nil {
+		return "", err
+	}
+	if err := validatePassphraseConfirmation(passphrase, confirmation); err != nil {
+		return "", err
+	}
+	return passphrase, nil
+}
+
+func validatePassphraseConfirmation(passphrase, confirmation string) error {
+	if passphrase != confirmation {
+		return fmt.Errorf("cloud encryption passphrases do not match")
+	}
+	return nil
+}
+
 func backupLocalConfig() (string, error) {
 	path, err := config.ConfigPath()
 	if err != nil {
@@ -241,15 +266,30 @@ func backupLocalConfig() (string, error) {
 	return backup, nil
 }
 
-func reloadDaemonAfterCloudLoad(cfg *config.Config) bool {
+func reloadDaemonAfterCloudLoad(ctx context.Context, cfg *config.Config) bool {
+	return reloadDaemonWithClient(ctx, cfg, &http.Client{Timeout: 3 * time.Second})
+}
+
+func reloadDaemonWithClient(ctx context.Context, cfg *config.Config, client *http.Client) bool {
 	addr := cfg.Daemon.Listen
 	if addr == "" {
 		addr = "127.0.0.1:7473"
 	}
-	resp, err := http.Post("http://"+addr+"/reload", "application/json", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+addr+"/reload", nil)
+	if err != nil {
+		return false
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return false
 	}
 	defer func() { _ = resp.Body.Close() }()
 	return resp.StatusCode >= 200 && resp.StatusCode < 300
+}
+
+func envOrDefault(name, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+		return value
+	}
+	return fallback
 }

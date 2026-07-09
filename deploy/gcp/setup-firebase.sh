@@ -9,6 +9,12 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 command -v gcloud >/dev/null || { printf 'gcloud is required\n' >&2; exit 1; }
 command -v firebase >/dev/null || { printf 'firebase-tools is required\n' >&2; exit 1; }
 
+BILLING_ENABLED="$(gcloud billing projects describe "${GCP_PROJECT_ID}" --format='value(billingEnabled)' 2>/dev/null || true)"
+if [[ "${BILLING_ENABLED}" == "True" && "${ALLOW_BILLED_PROJECT:-0}" != "1" ]]; then
+  printf 'project %s has billing enabled; use an unbilled project for Spark or set ALLOW_BILLED_PROJECT=1\n' "${GCP_PROJECT_ID}" >&2
+  exit 1
+fi
+
 gcloud config set project "${GCP_PROJECT_ID}"
 gcloud services enable \
   firebase.googleapis.com \

@@ -112,3 +112,5 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          YOKAI_GOOGLE_CLIENT_ID: ${{ vars.YOKAI_GOOGLE_CLIENT_ID }}
+          YOKAI_GOOGLE_CLIENT_SECRET: ${{ vars.YOKAI_GOOGLE_CLIENT_SECRET }}

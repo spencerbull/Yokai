@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,39 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
 	return f(request)
+}
+
+func TestOAuthCallbackIgnoresInvalidState(t *testing.T) {
+	t.Parallel()
+	results := make(chan oauthCallbackResult, 1)
+	handler := oauthCallbackHandler("expected-state", func(result oauthCallbackResult) {
+		results <- result
+	})
+
+	invalid := httptest.NewRecorder()
+	handler.ServeHTTP(invalid, httptest.NewRequest(http.MethodGet, "/oauth/callback?state=wrong&code=attacker", nil))
+	if invalid.Code != http.StatusBadRequest {
+		t.Fatalf("invalid state status = %d", invalid.Code)
+	}
+	select {
+	case result := <-results:
+		t.Fatalf("invalid state completed callback: %#v", result)
+	default:
+	}
+
+	valid := httptest.NewRecorder()
+	handler.ServeHTTP(valid, httptest.NewRequest(http.MethodGet, "/oauth/callback?state=expected-state&code=valid-code", nil))
+	if valid.Code != http.StatusOK {
+		t.Fatalf("valid state status = %d", valid.Code)
+	}
+	select {
+	case result := <-results:
+		if result.code != "valid-code" || result.err != nil {
+			t.Fatalf("valid callback result = %#v", result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("valid callback did not complete")
+	}
 }
 
 func TestRefreshFirebaseIDToken(t *testing.T) {

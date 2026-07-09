@@ -15,12 +15,18 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/oauth2"
 )
 
 const firebaseAuthTimeout = 30 * time.Second
+
+type oauthCallbackResult struct {
+	code string
+	err  error
+}
 
 // LoginOptions configures Google OAuth and Firebase Authentication.
 type LoginOptions struct {
@@ -55,33 +61,13 @@ func Login(ctx context.Context, options LoginOptions) (*Credentials, error) {
 	verifier := oauth2.GenerateVerifier()
 	authURL := conf.AuthCodeURL(state, oauth2.S256ChallengeOption(verifier), oauth2.SetAuthURLParam("prompt", "select_account"))
 
-	type callbackResult struct {
-		code string
-		err  error
+	callback := make(chan oauthCallbackResult, 1)
+	var callbackOnce sync.Once
+	completeCallback := func(result oauthCallbackResult) {
+		callbackOnce.Do(func() { callback <- result })
 	}
-	callback := make(chan callbackResult, 1)
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /oauth/callback", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("state") != state {
-			http.Error(w, "invalid OAuth state", http.StatusBadRequest)
-			callback <- callbackResult{err: fmt.Errorf("OAuth callback state did not match")}
-			return
-		}
-		if oauthErr := r.URL.Query().Get("error"); oauthErr != "" {
-			http.Error(w, "Google login was not completed", http.StatusBadRequest)
-			callback <- callbackResult{err: fmt.Errorf("google login failed: %s", oauthErr)}
-			return
-		}
-		code := r.URL.Query().Get("code")
-		if code == "" {
-			http.Error(w, "missing authorization code", http.StatusBadRequest)
-			callback <- callbackResult{err: fmt.Errorf("OAuth callback did not include a code")}
-			return
-		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write([]byte("<!doctype html><title>Yokai login complete</title><p>Yokai is connected. You can close this window.</p>"))
-		callback <- callbackResult{code: code}
-	})
+	mux.Handle("GET /oauth/callback", oauthCallbackHandler(state, completeCallback))
 	server := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = server.Serve(listener) }()
 	defer func() {
@@ -101,7 +87,7 @@ func Login(ctx context.Context, options LoginOptions) (*Credentials, error) {
 		return nil, fmt.Errorf("opening browser: %w", err)
 	}
 
-	var result callbackResult
+	var result oauthCallbackResult
 	select {
 	case <-ctx.Done():
 		return nil, fmt.Errorf("waiting for Google login: %w", ctx.Err())
@@ -139,6 +125,29 @@ func Login(ctx context.Context, options LoginOptions) (*Credentials, error) {
 		return nil, err
 	}
 	return credentials, nil
+}
+
+func oauthCallbackHandler(state string, complete func(oauthCallbackResult)) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("state") != state {
+			http.Error(w, "invalid OAuth state", http.StatusBadRequest)
+			return
+		}
+		if oauthErr := r.URL.Query().Get("error"); oauthErr != "" {
+			http.Error(w, "Google login was not completed", http.StatusBadRequest)
+			complete(oauthCallbackResult{err: fmt.Errorf("google login failed: %s", oauthErr)})
+			return
+		}
+		code := r.URL.Query().Get("code")
+		if code == "" {
+			http.Error(w, "missing authorization code", http.StatusBadRequest)
+			complete(oauthCallbackResult{err: fmt.Errorf("OAuth callback did not include a code")})
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte("<!doctype html><title>Yokai login complete</title><p>Yokai is connected. You can close this window.</p>"))
+		complete(oauthCallbackResult{code: code})
+	})
 }
 
 type firebaseSignInResponse struct {

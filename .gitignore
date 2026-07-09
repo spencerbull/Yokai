@@ -10,3 +10,4 @@ bin/
 .firebase/
 firebase-debug.log
 firestore-debug.log
+gha-creds-*.json

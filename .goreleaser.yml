@@ -27,7 +27,12 @@ builds:
         goarch: arm64
     ldflags:
       # Strip debug info and inject version/build time
-      - -s -w -X main.version={{.Version}} -X main.buildTime={{.Date}}
+      - >-
+        -s -w
+        -X main.version={{.Version}}
+        -X main.buildTime={{.Date}}
+        -X github.com/spencerbull/yokai/internal/cloudsync.DefaultGoogleClientID={{ index .Env "YOKAI_GOOGLE_CLIENT_ID" }}
+        -X github.com/spencerbull/yokai/internal/cloudsync.DefaultGoogleClientSecret={{ index .Env "YOKAI_GOOGLE_CLIENT_SECRET" }}
 
   - id: yokai-tui
     builder: bun

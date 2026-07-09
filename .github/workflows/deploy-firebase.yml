@@ -17,25 +17,33 @@ concurrency:
   group: firebase-production
   cancel-in-progress: false
 
+env:
+  FIREBASE_TOOLS_VERSION: 15.22.4
+  FIREBASE_TOOLS_SHA256_LINUX: 9f20848be954b4c30d323d10d93311c991ae4508dbc782c4a076530cc84412c1
+
 jobs:
   test-rules:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
           cache: npm
           cache-dependency-path: tests/firebase/package-lock.json
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
         with:
           distribution: temurin
           java-version: '21'
       - name: Install Firebase test dependencies
         run: npm ci
         working-directory: tests/firebase
-      - name: Install Firebase CLI
-        run: npm install --global firebase-tools@15.22.4
+      - name: Install verified Firebase CLI
+        run: |
+          curl -fsSL "https://github.com/firebase/firebase-tools/releases/download/v${FIREBASE_TOOLS_VERSION}/firebase-tools-linux" -o "${RUNNER_TEMP}/firebase"
+          echo "${FIREBASE_TOOLS_SHA256_LINUX}  ${RUNNER_TEMP}/firebase" | sha256sum --check --strict
+          chmod 0755 "${RUNNER_TEMP}/firebase"
+          echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
       - name: Test Firestore security rules
         run: npm test
         working-directory: tests/firebase
@@ -48,21 +56,18 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: tests/firebase/package-lock.json
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Install verified Firebase CLI
+        run: |
+          curl -fsSL "https://github.com/firebase/firebase-tools/releases/download/v${FIREBASE_TOOLS_VERSION}/firebase-tools-linux" -o "${RUNNER_TEMP}/firebase"
+          echo "${FIREBASE_TOOLS_SHA256_LINUX}  ${RUNNER_TEMP}/firebase" | sha256sum --check --strict
+          chmod 0755 "${RUNNER_TEMP}/firebase"
+          echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
       - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v3
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
         with:
+          project_id: ${{ vars.FIREBASE_PROJECT_ID }}
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.GCP_FIREBASE_DEPLOY_SERVICE_ACCOUNT }}
-      - name: Install Firebase test dependencies
-        run: npm ci
-        working-directory: tests/firebase
-      - name: Install Firebase CLI
-        run: npm install --global firebase-tools@15.22.4
       - name: Deploy Firestore security rules
         run: firebase deploy --only firestore:rules --project "${{ vars.FIREBASE_PROJECT_ID }}" --config firebase.json --non-interactive
