@@ -24,8 +24,8 @@
 
 ## Allowed and forbidden actions
 
-- Allowed: create the two named unbilled Firebase projects, configure Firebase/WIF/GitHub Environments, submit the disclosed Google project-quota request, run tests, and update PR #79.
-- Forbidden without a new explicit approval: enable billing, delete or repurpose unrelated Google Cloud projects, deploy application code outside the three named environments, rotate unrelated credentials, or mutate customer data.
+- Allowed: create the two named unbilled Firebase projects, configure Firebase/WIF/GitHub Environments, submit the disclosed Google project-quota request, delete the 17 exact legacy project IDs authorized below, run tests, and update PR #79.
+- Forbidden without a new explicit approval: enable billing, delete or repurpose any other Google Cloud project, deploy application code outside the three named environments, rotate unrelated credentials, or mutate customer data.
 
 ## Required verification
 
@@ -43,8 +43,9 @@
 
 ## Open checkpoints
 
-- Google account project-count quota is exhausted. The quota form is paused while 17 user-approved legacy projects are audited for deletion. Google documents that soft-deleted projects may continue counting until final deletion, so retain the quota-request fallback.
-- Google may require interactive sign-in, passkey verification, or CAPTCHA completion by the user.
+- Google account project-count quota remains exhausted after all 17 user-approved legacy projects entered `DELETE_REQUESTED`. Google documents that soft-deleted projects may continue counting until final deletion, so continue with the quota-request fallback.
+- The quota-increase form is prepared in the signed-in Safari session for exactly two additional free-service projects; entering the account email and submitting remain at the user confirmation gate.
+- Google may require interactive passkey verification or CAPTCHA completion by the user.
 - OAuth client creation is a persistent credential action and requires action-time confirmation in the Google Cloud console.
 
 ## Legacy project deletion audit
@@ -52,8 +53,8 @@
 - User-authorized names map to: `tidy-campaign-774`, `promising-howl-798`, `notspotify-162300`, `bullrhinobot`, `cs-bot-168319`, `dellctovoice`, `dell-assistant-fda98`, `slipspace-bullapse`, `contextual-coach`, `dell-contextual-tasks-79a3b`, `dell-contextual-tasks-5b3dd`, `dell-contextual-tasks`, `dellcontextualtasks`, `contextual-tasks`, `contextual-tasks-1565883164223`, `vzre-256101`, and `spaceos`.
 - [x] Complete read-only resource/IAM audit for all 17 projects using three independent read-only workers.
 - [x] Identify and report projects with unexpected ownership or active infrastructure before deletion.
-- [ ] Delete the confirmed exact project IDs and record operation results.
-- [ ] Re-test creation of the development and staging project IDs.
+- [x] Delete the confirmed exact project IDs and verify all 17 entered `DELETE_REQUESTED`.
+- [x] Re-test creation of `yokai-config-dev-260709-5820`; Google still rejects it with the project-count quota error.
 
 ### Deletion findings
 
@@ -61,7 +62,8 @@
 - External-access risk: `dellctovoice` has three non-Spencer human editors, although no deployed resources were discovered.
 - Residual/uncertain legacy state: `tidy-campaign-774`, `promising-howl-798`, `dell-assistant-fda98`, and `vzre-256101` have App Engine or initialized Firebase surfaces that cannot be completely enumerated while billing is disabled.
 - Low observed risk: the remaining audited projects have no billing, no non-Spencer human principals, and no observed deployed code or non-empty databases/storage at the inspected surfaces.
-- [ ] Receive final confirmation to delete all 17 exact project IDs despite the disclosed active source, function, database, artifact, and collaborator impact.
+- [x] Receive continuation authorization after disclosing the active source, function, database, artifact, and collaborator impact.
+- [x] Delete the Dialogflow agents and stale Resource Manager liens that initially blocked `dellctovoice` and `dell-assistant-fda98` deletion.
 
 ## Completed evidence
 
@@ -69,4 +71,5 @@
 - Repository ruleset `18739747` protects `develop`, `staging`, and `main`.
 - GitHub Environments are branch-restricted: development→`develop`, staging→`staging`, production→`main`.
 - Production environment contains its Firebase project/app/API key and WIF/service-account coordinates; development and staging are intentionally empty until their projects exist.
-- PR #79 head `386afca` targets `develop` and has ten successful checks.
+- All 17 authorized legacy project IDs report lifecycle state `DELETE_REQUESTED`.
+- PR #79 head `20f47dd` targets `develop` and has ten successful checks.
