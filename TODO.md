@@ -9,9 +9,9 @@
 - [x] Map branches to `firebase-development`, `firebase-staging`, and `firebase-production` GitHub Environments.
 - [x] Move production deployment values to the production GitHub Environment and remove repository-scoped deployment values.
 - [x] Verify production is unbilled, delete-protected, keyless, least privilege, and restricted to the exact repository/branch/environment/workflow OIDC claims.
-- [ ] Obtain two additional Google Cloud project slots.
-- [ ] Create isolated unbilled Firebase development and staging projects.
-- [ ] Create per-environment web apps, Firestore databases/rules, WIF providers, deploy service accounts, and environment-scoped GitHub values.
+- [x] Obtain two additional Google Cloud project slots.
+- [x] Create isolated unbilled Firebase development and staging projects.
+- [x] Create per-environment web apps, Firestore databases/rules, WIF providers, deploy service accounts, and environment-scoped GitHub values.
 - [ ] Configure and verify Google sign-in/OAuth for each environment.
 - [ ] Exercise development and staging deployments end to end before promoting to production.
 
@@ -37,15 +37,16 @@
 - [x] Actionlint, ShellCheck, Bash syntax, and `git diff --check`.
 - [x] PR #79 GitHub checks (10/10 passing after rebase).
 - [x] Live branch ruleset, CODEOWNERS, environment branch policies, production reviewer, IAM, WIF, billing, delete protection, and service-account-key audit.
-- [ ] Live development deployment.
-- [ ] Live staging deployment.
-- [ ] Environment isolation audit proving no project ID, API key, WIF provider, or deploy service account is shared.
+- [x] Live development rules deployment from the checked-in configuration.
+- [x] Live staging rules deployment from the checked-in configuration.
+- [x] Environment isolation audit proving no project ID, API key, WIF provider, or deploy service account is shared.
+- [ ] GitHub Actions deployment from `develop` to development after PR #79 reaches `develop`.
+- [ ] GitHub Actions deployment from `staging` to staging after the promotion PR reaches `staging`.
 
 ## Open checkpoints
 
-- Google account project-count quota remains exhausted after all 17 user-approved legacy projects entered `DELETE_REQUESTED`. Google documents that soft-deleted projects may continue counting until final deletion, so continue with the quota-request fallback.
-- The quota-increase form is prepared in the signed-in Safari session for exactly two additional free-service projects; entering the account email and submitting remain at the user confirmation gate.
-- Google may require interactive passkey verification or CAPTCHA completion by the user.
+- Google approved enough project-count quota after the user submitted the request; both target projects were created successfully.
+- PR #79 must pass review and reach `develop` before the exact-claim WIF and branch-restricted development deployment can be exercised through GitHub Actions.
 - OAuth client creation is a persistent credential action and requires action-time confirmation in the Google Cloud console.
 
 ## Legacy project deletion audit
@@ -54,7 +55,7 @@
 - [x] Complete read-only resource/IAM audit for all 17 projects using three independent read-only workers.
 - [x] Identify and report projects with unexpected ownership or active infrastructure before deletion.
 - [x] Delete the confirmed exact project IDs and verify all 17 entered `DELETE_REQUESTED`.
-- [x] Re-test creation of `yokai-config-dev-260709-5820` and `yokai-config-stg-260709-5820`; Google still rejects both with the project-count quota error.
+- [x] Re-test creation of `yokai-config-dev-260709-5820` and `yokai-config-stg-260709-5820`; both were created after the quota request was approved.
 
 ### Deletion findings
 
@@ -70,8 +71,10 @@
 - PR #81 merged `.github/CODEOWNERS` with `@spencerbull` as sole owner.
 - Repository ruleset `18739747` protects `develop`, `staging`, and `main`.
 - GitHub Environments are branch-restricted: development→`develop`, staging→`staging`, production→`main`.
-- Production environment contains its Firebase project/app/API key and WIF/service-account coordinates; development and staging are intentionally empty until their projects exist.
+- All three GitHub Environments contain their own Firebase project/app/API key and WIF/service-account coordinates.
 - All 17 authorized legacy project IDs report lifecycle state `DELETE_REQUESTED`.
 - PR #79 targets `develop`, is mergeable, and its latest complete CI run has ten successful checks.
 - Live re-audit confirms exact branch-to-environment policies, the active long-lived-branch ruleset, sole `@spencerbull` code ownership, no repository-scoped deployment variables, and the production environment's branch/reviewer controls.
 - Production remains unbilled and Firestore-delete-protected, has no user-managed deploy-service-account keys, and uses exact repository/branch/environment/workflow OIDC claims with only the custom Firebase Rules deployer role.
+- Development and staging are unbilled Firebase Spark projects with `us-central1` Firestore Native databases, delete protection, deployed rules, dedicated web apps, exact-claim WIF providers, custom rules-deployer roles, and no user-managed service-account keys.
+- SHA-256 comparisons confirm that the three Firebase API keys are distinct without recording the raw values in the audit ledger.
