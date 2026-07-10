@@ -54,7 +54,7 @@
 - [x] Complete read-only resource/IAM audit for all 17 projects using three independent read-only workers.
 - [x] Identify and report projects with unexpected ownership or active infrastructure before deletion.
 - [x] Delete the confirmed exact project IDs and verify all 17 entered `DELETE_REQUESTED`.
-- [x] Re-test creation of `yokai-config-dev-260709-5820`; Google still rejects it with the project-count quota error.
+- [x] Re-test creation of `yokai-config-dev-260709-5820` and `yokai-config-stg-260709-5820`; Google still rejects both with the project-count quota error.
 
 ### Deletion findings
 
@@ -72,4 +72,6 @@
 - GitHub Environments are branch-restricted: development→`develop`, staging→`staging`, production→`main`.
 - Production environment contains its Firebase project/app/API key and WIF/service-account coordinates; development and staging are intentionally empty until their projects exist.
 - All 17 authorized legacy project IDs report lifecycle state `DELETE_REQUESTED`.
-- PR #79 head `20f47dd` targets `develop` and has ten successful checks.
+- PR #79 head `732d881` targets `develop`, is mergeable, and has ten successful checks.
+- Live re-audit confirms exact branch-to-environment policies, the active long-lived-branch ruleset, sole `@spencerbull` code ownership, no repository-scoped deployment variables, and the production environment's branch/reviewer controls.
+- Production remains unbilled and Firestore-delete-protected, has no user-managed deploy-service-account keys, and uses exact repository/branch/environment/workflow OIDC claims with only the custom Firebase Rules deployer role.
