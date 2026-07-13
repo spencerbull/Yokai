@@ -61,7 +61,11 @@ jobs:
           chmod 0755 "${RUNNER_TEMP}/firebase"
           echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
       - name: Test Firestore security rules
-        run: npm test
+        shell: bash
+        run: |
+          node_binary="$(command -v node)"
+          firebase emulators:exec --only firestore --project demo-yokai --config ../../firebase.json \
+            "\"${node_binary}\" --test --test-concurrency=1 firestore.rules.test.mjs"
         working-directory: tests/firebase
 
   deploy-rules:
