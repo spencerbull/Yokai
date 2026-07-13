@@ -14,7 +14,7 @@
 - [x] Create per-environment web apps, Firestore databases/rules, WIF providers, deploy service accounts, and environment-scoped GitHub values.
 - [x] Configure and verify Google sign-in/OAuth for each environment.
 - [x] Complete the pre-merge cloud-config UX and destructive-action safety pass.
-- [ ] Exercise development and staging deployments end to end before promoting to production.
+- [x] Exercise development and staging deployments end to end before promoting to production.
 
 ## Streams and worktrees
 
@@ -50,14 +50,14 @@
 - [x] Live Firebase API keys restricted to Identity Toolkit and Secure Token in all three projects, with allowed-API smoke responses verified in development.
 - [x] Live rulesets split so CI/thread/direct-push controls have no bypass; production environment admin bypass disabled.
 - [x] GitHub Actions deployment from `develop` to development after PR #79 reaches `develop` (run `29292844587`).
-- [ ] GitHub Actions deployment from `staging` to staging after the promotion PR reaches `staging`.
+- [x] GitHub Actions deployment from `staging` to staging after the promotion PR reaches `staging` (run `29293130769`).
 
 ## Open checkpoints
 
 - Google approved enough project-count quota after the user submitted the request; both target projects were created successfully.
-- PR #79 must pass review and reach `develop` before the exact-claim WIF and branch-restricted development deployment can be exercised through GitHub Actions.
+- Development and staging exact-claim WIF deployments have passed through GitHub Actions; production promotion remains blocked on its separate release-readiness gate.
 - All three OAuth audiences are restricted to Testing with `spencerbull2554@gmail.com` as the sole test user. Publishing production is an explicit release gate; development and staging stay unpublished.
-- User review of the improved cloud-config flow is now a checkpoint before production OAuth changes or PR merge approval.
+- The user approved merging through staging after reviewing the cloud-config flow; production OAuth publication and promotion remain separate human gates.
 
 ## Legacy project deletion audit
 
@@ -83,7 +83,7 @@
 - GitHub Environments are branch-restricted: development→`develop`, staging→`staging`, production→`main`.
 - All three GitHub Environments contain their own Firebase project/app/API key and WIF/service-account coordinates.
 - All 17 authorized legacy project IDs report lifecycle state `DELETE_REQUESTED`.
-- PR #79 targets `develop`, is mergeable, and its latest complete CI run has ten successful checks.
+- PR #79 merged to `develop`, and promotion PR #84 merged the resulting history from `develop` to `staging` after all required checks passed.
 - Live re-audit confirms exact branch-to-environment policies, the active long-lived-branch ruleset, sole `@spencerbull` code ownership, no repository-scoped deployment variables, and the production environment's branch/reviewer controls.
 - Production remains unbilled and Firestore-delete-protected, has no user-managed deploy-service-account keys, and uses exact repository/branch/environment/workflow OIDC claims with only the custom Firebase Rules deployer role.
 - Development and staging are unbilled Firebase Spark projects with `us-central1` Firestore Native databases, delete protection, deployed rules, dedicated web apps, exact-claim WIF providers, custom rules-deployer roles, and no user-managed service-account keys.
@@ -91,6 +91,7 @@
 - Firebase Authentication and Google sign-in are enabled in all three unbilled projects. Each GitHub Environment contains a distinct desktop OAuth client ID and secret whose project-number prefix matches its Firebase project.
 - The development OAuth flow completed through Safari and the CLI successfully exercised login, encrypted save, status, load, server-side delete, and logout. The smoke-test record and local credentials were removed afterward.
 - GitHub Actions run `29292844587` passed the emulator rules suite, exact-claim WIF authentication, and the Firestore rules deployment to `firebase-development` from `develop`.
+- GitHub Actions run `29293130769` passed the emulator rules suite, exact-claim WIF authentication, and the Firestore rules deployment to `firebase-staging` from `staging`.
 - The superseded development OAuth secret is disabled; the verified replacement remains enabled and stored only in the development GitHub Environment.
 - Public Firebase keys in development, staging, and production allow only `identitytoolkit.googleapis.com` and `securetoken.googleapis.com`.
 - Ruleset `18739747` has no bypass actors and enforces branch/CI/thread controls; approval ruleset `18892833` contains the sole PR-only maintainer bypass.
