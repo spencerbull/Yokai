@@ -51,6 +51,9 @@ func main() {
 		case "config":
 			cli.RunConfig(os.Args[2:])
 			return
+		case "cloud":
+			cli.RunCloud(os.Args[2:])
+			return
 
 		case "--help", "-h":
 			printUsage()
@@ -115,6 +118,14 @@ Configuration:
   yokai config show                          Dump config (tokens redacted)
   yokai config set <key> <value>             Set a config value
   yokai config path                          Print config file path
+
+Cloud Device Config:
+  yokai cloud login [flags]                  Sign in with Google
+  yokai cloud save [--yes]                   Encrypt and back up local devices
+  yokai cloud load [--yes]                   Preview and restore cloud devices
+  yokai cloud status [--verify]              Show login and backup status
+  yokai cloud delete --yes                   Delete the cloud copy
+  yokai cloud logout                         Remove local Google credentials
 
 All CLI commands output JSON to stdout. Errors go to stderr as JSON.
 `, version)

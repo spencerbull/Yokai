@@ -1,0 +1,102 @@
+name: Deploy Firebase backend
+
+on:
+  push:
+    branches: [develop, staging, main]
+    paths:
+      - firestore.rules
+      - firebase.json
+      - tests/firebase/**
+      - .github/workflows/deploy-firebase.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FIREBASE_TOOLS_VERSION: 15.22.4
+  FIREBASE_TOOLS_SHA256_LINUX: 9f20848be954b4c30d323d10d93311c991ae4508dbc782c4a076530cc84412c1
+
+jobs:
+  select-environment:
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.target.outputs.environment }}
+    steps:
+      - name: Map branch to deployment environment
+        id: target
+        shell: bash
+        run: |
+          case "${GITHUB_REF_NAME}" in
+            develop) environment=firebase-development ;;
+            staging) environment=firebase-staging ;;
+            main) environment=firebase-production ;;
+            *)
+              echo "Unsupported deployment branch: ${GITHUB_REF_NAME}" >&2
+              exit 1
+              ;;
+          esac
+          echo "environment=${environment}" >> "${GITHUB_OUTPUT}"
+
+  test-rules:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: tests/firebase/package-lock.json
+      - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install Firebase test dependencies
+        run: npm ci
+        working-directory: tests/firebase
+      - name: Install verified Firebase CLI
+        run: |
+          curl -fsSL "https://github.com/firebase/firebase-tools/releases/download/v${FIREBASE_TOOLS_VERSION}/firebase-tools-linux" -o "${RUNNER_TEMP}/firebase"
+          echo "${FIREBASE_TOOLS_SHA256_LINUX}  ${RUNNER_TEMP}/firebase" | sha256sum --check --strict
+          chmod 0755 "${RUNNER_TEMP}/firebase"
+          echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
+      - name: Test Firestore security rules
+        shell: bash
+        run: |
+          node_binary="$(command -v node)"
+          firebase emulators:exec --only firestore --project demo-yokai --config ../../firebase.json \
+            "\"${node_binary}\" --test --test-concurrency=1 firestore.rules.test.mjs"
+        working-directory: tests/firebase
+
+  deploy-rules:
+    needs: [select-environment, test-rules]
+    runs-on: ubuntu-latest
+    environment: ${{ needs.select-environment.outputs.environment }}
+    concurrency:
+      group: ${{ needs.select-environment.outputs.environment }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Install verified Firebase CLI
+        run: |
+          curl -fsSL "https://github.com/firebase/firebase-tools/releases/download/v${FIREBASE_TOOLS_VERSION}/firebase-tools-linux" -o "${RUNNER_TEMP}/firebase"
+          echo "${FIREBASE_TOOLS_SHA256_LINUX}  ${RUNNER_TEMP}/firebase" | sha256sum --check --strict
+          chmod 0755 "${RUNNER_TEMP}/firebase"
+          echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          project_id: ${{ vars.FIREBASE_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_FIREBASE_DEPLOY_SERVICE_ACCOUNT }}
+      - name: Verify environment configuration
+        shell: bash
+        run: |
+          test -n "${{ vars.FIREBASE_PROJECT_ID }}"
+          test -n "${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}"
+          test -n "${{ vars.GCP_FIREBASE_DEPLOY_SERVICE_ACCOUNT }}"
+      - name: Deploy Firestore security rules
+        run: firebase deploy --only firestore:rules --project "${{ vars.FIREBASE_PROJECT_ID }}" --config firebase.json --non-interactive

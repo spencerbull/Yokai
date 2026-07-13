@@ -7,3 +7,7 @@ bin/
 **/node_modules
 **/dist
 **/build
+.firebase/
+firebase-debug.log
+firestore-debug.log
+gha-creds-*.json

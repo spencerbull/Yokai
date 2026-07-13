@@ -1,0 +1,126 @@
+package cloudsync
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"time"
+
+	"github.com/spencerbull/yokai/internal/config"
+)
+
+const credentialsFile = "cloud-auth.json"
+
+// ErrNotLoggedIn indicates that this machine does not have usable cloud credentials.
+var ErrNotLoggedIn = errors.New("not logged in")
+
+// Credentials contains the Firebase project and refresh token. The file is
+// local-only, mode 0600, and is never part of a synced snapshot.
+type Credentials struct {
+	ProjectID string      `json:"project_id"`
+	APIKey    string      `json:"api_key"`
+	UID       string      `json:"uid"`
+	Email     string      `json:"email,omitempty"`
+	Token     StoredToken `json:"token"`
+}
+
+// StoredToken contains the Firebase ID and refresh tokens used for Firestore.
+type StoredToken struct {
+	IDToken      string    `json:"id_token"`
+	RefreshToken string    `json:"refresh_token"`
+	Expiry       time.Time `json:"expiry"`
+}
+
+// CredentialsPath returns the local cloud credential path.
+func CredentialsPath() (string, error) {
+	dir, err := config.ConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, credentialsFile), nil
+}
+
+// LoadCredentials loads local Firebase credentials.
+func LoadCredentials() (*Credentials, error) {
+	path, err := CredentialsPath()
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("%w; run 'yokai cloud login' first", ErrNotLoggedIn)
+		}
+		return nil, fmt.Errorf("reading cloud credentials: %w", err)
+	}
+	var credentials Credentials
+	if err := json.Unmarshal(data, &credentials); err != nil {
+		return nil, fmt.Errorf("parsing cloud credentials: %w", err)
+	}
+	if credentials.ProjectID == "" || credentials.APIKey == "" || credentials.UID == "" || credentials.Token.RefreshToken == "" {
+		return nil, fmt.Errorf("%w: cloud credentials are incomplete; run 'yokai cloud login' again", ErrNotLoggedIn)
+	}
+	return &credentials, nil
+}
+
+// SaveCredentials atomically writes Firebase credentials with user-only access.
+func SaveCredentials(credentials *Credentials) error {
+	dir, err := config.ConfigDir()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return fmt.Errorf("creating config dir: %w", err)
+	}
+	if err := os.Chmod(dir, 0700); err != nil {
+		return fmt.Errorf("securing config dir: %w", err)
+	}
+	path := filepath.Join(dir, credentialsFile)
+	data, err := json.MarshalIndent(credentials, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshaling cloud credentials: %w", err)
+	}
+	data = append(data, '\n')
+	tmp, err := os.CreateTemp(dir, ".cloud-auth-*.tmp")
+	if err != nil {
+		return fmt.Errorf("creating cloud credential temp file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer func() { _ = os.Remove(tmpPath) }()
+	if err := tmp.Chmod(0600); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("securing cloud credential temp file: %w", err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("writing cloud credentials: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("syncing cloud credentials: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("closing cloud credentials: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("saving cloud credentials: %w", err)
+	}
+	if err := os.Chmod(path, 0600); err != nil {
+		return fmt.Errorf("securing cloud credentials: %w", err)
+	}
+	return nil
+}
+
+// RemoveCredentials removes the local Firebase credential file.
+func RemoveCredentials() error {
+	path, err := CredentialsPath()
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("removing cloud credentials: %w", err)
+	}
+	return nil
+}
