@@ -49,7 +49,7 @@
 - [x] Three independent PR review passes covering security, Actions/governance, and documentation/tests; verified actionable findings were fixed.
 - [x] Live Firebase API keys restricted to Identity Toolkit and Secure Token in all three projects, with allowed-API smoke responses verified in development.
 - [x] Live rulesets split so CI/thread/direct-push controls have no bypass; production environment admin bypass disabled.
-- [ ] GitHub Actions deployment from `develop` to development after PR #79 reaches `develop`.
+- [x] GitHub Actions deployment from `develop` to development after PR #79 reaches `develop` (run `29292844587`).
 - [ ] GitHub Actions deployment from `staging` to staging after the promotion PR reaches `staging`.
 
 ## Open checkpoints
@@ -90,6 +90,7 @@
 - SHA-256 comparisons confirm that the three Firebase API keys are distinct without recording the raw values in the audit ledger.
 - Firebase Authentication and Google sign-in are enabled in all three unbilled projects. Each GitHub Environment contains a distinct desktop OAuth client ID and secret whose project-number prefix matches its Firebase project.
 - The development OAuth flow completed through Safari and the CLI successfully exercised login, encrypted save, status, load, server-side delete, and logout. The smoke-test record and local credentials were removed afterward.
+- GitHub Actions run `29292844587` passed the emulator rules suite, exact-claim WIF authentication, and the Firestore rules deployment to `firebase-development` from `develop`.
 - The superseded development OAuth secret is disabled; the verified replacement remains enabled and stored only in the development GitHub Environment.
 - Public Firebase keys in development, staging, and production allow only `identitytoolkit.googleapis.com` and `securetoken.googleapis.com`.
 - Ruleset `18739747` has no bypass actors and enforces branch/CI/thread controls; approval ruleset `18892833` contains the sole PR-only maintainer bypass.
