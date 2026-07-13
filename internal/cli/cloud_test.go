@@ -2,6 +2,8 @@ package cli
 
 import (
 	"context"
+	"errors"
+	"flag"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,6 +15,260 @@ import (
 	"github.com/spencerbull/yokai/internal/cloudsync"
 	"github.com/spencerbull/yokai/internal/config"
 )
+
+func TestCloudSubcommandHelpReturnsBeforeActions(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	credentials := &cloudsync.Credentials{
+		ProjectID: "test-project",
+		APIKey:    "test-key",
+		UID:       "test-user",
+		Token:     cloudsync.StoredToken{RefreshToken: "refresh-token"},
+	}
+	if err := cloudsync.SaveCredentials(credentials); err != nil {
+		t.Fatal(err)
+	}
+	credentialsPath, err := cloudsync.CredentialsPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	commands := map[string]func() error{
+		"login":  func() error { return runCloudLogin(context.Background(), []string{"--help"}) },
+		"save":   func() error { return runCloudSave(context.Background(), []string{"--help"}) },
+		"load":   func() error { return runCloudLoad(context.Background(), []string{"--help"}) },
+		"status": func() error { return runCloudStatus(context.Background(), []string{"--help"}) },
+		"delete": func() error { return runCloudDelete(context.Background(), []string{"--help"}) },
+		"logout": func() error { return runCloudLogout([]string{"--help"}) },
+	}
+	for name, run := range commands {
+		if err := run(); !errors.Is(err, flag.ErrHelp) {
+			t.Fatalf("%s --help error = %v", name, err)
+		}
+	}
+	if _, err := os.Stat(credentialsPath); err != nil {
+		t.Fatalf("help mutated cloud credentials: %v", err)
+	}
+	if err := runCloudLogout([]string{"unexpected"}); err == nil {
+		t.Fatal("cloud logout accepted an unexpected argument")
+	}
+	if _, err := os.Stat(credentialsPath); err != nil {
+		t.Fatalf("invalid arguments mutated cloud credentials: %v", err)
+	}
+}
+
+func TestCloudSaveRefusesEmptyDeviceListBeforeLogin(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	err := runCloudSave(context.Background(), nil)
+	if err == nil || !strings.Contains(err.Error(), "local config has no devices") {
+		t.Fatalf("runCloudSave() error = %v", err)
+	}
+}
+
+func TestReadCloudConfirmationDefaultsToNo(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		input string
+		want  bool
+	}{
+		{input: "yes\n", want: true},
+		{input: "Y\n", want: true},
+		{input: "\n", want: false},
+		{input: "no\n", want: false},
+	} {
+		var output strings.Builder
+		got, err := readCloudConfirmation(strings.NewReader(test.input), &output, "Continue? ")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != test.want {
+			t.Fatalf("confirmation %q = %v, want %v", test.input, got, test.want)
+		}
+		if output.String() != "Continue? " {
+			t.Fatalf("prompt = %q", output.String())
+		}
+	}
+}
+
+type fakeCloudConfigClient struct {
+	getEnvelope cloudsync.Envelope
+	getMetadata cloudsync.Metadata
+	getErr      error
+	putCalls    int
+	putEnvelope cloudsync.Envelope
+}
+
+func (f *fakeCloudConfigClient) Get(context.Context) (cloudsync.Envelope, cloudsync.Metadata, error) {
+	return f.getEnvelope, f.getMetadata, f.getErr
+}
+
+func (f *fakeCloudConfigClient) Put(_ context.Context, envelope cloudsync.Envelope) (cloudsync.Metadata, error) {
+	f.putCalls++
+	f.putEnvelope = envelope
+	return cloudsync.Metadata{UpdatedAt: time.Date(2026, 7, 13, 21, 0, 0, 0, time.UTC)}, nil
+}
+
+func (f *fakeCloudConfigClient) Delete(context.Context) error { return nil }
+
+func testCloudInteraction(input string, terminal bool, passphrase string, outputs *[]interface{}) cloudCommandInteraction {
+	return cloudCommandInteraction{
+		stdin:      strings.NewReader(input),
+		stderr:     &strings.Builder{},
+		isTerminal: terminal,
+		readPassphrase: func(string) (string, error) {
+			return passphrase, nil
+		},
+		readSavePassphrase: func() (string, error) {
+			return passphrase, nil
+		},
+		output: func(value interface{}) {
+			*outputs = append(*outputs, value)
+		},
+	}
+}
+
+func testCloudEnvelope(t *testing.T, devices []config.Device, passphrase string) cloudsync.Envelope {
+	t.Helper()
+	envelope, err := cloudsync.Encrypt(cloudsync.Snapshot{Version: cloudsync.SnapshotVersion, Devices: devices}, passphrase)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return envelope
+}
+
+func TestSaveCloudConfigDoesNotOverwriteOnCancelOrWrongPassphrase(t *testing.T) {
+	const passphrase = "correct test passphrase"
+	existing := testCloudEnvelope(t, []config.Device{{ID: "cloud-device"}}, passphrase)
+	credentials := &cloudsync.Credentials{Email: "user@example.com"}
+	cfg := config.DefaultConfig()
+	cfg.Devices = []config.Device{{ID: "local-device"}}
+
+	t.Run("cancel", func(t *testing.T) {
+		client := &fakeCloudConfigClient{getEnvelope: existing, getMetadata: cloudsync.Metadata{UpdatedAt: time.Now()}}
+		var outputs []interface{}
+		err := saveCloudConfig(context.Background(), client, credentials, cfg, false, testCloudInteraction("n\n", true, passphrase, &outputs))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if client.putCalls != 0 || len(outputs) != 1 {
+			t.Fatalf("cancel putCalls=%d outputs=%#v", client.putCalls, outputs)
+		}
+	})
+
+	t.Run("wrong passphrase", func(t *testing.T) {
+		client := &fakeCloudConfigClient{getEnvelope: existing}
+		var outputs []interface{}
+		err := saveCloudConfig(context.Background(), client, credentials, cfg, true, testCloudInteraction("", false, "incorrect test passphrase", &outputs))
+		if err == nil || client.putCalls != 0 || len(outputs) != 0 {
+			t.Fatalf("wrong passphrase error=%v putCalls=%d outputs=%#v", err, client.putCalls, outputs)
+		}
+	})
+}
+
+func TestSaveCloudConfigConfirmedAndAllowEmptyPaths(t *testing.T) {
+	const passphrase = "correct test passphrase"
+	credentials := &cloudsync.Credentials{Email: "user@example.com"}
+
+	t.Run("confirmed replacement", func(t *testing.T) {
+		existing := testCloudEnvelope(t, []config.Device{{ID: "cloud-device"}}, passphrase)
+		client := &fakeCloudConfigClient{getEnvelope: existing}
+		cfg := config.DefaultConfig()
+		cfg.Devices = []config.Device{{ID: "local-device"}}
+		var outputs []interface{}
+		if err := saveCloudConfig(context.Background(), client, credentials, cfg, true, testCloudInteraction("", false, passphrase, &outputs)); err != nil {
+			t.Fatal(err)
+		}
+		if client.putCalls != 1 || len(outputs) != 1 {
+			t.Fatalf("replacement putCalls=%d outputs=%#v", client.putCalls, outputs)
+		}
+	})
+
+	t.Run("explicit empty backup", func(t *testing.T) {
+		cfg := config.DefaultConfig()
+		if err := validateCloudSaveConfig(cfg, false); err == nil {
+			t.Fatal("empty config passed without allow-empty")
+		}
+		if err := validateCloudSaveConfig(cfg, true); err != nil {
+			t.Fatal(err)
+		}
+		client := &fakeCloudConfigClient{getErr: cloudsync.ErrNoCloudConfig}
+		var outputs []interface{}
+		if err := saveCloudConfig(context.Background(), client, credentials, cfg, true, testCloudInteraction("", false, passphrase, &outputs)); err != nil {
+			t.Fatal(err)
+		}
+		if client.putCalls != 1 {
+			t.Fatalf("empty backup putCalls=%d", client.putCalls)
+		}
+	})
+}
+
+func TestLoadCloudConfigDoesNotMutateOnCancelOrWrongPassphrase(t *testing.T) {
+	const passphrase = "correct test passphrase"
+	envelope := testCloudEnvelope(t, []config.Device{{ID: "cloud-device"}}, passphrase)
+	credentials := &cloudsync.Credentials{Email: "user@example.com"}
+	newEffects := func(calls *int) cloudLoadEffects {
+		return cloudLoadEffects{
+			backup: func() (string, error) { (*calls)++; return "backup.json", nil },
+			save:   func(*config.Config) error { (*calls)++; return nil },
+			reload: func(context.Context, *config.Config) bool { (*calls)++; return true },
+		}
+	}
+
+	for _, test := range []struct {
+		name       string
+		confirmed  bool
+		input      string
+		passphrase string
+		wantErr    bool
+	}{
+		{name: "cancel", confirmed: false, input: "n\n", passphrase: passphrase},
+		{name: "wrong passphrase", confirmed: true, passphrase: "incorrect test passphrase", wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &fakeCloudConfigClient{getEnvelope: envelope, getMetadata: cloudsync.Metadata{UpdatedAt: time.Now()}}
+			cfg := config.DefaultConfig()
+			cfg.HFToken = "preserve-token"
+			cfg.Devices = []config.Device{{ID: "local-device"}}
+			var outputs []interface{}
+			calls := 0
+			err := loadCloudConfig(context.Background(), client, credentials, cfg, test.confirmed, testCloudInteraction(test.input, true, test.passphrase, &outputs), newEffects(&calls))
+			if (err != nil) != test.wantErr {
+				t.Fatalf("error = %v", err)
+			}
+			if calls != 0 || cfg.Devices[0].ID != "local-device" || cfg.HFToken != "preserve-token" {
+				t.Fatalf("load mutated state: calls=%d cfg=%#v", calls, cfg)
+			}
+		})
+	}
+}
+
+func TestLoadCloudConfigConfirmedPreservesOtherSettings(t *testing.T) {
+	const passphrase = "correct test passphrase"
+	envelope := testCloudEnvelope(t, []config.Device{{ID: "cloud-device"}}, passphrase)
+	client := &fakeCloudConfigClient{getEnvelope: envelope, getMetadata: cloudsync.Metadata{UpdatedAt: time.Now()}}
+	cfg := config.DefaultConfig()
+	cfg.HFToken = "preserve-token"
+	cfg.Services = []config.Service{{ID: "preserve-service"}}
+	cfg.Devices = []config.Device{{ID: "local-device"}}
+	var outputs []interface{}
+	backupCalls, saveCalls, reloadCalls := 0, 0, 0
+	effects := cloudLoadEffects{
+		backup: func() (string, error) { backupCalls++; return "backup.json", nil },
+		save: func(saved *config.Config) error {
+			saveCalls++
+			if saved.HFToken != "preserve-token" || len(saved.Services) != 1 || saved.Devices[0].ID != "cloud-device" {
+				t.Fatalf("saved config = %#v", saved)
+			}
+			return nil
+		},
+		reload: func(context.Context, *config.Config) bool { reloadCalls++; return true },
+	}
+	if err := loadCloudConfig(context.Background(), client, &cloudsync.Credentials{Email: "user@example.com"}, cfg, true, testCloudInteraction("", false, passphrase, &outputs), effects); err != nil {
+		t.Fatal(err)
+	}
+	if backupCalls != 1 || saveCalls != 1 || reloadCalls != 1 || len(outputs) != 1 {
+		t.Fatalf("effects backup=%d save=%d reload=%d outputs=%#v", backupCalls, saveCalls, reloadCalls, outputs)
+	}
+}
 
 func TestValidatePassphraseConfirmation(t *testing.T) {
 	t.Parallel()

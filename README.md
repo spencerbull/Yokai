@@ -273,6 +273,13 @@ device details are encrypted locally with a passphrase before upload. See
 [Cloud device configuration](docs/cloud-device-config.md) for deployment,
 security, cost, and usage details.
 
+```bash
+yokai cloud login             # Sign in with Google
+yokai cloud save              # Preview and create/replace the encrypted backup
+yokai cloud status --verify   # Confirm the backup and device count
+yokai cloud load              # Preview and restore devices with a local backup
+```
+
 ```json
 {
   "version": 1,

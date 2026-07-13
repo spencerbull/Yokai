@@ -21,7 +21,10 @@ import (
 	"golang.org/x/oauth2"
 )
 
-const firebaseAuthTimeout = 30 * time.Second
+const (
+	firebaseAuthTimeout = 30 * time.Second
+	browserOpenGrace    = 100 * time.Millisecond
+)
 
 type oauthCallbackResult struct {
 	code string
@@ -76,15 +79,25 @@ func Login(ctx context.Context, options LoginOptions) (*Credentials, error) {
 		_ = server.Shutdown(shutdownCtx)
 	}()
 
-	if options.AnnounceURL != nil {
-		options.AnnounceURL(authURL)
-	}
 	opener := options.OpenURL
 	if opener == nil {
 		opener = openBrowser
 	}
-	if err := opener(authURL); err != nil && options.AnnounceURL == nil {
-		return nil, fmt.Errorf("opening browser: %w", err)
+	if options.AnnounceURL != nil {
+		options.AnnounceURL(authURL)
+	}
+	openResult := make(chan error, 1)
+	go func() { openResult <- opener(authURL) }()
+	select {
+	case err := <-openResult:
+		if err != nil && options.AnnounceURL == nil {
+			return nil, fmt.Errorf("opening browser: %w", err)
+		}
+	case <-time.After(browserOpenGrace):
+		// Some desktop launchers remain attached to the browser. Continue waiting
+		// for the OAuth callback rather than letting the launcher block login.
+	case <-ctx.Done():
+		return nil, fmt.Errorf("opening browser: %w", ctx.Err())
 	}
 
 	var result oauthCallbackResult
@@ -145,7 +158,25 @@ func oauthCallbackHandler(state string, complete func(oauthCallbackResult)) http
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write([]byte("<!doctype html><title>Yokai login complete</title><p>Yokai is connected. You can close this window.</p>"))
+		_, _ = w.Write([]byte(`<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Return to Yokai</title>
+<style>
+  :root { color-scheme: dark; font-family: ui-sans-serif, system-ui, sans-serif; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #0f172a; color: #f8fafc; }
+  main { width: min(34rem, calc(100% - 3rem)); padding: 2.25rem; border: 1px solid #334155; border-radius: 1rem; background: #111827; }
+  .mark { color: #60a5fa; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+  h1 { margin: .75rem 0; font-size: 1.75rem; }
+  p { margin: 0; color: #cbd5e1; line-height: 1.6; }
+</style>
+<main>
+  <div class="mark">Yokai</div>
+  <h1>Google authorization received</h1>
+  <p>Return to Yokai while it finishes connecting. You can close this tab.</p>
+</main>
+</html>`))
 		complete(oauthCallbackResult{code: code})
 	})
 }

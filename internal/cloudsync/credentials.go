@@ -2,6 +2,7 @@ package cloudsync
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,6 +12,9 @@ import (
 )
 
 const credentialsFile = "cloud-auth.json"
+
+// ErrNotLoggedIn indicates that this machine does not have usable cloud credentials.
+var ErrNotLoggedIn = errors.New("not logged in")
 
 // Credentials contains the Firebase project and refresh token. The file is
 // local-only, mode 0600, and is never part of a synced snapshot.
@@ -47,7 +51,7 @@ func LoadCredentials() (*Credentials, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("not logged in; run 'yokai cloud login' first")
+			return nil, fmt.Errorf("%w; run 'yokai cloud login' first", ErrNotLoggedIn)
 		}
 		return nil, fmt.Errorf("reading cloud credentials: %w", err)
 	}
@@ -56,7 +60,7 @@ func LoadCredentials() (*Credentials, error) {
 		return nil, fmt.Errorf("parsing cloud credentials: %w", err)
 	}
 	if credentials.ProjectID == "" || credentials.APIKey == "" || credentials.UID == "" || credentials.Token.RefreshToken == "" {
-		return nil, fmt.Errorf("cloud credentials are incomplete; log in again")
+		return nil, fmt.Errorf("%w: cloud credentials are incomplete; run 'yokai cloud login' again", ErrNotLoggedIn)
 	}
 	return &credentials, nil
 }

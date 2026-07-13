@@ -13,6 +13,7 @@
 - [x] Create isolated unbilled Firebase development and staging projects.
 - [x] Create per-environment web apps, Firestore databases/rules, WIF providers, deploy service accounts, and environment-scoped GitHub values.
 - [x] Configure and verify Google sign-in/OAuth for each environment.
+- [x] Complete the pre-merge cloud-config UX and destructive-action safety pass.
 - [ ] Exercise development and staging deployments end to end before promoting to production.
 
 ## Streams and worktrees
@@ -42,6 +43,9 @@
 - [x] Environment isolation audit proving no project ID, API key, WIF provider, or deploy service account is shared.
 - [x] OAuth isolation audit proving each environment has its own desktop client ID/secret and enabled Google provider.
 - [x] Live development login, encrypted save, status, load, server-side delete, and local logout smoke test.
+- [x] UX regression tests prove every cloud subcommand's help exits before actions and empty device lists are blocked by default.
+- [x] Focused cloud CLI/sync race tests, golangci-lint, and all OpenTUI tests pass after the UX pass.
+- [x] Independent review of the final UX/safety diff is resolved or documented.
 - [x] Three independent PR review passes covering security, Actions/governance, and documentation/tests; verified actionable findings were fixed.
 - [x] Live Firebase API keys restricted to Identity Toolkit and Secure Token in all three projects, with allowed-API smoke responses verified in development.
 - [x] Live rulesets split so CI/thread/direct-push controls have no bypass; production environment admin bypass disabled.
@@ -53,6 +57,7 @@
 - Google approved enough project-count quota after the user submitted the request; both target projects were created successfully.
 - PR #79 must pass review and reach `develop` before the exact-claim WIF and branch-restricted development deployment can be exercised through GitHub Actions.
 - All three OAuth audiences are restricted to Testing with `spencerbull2554@gmail.com` as the sole test user. Publishing production is an explicit release gate; development and staging stay unpublished.
+- User review of the improved cloud-config flow is now a checkpoint before production OAuth changes or PR merge approval.
 
 ## Legacy project deletion audit
 

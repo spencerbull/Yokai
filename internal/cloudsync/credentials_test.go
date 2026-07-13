@@ -1,11 +1,20 @@
 package cloudsync
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"sync"
 	"testing"
 )
+
+func TestLoadCredentialsReportsLoggedOutState(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	_, err := LoadCredentials()
+	if !errors.Is(err, ErrNotLoggedIn) {
+		t.Fatalf("LoadCredentials() error = %v", err)
+	}
+}
 
 func TestCredentialsUsePrivatePermissions(t *testing.T) {
 	configHome := t.TempDir()

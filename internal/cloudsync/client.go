@@ -4,15 +4,20 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
 const maxResponseSize = 2 << 20
+
+// ErrNoCloudConfig indicates that the signed-in user has not saved a cloud copy.
+var ErrNoCloudConfig = errors.New("no cloud device backup found")
 
 // Client calls Firestore's REST API using a Firebase user ID token.
 type Client struct {
@@ -116,6 +121,9 @@ func (c *Client) do(ctx context.Context, method string, requestBody, responseBod
 		}
 		_ = json.Unmarshal(data, &apiError)
 		message := apiError.Error.Message
+		if resp.StatusCode == http.StatusNotFound && isMissingFirestoreDocument(message) {
+			return fmt.Errorf("%w; run 'yokai cloud save' first", ErrNoCloudConfig)
+		}
 		if message == "" {
 			message = http.StatusText(resp.StatusCode)
 		}
@@ -127,6 +135,14 @@ func (c *Client) do(ctx context.Context, method string, requestBody, responseBod
 		}
 	}
 	return nil
+}
+
+func isMissingFirestoreDocument(message string) bool {
+	message = strings.ToLower(message)
+	if !strings.Contains(message, "document") {
+		return false
+	}
+	return strings.Contains(message, "not found") || strings.Contains(message, "no document") || strings.Contains(message, "document missing")
 }
 
 func envelopeToFields(envelope Envelope) map[string]firestoreValue {

@@ -39,6 +39,9 @@ func TestOAuthCallbackIgnoresInvalidState(t *testing.T) {
 	if valid.Code != http.StatusOK {
 		t.Fatalf("valid state status = %d", valid.Code)
 	}
+	if body := valid.Body.String(); !strings.Contains(body, "Google authorization received") || !strings.Contains(body, "Return to Yokai") {
+		t.Fatalf("valid callback body = %q", body)
+	}
 	select {
 	case result := <-results:
 		if result.code != "valid-code" || result.err != nil {
@@ -109,5 +112,37 @@ func TestRefreshFirebaseIDTokenReusesFreshToken(t *testing.T) {
 	})})
 	if err != nil || got != "fresh-token" {
 		t.Fatalf("refreshFirebaseIDToken() = %q, %v", got, err)
+	}
+}
+
+func TestLoginBlockingBrowserOpenerHonorsContext(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	release := make(chan struct{})
+	defer close(release)
+	announced := make(chan struct{}, 1)
+	started := time.Now()
+	_, err := Login(ctx, LoginOptions{
+		ProjectID:          "yokai-test",
+		APIKey:             "public-api-key",
+		GoogleClientID:     "client-id",
+		GoogleClientSecret: "client-secret",
+		OpenURL: func(string) error {
+			<-release
+			return nil
+		},
+		AnnounceURL: func(string) { announced <- struct{}{} },
+	})
+	if err == nil || !strings.Contains(err.Error(), "context deadline exceeded") {
+		t.Fatalf("Login() error = %v", err)
+	}
+	if time.Since(started) > time.Second {
+		t.Fatalf("blocking opener held login for %s", time.Since(started))
+	}
+	select {
+	case <-announced:
+	default:
+		t.Fatal("fallback URL was not announced")
 	}
 }

@@ -4,6 +4,61 @@ Yokai can save and restore the `devices` section of `~/.config/yokai/config.json
 with Firebase Authentication and Cloud Firestore. Other local settings, deploy
 history, and the Hugging Face token are not synchronized.
 
+## Quick start
+
+Official releases include the production Firebase and Google OAuth settings.
+Start by signing in and checking whether this account already has a backup:
+
+```bash
+yokai cloud login
+yokai cloud status
+```
+
+Create the encrypted backup:
+
+```bash
+yokai cloud save
+```
+
+On the first save, Yokai asks you to create and confirm a passphrase with at
+least 12 characters. Save it in a password manager: Yokai cannot recover a lost
+passphrase, and Firebase stores only ciphertext. Later saves require the current
+passphrase before replacing the existing backup. Yokai refuses to upload an
+empty device list unless `--allow-empty` is explicitly supplied.
+
+To inspect and restore a backup:
+
+```bash
+# Shows whether a backup exists and when it was last updated
+yokai cloud status
+
+# Also decrypts the backup and reports its device count
+yokai cloud status --verify
+
+# Previews the local/cloud device counts before changing anything
+yokai cloud load
+```
+
+Restore replaces only the device list. Yokai preserves all other settings,
+writes a private timestamped copy of the local config, and reports that backup
+path in the result. If the daemon is not available to reload the restored list,
+restart Yokai. To undo, copy the reported backup over the active path shown by
+`yokai config path`, then restart Yokai.
+
+`cloud logout` removes the Google/Firebase credentials from this computer but
+does not delete the encrypted cloud backup. Permanent deletion is a separate,
+explicit action:
+
+```bash
+yokai cloud delete --yes
+yokai cloud logout
+```
+
+For non-interactive automation, set `YOKAI_CLOUD_PASSPHRASE` and use `--yes`
+when replacing an existing cloud or local device list. Process environment
+values may be visible to other processes owned by the same operating-system
+user.
+
 ## Architecture
 
 ```text
@@ -170,14 +225,7 @@ displays a newly created secret in full for a limited time. Store it directly in
 the matching GitHub Environment; if it is lost, create a replacement, verify
 login, and disable the superseded secret.
 
-## Sign in and use
-
-Official releases include the public Firebase project configuration and the
-desktop OAuth client configured by the release workflow, so sign-in is normally:
-
-```bash
-yokai cloud login
-```
+## Self-hosted and local builds
 
 For a self-hosted backend or a locally built binary, supply the configuration
 explicitly:
@@ -188,30 +236,7 @@ yokai cloud login \
   --api-key "firebase-public-api-key" \
   --client-id "000000000000-example.apps.googleusercontent.com" \
   --client-secret "desktop-client-secret"
-
-# Encrypt and upload only device records
-yokai cloud save
-
-# Restore device records; existing config is backed up first
-yokai cloud load
-
-# Check or remove local login state
-yokai cloud status
-yokai cloud logout
-
-# Permanently delete the server-side ciphertext
-yokai cloud delete --yes
 ```
-
-Interactive commands read the encryption passphrase without echo. `cloud save`
-asks for it twice before replacing the existing cloud snapshot, reducing the
-chance that a typo makes the last usable snapshot inaccessible. Use a long,
-unique passphrase and keep it in a password manager. Automation can set
-`YOKAI_CLOUD_PASSPHRASE` to bypass the prompt, but a process environment may be
-visible to other processes owned by the same operating-system user.
-
-`yokai cloud load` replaces only devices and writes a timestamped local backup.
-If the local daemon is running, the CLI asks it to reload the new device list.
 
 ## Security operations
 

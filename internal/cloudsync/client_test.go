@@ -3,8 +3,10 @@ package cloudsync
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -55,5 +57,37 @@ func TestFieldsToEnvelopeRejectsIncompleteDocument(t *testing.T) {
 	t.Parallel()
 	if _, err := fieldsToEnvelope(map[string]firestoreValue{}); err == nil {
 		t.Fatal("fieldsToEnvelope() accepted an incomplete document")
+	}
+}
+
+func TestClientGetMapsMissingBackup(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":{"message":"Document device_configs/test-user not found."}}`))
+	}))
+	defer server.Close()
+
+	client := &Client{documentURL: server.URL + "/config", idToken: "token", http: server.Client()}
+	_, _, err := client.Get(context.Background())
+	if !errors.Is(err, ErrNoCloudConfig) {
+		t.Fatalf("Get() error = %v", err)
+	}
+}
+
+func TestClientDoesNotMapBackend404ToMissingBackup(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":{"message":"Project yokai-missing not found."}}`))
+	}))
+	defer server.Close()
+
+	client := &Client{documentURL: server.URL + "/config", idToken: "token", http: server.Client()}
+	_, _, err := client.Get(context.Background())
+	if err == nil || errors.Is(err, ErrNoCloudConfig) || !strings.Contains(err.Error(), "Project yokai-missing") {
+		t.Fatalf("Get() error = %v", err)
 	}
 }
