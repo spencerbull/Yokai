@@ -89,7 +89,7 @@ func runCloudSave(ctx context.Context) error {
 		return fmt.Errorf("loading config: %w", err)
 	}
 	envelope, err := cloudsync.Encrypt(cloudsync.Snapshot{
-		Version: config.ConfigVersion,
+		Version: cloudsync.SnapshotVersion,
 		Devices: append([]config.Device(nil), cfg.Devices...),
 	}, passphrase)
 	if err != nil {
@@ -137,7 +137,7 @@ func runCloudLoad(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	cfg.Devices = append([]config.Device(nil), snapshot.Devices...)
+	applyCloudSnapshot(cfg, snapshot)
 	if err := config.Save(cfg); err != nil {
 		return fmt.Errorf("saving loaded config: %w", err)
 	}
@@ -151,6 +151,10 @@ func runCloudLoad(ctx context.Context) error {
 		"daemon_reloaded":  reloaded,
 	})
 	return nil
+}
+
+func applyCloudSnapshot(cfg *config.Config, snapshot cloudsync.Snapshot) {
+	cfg.Devices = append([]config.Device(nil), snapshot.Devices...)
 }
 
 func runCloudStatus(ctx context.Context) error {

@@ -9,7 +9,7 @@ import (
 func TestEncryptDecryptRoundTrip(t *testing.T) {
 	t.Parallel()
 	snapshot := Snapshot{
-		Version: config.ConfigVersion,
+		Version: SnapshotVersion,
 		Devices: []config.Device{{
 			ID:         "finn",
 			Host:       "100.64.0.2",
@@ -36,7 +36,7 @@ func TestEncryptDecryptRoundTrip(t *testing.T) {
 
 func TestDecryptRejectsWrongPassphraseAndTampering(t *testing.T) {
 	t.Parallel()
-	envelope, err := Encrypt(Snapshot{Version: config.ConfigVersion, Devices: []config.Device{}}, "correct horse battery staple")
+	envelope, err := Encrypt(Snapshot{Version: SnapshotVersion, Devices: []config.Device{}}, "correct horse battery staple")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,6 +47,21 @@ func TestDecryptRejectsWrongPassphraseAndTampering(t *testing.T) {
 	envelope.Ciphertext = envelope.Ciphertext[:len(envelope.Ciphertext)-1] + "A"
 	if _, err := Decrypt(envelope, "correct horse battery staple"); err == nil {
 		t.Fatal("Decrypt() accepted modified ciphertext")
+	}
+}
+
+func TestDecryptSupportsOriginalSnapshotVersion(t *testing.T) {
+	t.Parallel()
+	envelope, err := Encrypt(Snapshot{Version: 1, Devices: []config.Device{{ID: "original"}}}, "correct horse battery staple")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := Decrypt(envelope, "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("Decrypt() original snapshot error = %v", err)
+	}
+	if snapshot.Version != 1 || len(snapshot.Devices) != 1 || snapshot.Devices[0].ID != "original" {
+		t.Fatalf("Decrypt() original snapshot = %#v", snapshot)
 	}
 }
 

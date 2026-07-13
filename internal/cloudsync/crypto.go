@@ -16,6 +16,9 @@ import (
 )
 
 const (
+	// SnapshotVersion is independent from the full local configuration schema.
+	// Increment it only when the portable device payload itself becomes incompatible.
+	SnapshotVersion = 1
 	envelopeVersion = 1
 	keySize         = 32
 	saltSize        = 16
@@ -122,7 +125,7 @@ func Decrypt(envelope Envelope, passphrase string) (Snapshot, error) {
 	if err := json.Unmarshal(plaintext, &snapshot); err != nil {
 		return Snapshot{}, fmt.Errorf("parsing decrypted config: %w", err)
 	}
-	if snapshot.Version != config.ConfigVersion {
+	if snapshot.Version != SnapshotVersion {
 		return Snapshot{}, fmt.Errorf("unsupported device config version %d", snapshot.Version)
 	}
 	if snapshot.Devices == nil {

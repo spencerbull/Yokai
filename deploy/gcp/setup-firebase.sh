@@ -9,9 +9,17 @@ case "${DEPLOY_STAGE}" in
   *) printf 'DEPLOY_STAGE must be development, staging, or production\n' >&2; exit 1 ;;
 esac
 
+if [[ "${DEPLOY_STAGE}" == "production" ]]; then
+  FIREBASE_APP_DISPLAY_NAME="${FIREBASE_APP_DISPLAY_NAME:-Yokai CLI}"
+else
+  FIREBASE_APP_DISPLAY_NAME="${FIREBASE_APP_DISPLAY_NAME:-Yokai CLI ${DEPLOY_STAGE}}"
+fi
+
 REGION="${GCP_REGION:-us-central1}"
 PROJECT_DISPLAY_NAME="${GCP_PROJECT_DISPLAY_NAME:-Yokai Config ${DEPLOY_STAGE}}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck source=setup-common.sh
+source "${REPO_ROOT}/deploy/gcp/setup-common.sh"
 
 command -v gcloud >/dev/null || { printf 'gcloud is required\n' >&2; exit 1; }
 command -v firebase >/dev/null || { printf 'firebase-tools is required\n' >&2; exit 1; }
@@ -64,11 +72,7 @@ if ! gcloud projects describe "${GCP_PROJECT_ID}" >/dev/null 2>&1; then
   gcloud projects create "${GCP_PROJECT_ID}" --name="${PROJECT_DISPLAY_NAME}"
 fi
 
-BILLING_ENABLED="$(gcloud billing projects describe "${GCP_PROJECT_ID}" --format='value(billingEnabled)' 2>/dev/null || true)"
-if [[ "${BILLING_ENABLED}" == "True" && "${ALLOW_BILLED_PROJECT:-0}" != "1" ]]; then
-  printf 'project %s has billing enabled; use an unbilled project for Spark or set ALLOW_BILLED_PROJECT=1\n' "${GCP_PROJECT_ID}" >&2
-  exit 1
-fi
+verify_spark_billing "${GCP_PROJECT_ID}" "${ALLOW_BILLED_PROJECT:-0}"
 
 gcloud services enable \
   firebase.googleapis.com \
@@ -133,16 +137,30 @@ for attempt in {1..8}; do
 done
 
 APPS="$(firebase apps:list WEB --project "${GCP_PROJECT_ID}" --json)"
-if ! jq -e '.result[0].appId' <<<"${APPS}" >/dev/null; then
-  firebase apps:create WEB "Yokai CLI ${DEPLOY_STAGE}" --project "${GCP_PROJECT_ID}"
+APP_MATCH_COUNT="$(firebase_app_match_count "${APPS}" "${FIREBASE_APP_DISPLAY_NAME}")"
+if [[ "${APP_MATCH_COUNT}" == "0" ]]; then
+  firebase apps:create WEB "${FIREBASE_APP_DISPLAY_NAME}" --project "${GCP_PROJECT_ID}"
   APPS="$(firebase apps:list WEB --project "${GCP_PROJECT_ID}" --json)"
+  APP_MATCH_COUNT="$(firebase_app_match_count "${APPS}" "${FIREBASE_APP_DISPLAY_NAME}")"
+fi
+if [[ "${APP_MATCH_COUNT}" != "1" ]]; then
+  printf 'expected exactly one Firebase web app named %q, found %s\n' "${FIREBASE_APP_DISPLAY_NAME}" "${APP_MATCH_COUNT}" >&2
+  exit 1
 fi
 
 firebase deploy --only firestore:rules --project "${GCP_PROJECT_ID}" --config "${REPO_ROOT}/firebase.json"
 
-APP_ID="$(jq -r '.result[0].appId' <<<"${APPS}")"
+APP_ID="$(firebase_app_id "${APPS}" "${FIREBASE_APP_DISPLAY_NAME}")"
 SDK_CONFIG="$(firebase apps:sdkconfig WEB "${APP_ID}" --project "${GCP_PROJECT_ID}" --json)"
+API_KEY="$(jq -r '.result.sdkConfig.apiKey' <<<"${SDK_CONFIG}")"
+API_KEY_NAME="$(gcloud services api-keys lookup "${API_KEY}" --project "${GCP_PROJECT_ID}" --format='value(name)')"
+gcloud services api-keys update "${API_KEY_NAME}" \
+  --project "${GCP_PROJECT_ID}" \
+  --api-target=service=identitytoolkit.googleapis.com \
+  --api-target=service=securetoken.googleapis.com \
+  --quiet >/dev/null
+
 printf 'Firebase %s backend is ready.\n' "${DEPLOY_STAGE}"
 printf 'Project ID: %s\n' "${GCP_PROJECT_ID}"
 printf 'App ID: %s\n' "$(jq -r '.result.sdkConfig.appId' <<<"${SDK_CONFIG}")"
-printf 'API key: %s\n' "$(jq -r '.result.sdkConfig.apiKey' <<<"${SDK_CONFIG}")"
+printf 'API key: %s\n' "${API_KEY}"

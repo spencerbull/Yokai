@@ -20,6 +20,16 @@ case "${DEPLOY_STAGE}" in
   *) printf 'DEPLOY_STAGE must be development, staging, or production\n' >&2; exit 1 ;;
 esac
 
+if [[ "${DEPLOY_STAGE}" == "production" ]]; then
+  FIREBASE_APP_DISPLAY_NAME="${FIREBASE_APP_DISPLAY_NAME:-Yokai CLI}"
+else
+  FIREBASE_APP_DISPLAY_NAME="${FIREBASE_APP_DISPLAY_NAME:-Yokai CLI ${DEPLOY_STAGE}}"
+fi
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck source=setup-common.sh
+source "${REPO_ROOT}/deploy/gcp/setup-common.sh"
+
 GITHUB_REPOSITORY="${GITHUB_REPOSITORY:-spencerbull/Yokai}"
 GITHUB_PRODUCTION_REVIEWER="${GITHUB_PRODUCTION_REVIEWER:-spencerbull}"
 POOL_ID="${WIF_POOL_ID:-github-actions}"
@@ -42,7 +52,7 @@ ATTRIBUTE_CONDITION="assertion.repository_id=='${GITHUB_REPOSITORY_ID}' && asser
 
 if [[ "${DEPLOY_STAGE}" == "production" ]]; then
   REVIEWER_ID="$(gh api "users/${GITHUB_PRODUCTION_REVIEWER}" --jq '.id')"
-  ENVIRONMENT_CONFIG="$(jq -n --argjson reviewer "${REVIEWER_ID}" '{wait_timer: 0, prevent_self_review: false, reviewers: [{type: "User", id: $reviewer}], deployment_branch_policy: {protected_branches: false, custom_branch_policies: true}}')"
+  ENVIRONMENT_CONFIG="$(jq -n --argjson reviewer "${REVIEWER_ID}" '{wait_timer: 0, prevent_self_review: false, can_admins_bypass: false, reviewers: [{type: "User", id: $reviewer}], deployment_branch_policy: {protected_branches: false, custom_branch_policies: true}}')"
 else
   ENVIRONMENT_CONFIG='{"wait_timer":0,"prevent_self_review":false,"reviewers":[],"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}'
 fi
@@ -119,7 +129,13 @@ gcloud iam service-accounts remove-iam-policy-binding "${SERVICE_ACCOUNT}" \
   --role="roles/iam.workloadIdentityUser" \
   --member="principalSet://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${POOL_ID}/attribute.repository/${GITHUB_REPOSITORY}" >/dev/null 2>&1 || true
 
-APP_ID="$(firebase apps:list WEB --project "${GCP_PROJECT_ID}" --json | jq -r '.result[0].appId')"
+APPS="$(firebase apps:list WEB --project "${GCP_PROJECT_ID}" --json)"
+APP_MATCH_COUNT="$(firebase_app_match_count "${APPS}" "${FIREBASE_APP_DISPLAY_NAME}")"
+if [[ "${APP_MATCH_COUNT}" != "1" ]]; then
+  printf 'expected exactly one Firebase web app named %q, found %s; run setup-firebase.sh first\n' "${FIREBASE_APP_DISPLAY_NAME}" "${APP_MATCH_COUNT}" >&2
+  exit 1
+fi
+APP_ID="$(firebase_app_id "${APPS}" "${FIREBASE_APP_DISPLAY_NAME}")"
 SDK_CONFIG="$(firebase apps:sdkconfig WEB "${APP_ID}" --project "${GCP_PROJECT_ID}" --json)"
 API_KEY="$(jq -r '.result.sdkConfig.apiKey' <<<"${SDK_CONFIG}")"
 PROVIDER="projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${POOL_ID}/providers/${PROVIDER_ID}"

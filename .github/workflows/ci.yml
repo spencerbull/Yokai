@@ -104,19 +104,21 @@ jobs:
   firestore-rules:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
           cache: npm
           cache-dependency-path: tests/firebase/package-lock.json
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
         with:
           distribution: temurin
           java-version: '21'
       - name: Install Firebase test dependencies
         run: npm ci
         working-directory: tests/firebase
+      - name: Test provisioning safeguards
+        run: bash tests/scripts/setup-common.test.sh
       - name: Install Firebase CLI
         run: npm install --global firebase-tools@15.22.4
       - name: Test Firestore security rules

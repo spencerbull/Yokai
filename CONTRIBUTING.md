@@ -158,6 +158,7 @@ Tests exist for all core packages:
 | Package | Test file | What's tested |
 |---|---|---|
 | `config` | `config_test.go` | Load, save, roundtrip, device CRUD, migration, defaults |
+| `cloudsync` | `*_test.go` | Encryption compatibility, credentials, OAuth, and Firestore client behavior |
 | `agent` | `server_test.go` | HTTP endpoints, auth middleware, error handling |
 | `agent` | `metrics_test.go` | Metrics collection, JSON serialization, graceful fallback |
 | `agent` | `docker_test.go` | Container name sanitization, Docker operations |
@@ -182,7 +183,7 @@ Every pull request targeting `develop`, `staging`, or `main` runs:
 5. **Release package** -- snapshot archives for every supported platform
 6. **Firestore rules** -- isolated Firebase Emulator Suite tests
 
-All three must pass before merge.
+All six must pass before merge.
 
 ---
 

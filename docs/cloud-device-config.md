@@ -76,7 +76,8 @@ wait for approval from `spencerbull`.
 
 Prerequisites:
 
-1. Install and authenticate the Google Cloud and Firebase CLIs.
+1. Install and authenticate the Google Cloud and Firebase CLIs, GitHub CLI
+   (`gh`), and `jq`.
 2. Keep all three projects disconnected from billing to stay on Firebase's Spark
    plan.
 3. Run the setup script for each environment from the repository root:
@@ -122,27 +123,52 @@ matching GitHub environment, and this deployment workflow. Public client values
 and deployment coordinates are environment-scoped GitHub variables. No
 service-account key or GitHub secret is created.
 
-The branch-governance script blocks direct pushes, force pushes, and deletion of
-`develop`, `staging`, and `main`; requires the complete CI suite and resolved
-review threads; and requires code-owner approval from `spencerbull`. Spencer can
-bypass approval only while merging a pull request, which permits a sole
-maintainer to merge their own reviewed work without allowing direct pushes.
+The branch-governance script uses separate rulesets for non-bypassable branch,
+CI, and resolved-thread gates and for code-owner approval. It blocks direct
+pushes, force pushes, and deletion of `develop`, `staging`, and `main`; requires
+the complete CI suite and resolved review threads; and requires code-owner
+approval from `spencerbull`. Spencer can bypass only the approval ruleset while
+merging a pull request, which permits a sole maintainer to merge their own
+reviewed work without bypassing CI, unresolved threads, or direct-push controls.
 
 Next, in **Google Auth Platform** for each project:
 
-1. Configure the branding/audience and add test users while the app is in testing.
+1. Configure the branding/audience. Keep every environment in **Testing** with
+   an explicit test-user allowlist until its release gate. Never publish the
+   development or staging apps; publish only the production app when it is ready
+   for real users. Firebase CLI provisioning can leave a newly created audience
+   in production, so verify this setting after enabling Google sign-in.
 2. Enable Google as a Firebase Authentication sign-in provider.
 3. Create an OAuth client with application type **Desktop app**.
-4. Configure release builds with the OAuth client values:
+4. Store each desktop client in its matching GitHub Environment:
 
 ```bash
-gh variable set YOKAI_GOOGLE_CLIENT_ID --env firebase-production --body "000000000000-example.apps.googleusercontent.com"
-gh variable set YOKAI_GOOGLE_CLIENT_SECRET --env firebase-production --body "desktop-client-secret"
+gh variable set YOKAI_GOOGLE_CLIENT_ID --repo spencerbull/Yokai \
+  --env firebase-development --body "development-client-id.apps.googleusercontent.com"
+gh variable set YOKAI_GOOGLE_CLIENT_SECRET --repo spencerbull/Yokai \
+  --env firebase-development --body "development-client-secret"
+
+gh variable set YOKAI_GOOGLE_CLIENT_ID --repo spencerbull/Yokai \
+  --env firebase-staging --body "staging-client-id.apps.googleusercontent.com"
+gh variable set YOKAI_GOOGLE_CLIENT_SECRET --repo spencerbull/Yokai \
+  --env firebase-staging --body "staging-client-secret"
+
+gh variable set YOKAI_GOOGLE_CLIENT_ID --repo spencerbull/Yokai \
+  --env firebase-production --body "production-client-id.apps.googleusercontent.com"
+gh variable set YOKAI_GOOGLE_CLIENT_SECRET --repo spencerbull/Yokai \
+  --env firebase-production --body "production-client-secret"
 ```
 
+Replace each placeholder with the distinct client ID and secret created for
+that environment; never copy one environment's values into another.
+
 Desktop OAuth client secrets identify an installed app but cannot be kept
-confidential. Yokai uses the secret only for the authorization-code exchange and
-does not save it after login.
+confidential. Official release binaries contain the linker-injected production
+desktop client secret. Yokai uses it only for the authorization-code exchange
+and does not copy a runtime-supplied secret into `cloud-auth.json`. Google only
+displays a newly created secret in full for a limited time. Store it directly in
+the matching GitHub Environment; if it is lost, create a replacement, verify
+login, and disable the superseded secret.
 
 ## Sign in and use
 
@@ -190,8 +216,9 @@ If the local daemon is running, the CLI asks it to reload the new device list.
 ## Security operations
 
 - Deploy the checked-in Firestore rules before enabling sign-in.
-- Keep the Firebase-provisioned API key restricted to Firebase APIs. It is a
-  public project identifier, not authorization; Security Rules authorize data.
+- Keep the Firebase-provisioned API key restricted to Identity Toolkit and
+  Secure Token. It is a public project identifier, not authorization; Security
+  Rules authorize data. The setup script applies this restriction.
 - Do not grant application users IAM roles in the Google Cloud project.
 - Do not enable phone authentication, Cloud Functions, or other paid products.
 - Review Firebase Authentication users and Firestore usage periodically.
