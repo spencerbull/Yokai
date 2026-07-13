@@ -1,0 +1,7 @@
+{
+  "projects": {
+    "development": "yokai-config-dev-260709-5820",
+    "staging": "yokai-config-stg-260709-5820",
+    "production": "yokai-config-260709-5820"
+  }
+}
