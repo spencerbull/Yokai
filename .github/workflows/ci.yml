@@ -100,3 +100,63 @@ jobs:
           windows_contents=$(unzip -Z1 "$windows_archive")
           grep -qx 'yokai.exe' <<< "$windows_contents"
           grep -qx 'yokai-tui.exe' <<< "$windows_contents"
+
+  # This context is required on every long-lived branch. The Firestore suite
+  # currently lives on the cloud-sync branches, so keep the context available
+  # on main while still failing if a branch contains only a partial suite.
+  firestore-rules:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Detect Firestore rules suite
+        id: firestore-suite
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          required_files=(
+            firebase.json
+            firestore.rules
+            tests/firebase/package.json
+            tests/firebase/package-lock.json
+          )
+          present=0
+          for file in "${required_files[@]}"; do
+            if [[ -f "$file" ]]; then
+              present=$((present + 1))
+            fi
+          done
+
+          if [[ "$present" -eq 0 ]]; then
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          elif [[ "$present" -eq "${#required_files[@]}" ]]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Firestore rules test suite is incomplete ($present/${#required_files[@]} files present)"
+            exit 1
+          fi
+      - uses: actions/setup-node@v4
+        if: steps.firestore-suite.outputs.present == 'true'
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: tests/firebase/package-lock.json
+      - uses: actions/setup-java@v4
+        if: steps.firestore-suite.outputs.present == 'true'
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install Firebase test dependencies
+        if: steps.firestore-suite.outputs.present == 'true'
+        run: npm ci
+        working-directory: tests/firebase
+      - name: Install Firebase CLI
+        if: steps.firestore-suite.outputs.present == 'true'
+        run: npm install --global firebase-tools@15.22.4
+      - name: Test Firestore security rules
+        if: steps.firestore-suite.outputs.present == 'true'
+        run: npm test
+        working-directory: tests/firebase
+      - name: Record unavailable suite
+        if: steps.firestore-suite.outputs.present != 'true'
+        run: echo "Firestore rules suite is not present on this branch"
