@@ -95,15 +95,21 @@ type fakeCloudConfigClient struct {
 	getErr      error
 	putCalls    int
 	putEnvelope cloudsync.Envelope
+	putPrevious *cloudsync.Metadata
+	putErr      error
 }
 
 func (f *fakeCloudConfigClient) Get(context.Context) (cloudsync.Envelope, cloudsync.Metadata, error) {
 	return f.getEnvelope, f.getMetadata, f.getErr
 }
 
-func (f *fakeCloudConfigClient) Put(_ context.Context, envelope cloudsync.Envelope) (cloudsync.Metadata, error) {
+func (f *fakeCloudConfigClient) Put(_ context.Context, envelope cloudsync.Envelope, previous *cloudsync.Metadata) (cloudsync.Metadata, error) {
 	f.putCalls++
 	f.putEnvelope = envelope
+	f.putPrevious = previous
+	if f.putErr != nil {
+		return cloudsync.Metadata{}, f.putErr
+	}
 	return cloudsync.Metadata{UpdatedAt: time.Date(2026, 7, 13, 21, 0, 0, 0, time.UTC)}, nil
 }
 
@@ -170,15 +176,16 @@ func TestSaveCloudConfigConfirmedAndAllowEmptyPaths(t *testing.T) {
 
 	t.Run("confirmed replacement", func(t *testing.T) {
 		existing := testCloudEnvelope(t, []config.Device{{ID: "cloud-device"}}, passphrase)
-		client := &fakeCloudConfigClient{getEnvelope: existing}
+		existingMetadata := cloudsync.Metadata{UpdatedAt: time.Date(2026, 7, 13, 20, 0, 0, 0, time.UTC)}
+		client := &fakeCloudConfigClient{getEnvelope: existing, getMetadata: existingMetadata}
 		cfg := config.DefaultConfig()
 		cfg.Devices = []config.Device{{ID: "local-device"}}
 		var outputs []interface{}
 		if err := saveCloudConfig(context.Background(), client, credentials, cfg, true, testCloudInteraction("", false, passphrase, &outputs)); err != nil {
 			t.Fatal(err)
 		}
-		if client.putCalls != 1 || len(outputs) != 1 {
-			t.Fatalf("replacement putCalls=%d outputs=%#v", client.putCalls, outputs)
+		if client.putCalls != 1 || client.putPrevious == nil || !client.putPrevious.UpdatedAt.Equal(existingMetadata.UpdatedAt) || len(outputs) != 1 {
+			t.Fatalf("replacement putCalls=%d previous=%#v outputs=%#v", client.putCalls, client.putPrevious, outputs)
 		}
 	})
 
@@ -198,7 +205,32 @@ func TestSaveCloudConfigConfirmedAndAllowEmptyPaths(t *testing.T) {
 		if client.putCalls != 1 {
 			t.Fatalf("empty backup putCalls=%d", client.putCalls)
 		}
+		if client.putPrevious != nil {
+			t.Fatalf("new backup previous = %#v", client.putPrevious)
+		}
 	})
+}
+
+func TestSaveCloudConfigDoesNotReportSuccessAfterConcurrentChange(t *testing.T) {
+	const passphrase = "correct test passphrase"
+	existingMetadata := cloudsync.Metadata{UpdatedAt: time.Date(2026, 7, 13, 20, 0, 0, 0, time.UTC)}
+	client := &fakeCloudConfigClient{
+		getEnvelope: testCloudEnvelope(t, []config.Device{{ID: "cloud-device"}}, passphrase),
+		getMetadata: existingMetadata,
+		putErr:      cloudsync.ErrCloudConfigChanged,
+	}
+	credentials := &cloudsync.Credentials{Email: "user@example.com"}
+	cfg := config.DefaultConfig()
+	cfg.Devices = []config.Device{{ID: "local-device"}}
+	var outputs []interface{}
+
+	err := saveCloudConfig(context.Background(), client, credentials, cfg, true, testCloudInteraction("", false, passphrase, &outputs))
+	if !errors.Is(err, cloudsync.ErrCloudConfigChanged) {
+		t.Fatalf("saveCloudConfig() error = %v", err)
+	}
+	if client.putCalls != 1 || len(outputs) != 0 {
+		t.Fatalf("conflict putCalls=%d outputs=%#v", client.putCalls, outputs)
+	}
 }
 
 func TestLoadCloudConfigDoesNotMutateOnCancelOrWrongPassphrase(t *testing.T) {

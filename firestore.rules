@@ -7,22 +7,33 @@ service cloud.firestore {
         return request.auth != null && request.auth.uid == userId;
       }
 
+      function isRawBase64(value) {
+        return value is string && value.matches('[A-Za-z0-9+/]+');
+      }
+
       function isEncryptedEnvelope() {
-        return request.resource.data.keys().hasOnly([
+        return request.resource.data.keys().hasAll([
           'version', 'cipher', 'kdf', 'salt', 'nonce', 'ciphertext'
         ])
+        && request.resource.data.keys().hasOnly([
+          'version', 'cipher', 'kdf', 'salt', 'nonce', 'ciphertext'
+        ])
+        && request.resource.data.version is int
         && request.resource.data.version == 1
         && request.resource.data.cipher == 'aes-256-gcm'
         && request.resource.data.kdf == 'argon2id-3-65536-4'
-        && request.resource.data.salt is string
-        && request.resource.data.salt.size() <= 32
-        && request.resource.data.nonce is string
-        && request.resource.data.nonce.size() <= 24
-        && request.resource.data.ciphertext is string
-        && request.resource.data.ciphertext.size() <= 900000;
+        && isRawBase64(request.resource.data.salt)
+        && request.resource.data.salt.size() == 22
+        && isRawBase64(request.resource.data.nonce)
+        && request.resource.data.nonce.size() == 16
+        && isRawBase64(request.resource.data.ciphertext)
+        && request.resource.data.ciphertext.size() >= 56
+        && request.resource.data.ciphertext.size() <= 900000
+        && request.resource.data.ciphertext.size() % 4 != 1;
       }
 
-      allow read, delete: if isOwner();
+      allow get, delete: if isOwner();
+      allow list: if false;
       allow create, update: if isOwner() && isEncryptedEnvelope();
     }
 

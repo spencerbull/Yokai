@@ -26,6 +26,11 @@ passphrase, and Firebase stores only ciphertext. Later saves require the current
 passphrase before replacing the existing backup. Yokai refuses to upload an
 empty device list unless `--allow-empty` is explicitly supplied.
 
+Every save is conditional on the version Yokai just read. If another computer
+creates or replaces the backup first, the save stops instead of overwriting the
+newer copy. Run `yokai cloud save` again to review and replace that latest
+backup deliberately.
+
 To inspect and restore a backup:
 
 ```bash
@@ -77,6 +82,13 @@ The Google account controls which Firestore document Firebase can access. A
 separate encryption passphrase never leaves the machine and prevents Firebase,
 project operators, or a database export from reading device hosts, SSH details,
 or agent tokens. Losing the passphrase makes the cloud copy unrecoverable.
+
+Firestore rules permit only a single-document read for the signed-in owner's
+UID; collection queries and subcollections are denied. Creates and updates must
+contain exactly the encrypted-envelope fields and satisfy the supported
+algorithm, version, encoding, and size limits. The client validates the same
+contract before upload and after download. Owners may still delete an older
+malformed document so a bad legacy backup cannot become undeletable.
 
 Firebase refresh credentials are stored locally at
 `~/.config/yokai/cloud-auth.json` with mode `0600`. The initial Google grant only

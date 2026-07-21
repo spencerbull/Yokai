@@ -71,7 +71,7 @@ Only device records are synced. Other Yokai settings stay local.
 }
 
 type cloudConfigClient interface {
-	Put(context.Context, cloudsync.Envelope) (cloudsync.Metadata, error)
+	Put(context.Context, cloudsync.Envelope, *cloudsync.Metadata) (cloudsync.Metadata, error)
 	Get(context.Context) (cloudsync.Envelope, cloudsync.Metadata, error)
 	Delete(context.Context) error
 }
@@ -225,7 +225,11 @@ func saveCloudConfig(ctx context.Context, client cloudConfigClient, credentials 
 	if err != nil {
 		return err
 	}
-	metadata, err := client.Put(ctx, envelope)
+	var previous *cloudsync.Metadata
+	if hasExisting {
+		previous = &existingMetadata
+	}
+	metadata, err := client.Put(ctx, envelope, previous)
 	if err != nil {
 		return err
 	}
