@@ -179,6 +179,7 @@ const invalidEnvelopes = [
   ["short salt", { ...validEnvelope, salt: "A".repeat(21) }],
   ["long salt", { ...validEnvelope, salt: "A".repeat(23) }],
   ["padded salt", { ...validEnvelope, salt: `${"A".repeat(21)}=` }],
+  ["noncanonical salt", { ...validEnvelope, salt: `${"A".repeat(21)}B` }],
   ["URL-safe salt", { ...validEnvelope, salt: `${"A".repeat(21)}-` }],
   ["whitespace salt", { ...validEnvelope, salt: `${"A".repeat(21)} ` }],
   ["Unicode salt", { ...validEnvelope, salt: `${"A".repeat(21)}é` }],
@@ -194,6 +195,8 @@ const invalidEnvelopes = [
   ["empty ciphertext", { ...validEnvelope, ciphertext: "" }],
   ["cryptographically short ciphertext", { ...validEnvelope, ciphertext: "A".repeat(55) }],
   ["invalid raw-base64 length", { ...validEnvelope, ciphertext: "A".repeat(57) }],
+  ["noncanonical two-byte-tail ciphertext", { ...validEnvelope, ciphertext: `${"A".repeat(57)}B` }],
+  ["noncanonical one-byte-tail ciphertext", { ...validEnvelope, ciphertext: `${"A".repeat(58)}B` }],
   ["oversized ciphertext", { ...validEnvelope, ciphertext: "A".repeat(900001) }],
   ["padded ciphertext", { ...validEnvelope, ciphertext: `${"A".repeat(55)}=` }],
   ["URL-safe ciphertext", { ...validEnvelope, ciphertext: `${"A".repeat(55)}-` }],
@@ -219,6 +222,16 @@ for (const ciphertextLength of [56, 900000]) {
   test(`ciphertext boundary ${ciphertextLength} is accepted`, async () => {
     const owner = testEnvironment.authenticatedContext("owner-user").firestore()
     const value = { ...validEnvelope, ciphertext: "A".repeat(ciphertextLength) }
+
+    await assertSucceeds(setDoc(configDoc(owner), value))
+    assert.deepEqual(await storedConfig(), value)
+  })
+}
+
+for (const ciphertext of [`${"A".repeat(57)}Q`, `${"A".repeat(58)}E`]) {
+  test(`canonical unpadded ciphertext length ${ciphertext.length} is accepted`, async () => {
+    const owner = testEnvironment.authenticatedContext("owner-user").firestore()
+    const value = { ...validEnvelope, ciphertext }
 
     await assertSucceeds(setDoc(configDoc(owner), value))
     assert.deepEqual(await storedConfig(), value)

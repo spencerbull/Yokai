@@ -11,6 +11,16 @@ service cloud.firestore {
         return value is string && value.matches('[A-Za-z0-9+/]+');
       }
 
+      function isCanonicalRawBase64(value) {
+        return isRawBase64(value)
+          && value.size() % 4 != 1
+          && (
+            value.size() % 4 == 0
+            || (value.size() % 4 == 2 && value.matches('[A-Za-z0-9+/]*[AQgw]'))
+            || (value.size() % 4 == 3 && value.matches('[A-Za-z0-9+/]*[AEIMQUYcgkosw048]'))
+          );
+      }
+
       function isEncryptedEnvelope() {
         return request.resource.data.keys().hasAll([
           'version', 'cipher', 'kdf', 'salt', 'nonce', 'ciphertext'
@@ -22,14 +32,13 @@ service cloud.firestore {
         && request.resource.data.version == 1
         && request.resource.data.cipher == 'aes-256-gcm'
         && request.resource.data.kdf == 'argon2id-3-65536-4'
-        && isRawBase64(request.resource.data.salt)
+        && isCanonicalRawBase64(request.resource.data.salt)
         && request.resource.data.salt.size() == 22
-        && isRawBase64(request.resource.data.nonce)
+        && isCanonicalRawBase64(request.resource.data.nonce)
         && request.resource.data.nonce.size() == 16
-        && isRawBase64(request.resource.data.ciphertext)
+        && isCanonicalRawBase64(request.resource.data.ciphertext)
         && request.resource.data.ciphertext.size() >= 56
-        && request.resource.data.ciphertext.size() <= 900000
-        && request.resource.data.ciphertext.size() % 4 != 1;
+        && request.resource.data.ciphertext.size() <= 900000;
       }
 
       allow get, delete: if isOwner();

@@ -284,3 +284,61 @@ func TestClientDoesNotMapBackend404ToMissingBackup(t *testing.T) {
 		t.Fatalf("Get() error = %v", err)
 	}
 }
+
+func TestClientConflictMappingIsPatchSpecific(t *testing.T) {
+	t.Parallel()
+
+	t.Run("empty precondition response on PATCH", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusPreconditionFailed)
+		}))
+		defer server.Close()
+
+		client := &Client{documentURL: server.URL + "/config", idToken: "token", http: server.Client()}
+		if _, err := client.Put(context.Background(), clientTestEnvelope(t, "conflict"), nil); !errors.Is(err, ErrCloudConfigChanged) {
+			t.Fatalf("Put() error = %v", err)
+		}
+	})
+
+	t.Run("structured precondition response on GET", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			writeFirestoreError(w, http.StatusBadRequest, "FAILED_PRECONDITION", "backend index unavailable")
+		}))
+		defer server.Close()
+
+		client := &Client{documentURL: server.URL + "/config", idToken: "token", http: server.Client()}
+		_, _, err := client.Get(context.Background())
+		if err == nil || errors.Is(err, ErrCloudConfigChanged) || !strings.Contains(err.Error(), "backend index unavailable") {
+			t.Fatalf("Get() error = %v", err)
+		}
+	})
+}
+
+func TestClientRejectsSuccessfulResponsesWithoutUpdateTime(t *testing.T) {
+	t.Parallel()
+	envelope := clientTestEnvelope(t, "missing-update-time")
+
+	t.Run("Put", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_ = json.NewEncoder(w).Encode(firestoreDocument{Fields: envelopeToFields(envelope)})
+		}))
+		defer server.Close()
+
+		client := &Client{documentURL: server.URL + "/config", idToken: "token", http: server.Client()}
+		if _, err := client.Put(context.Background(), envelope, nil); err == nil || !strings.Contains(err.Error(), "update time") {
+			t.Fatalf("Put() error = %v", err)
+		}
+	})
+
+	t.Run("Get", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_ = json.NewEncoder(w).Encode(firestoreDocument{Fields: envelopeToFields(envelope)})
+		}))
+		defer server.Close()
+
+		client := &Client{documentURL: server.URL + "/config", idToken: "token", http: server.Client()}
+		if _, _, err := client.Get(context.Background()); err == nil || !strings.Contains(err.Error(), "update time") {
+			t.Fatalf("Get() error = %v", err)
+		}
+	})
+}

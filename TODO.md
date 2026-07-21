@@ -7,7 +7,7 @@
 - [x] Reconcile current `main` into the cloud-sync development line without losing the Tailscale documentation or production workflow safeguards.
 - [x] Make Firestore envelope validation match the Go encryption format exactly.
 - [x] Cover valid create/read/update/delete plus malformed, unauthorized, query/list, type, length, encoding, and size rejection paths in the emulator.
-- [ ] Pass focused cloud/rules tests, full repository checks, workflow/static validation, and independent security review.
+- [x] Pass focused cloud/rules tests, full repository checks, workflow/static validation, and independent security review.
 - [ ] Push `sbull-agent/firestore-hardening` and open a reviewable PR targeting `develop`; do not merge or promote it in this loop.
 
 ### Stream
@@ -23,11 +23,11 @@
 
 ### Required gates
 
-- [x] Firestore emulator validity/invalidity suite (50/50).
+- [x] Firestore emulator validity/invalidity suite (55/55).
 - [x] Focused Go race tests and vet for cloud/config/daemon ownership.
 - [x] Full CI-equivalent build, lint, TUI, and release-package checks.
 - [x] Action/workflow contract checks and clean diff.
-- [ ] Independent security and branch-reconciliation reviews resolved.
+- [x] Independent security and branch-reconciliation reviews resolved.
 - [ ] GitHub PR checks green.
 
 ### Current status
@@ -36,6 +36,7 @@
 - [x] Merge current `origin/main` (`0f170d69`) and resolve the CI workflow intentionally.
 - [x] Implement and locally validate the hardening diff.
 - [x] Preserve the superseded staging-based work as `sbull-agent/firestore-hardening-staging-scratch` until the development PR lands.
+- [x] Resolve final-review findings for canonical Base64, method-specific conflict errors, and missing Firestore update times.
 
 ### Open checkpoints
 
@@ -45,7 +46,7 @@
 ## Goal and done criteria
 
 - [x] Create long-lived `develop`, `staging`, and `main` branches.
-- [x] Make `develop` the default branch and retarget feature PR #79.
+- [x] Retarget feature PR #79 to `develop`; `main` remains the public default branch.
 - [x] Require PRs, passing CI, resolved threads, and `@spencerbull` code-owner approval on all long-lived branches.
 - [x] Block direct pushes, force pushes, and deletion; keep CI/thread gates non-bypassable and allow Spencer to bypass only the self-approval rule while merging a PR.
 - [x] Map branches to `firebase-development`, `firebase-staging`, and `firebase-production` GitHub Environments.

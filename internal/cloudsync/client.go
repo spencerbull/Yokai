@@ -93,6 +93,9 @@ func (c *Client) Put(ctx context.Context, envelope Envelope, previous *Metadata)
 	if err := c.do(ctx, http.MethodPatch, target.String(), document, &response); err != nil {
 		return Metadata{}, err
 	}
+	if response.UpdateTime.IsZero() {
+		return Metadata{}, fmt.Errorf("firestore save response is missing its update time")
+	}
 	return Metadata{UpdatedAt: response.UpdateTime, Size: len(envelope.Ciphertext)}, nil
 }
 
@@ -101,6 +104,9 @@ func (c *Client) Get(ctx context.Context) (Envelope, Metadata, error) {
 	var document firestoreDocument
 	if err := c.do(ctx, http.MethodGet, c.documentURL, nil, &document); err != nil {
 		return Envelope{}, Metadata{}, err
+	}
+	if document.UpdateTime.IsZero() {
+		return Envelope{}, Metadata{}, fmt.Errorf("firestore backup response is missing its update time")
 	}
 	envelope, err := fieldsToEnvelope(document.Fields)
 	if err != nil {
@@ -153,9 +159,14 @@ func (c *Client) do(ctx context.Context, method, requestURL string, requestBody,
 		}
 		_ = json.Unmarshal(data, &apiError)
 		message := apiError.Error.Message
-		switch apiError.Error.Status {
-		case "FAILED_PRECONDITION", "ABORTED", "ALREADY_EXISTS":
+		if method == http.MethodPatch && (resp.StatusCode == http.StatusConflict || resp.StatusCode == http.StatusPreconditionFailed) {
 			return ErrCloudConfigChanged
+		}
+		if method == http.MethodPatch {
+			switch apiError.Error.Status {
+			case "FAILED_PRECONDITION", "ABORTED", "ALREADY_EXISTS":
+				return ErrCloudConfigChanged
+			}
 		}
 		if resp.StatusCode == http.StatusNotFound && isMissingFirestoreDocument(message) {
 			return fmt.Errorf("%w; run 'yokai cloud save' first", ErrNoCloudConfig)
