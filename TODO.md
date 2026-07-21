@@ -1,5 +1,46 @@
 # Three-environment Firebase rollout
 
+## Firestore validation hardening (2026-07-20)
+
+### Goal and done criteria
+
+- [ ] Reconcile current `main` into the cloud-sync staging line without losing the Tailscale documentation or production workflow safeguards.
+- [ ] Make Firestore envelope validation match the Go encryption format exactly.
+- [ ] Cover valid create/read/update/delete plus malformed, unauthorized, query/list, type, length, encoding, and size rejection paths in the emulator.
+- [ ] Pass focused cloud/rules tests, full repository checks, workflow/static validation, and independent security review.
+- [ ] Push `sbull-agent/firestore-hardening` and open a reviewable PR targeting `staging`; do not merge or approve the production deployment in this loop.
+
+### Stream
+
+| Branch | Worktree | Base | Scope |
+|---|---|---|---|
+| `sbull-agent/firestore-hardening` | `/Users/spencerbull/src/github.com/spencerbull/Yokai-firestore-hardening` | `origin/staging` | rules, emulator tests, branch reconciliation, CI/release preservation |
+
+### Allowed and forbidden actions
+
+- Allowed: isolated worktree/branch changes, local emulators, tests, static checks, push, and a PR targeting `staging`.
+- Forbidden without a new explicit approval: merge to `staging` or `main`, approve `firebase-production`, deploy production rules, change secrets/billing/IAM, or touch real user data.
+
+### Required gates
+
+- [ ] Firestore emulator validity/invalidity suite.
+- [ ] Focused Go race tests and vet for cloud/config/daemon ownership.
+- [ ] Full CI-equivalent build, lint, TUI, and release-package checks.
+- [ ] Action/workflow contract checks and clean diff.
+- [ ] Independent security and branch-reconciliation reviews resolved.
+- [ ] GitHub PR checks green.
+
+### Current status
+
+- [x] Persistent isolated worktree created from current `origin/staging` (`90e148cf`).
+- [ ] Merge current `origin/main` (`0f170d69`) and resolve shared files intentionally.
+- [ ] Implement and validate the hardening diff.
+
+### Open checkpoints
+
+- Production remains a human gate even after staging validation passes.
+- The production environment variable names and branch policy exist; values are not considered proven until the gated production workflows validate them.
+
 ## Goal and done criteria
 
 - [x] Create long-lived `develop`, `staging`, and `main` branches.
