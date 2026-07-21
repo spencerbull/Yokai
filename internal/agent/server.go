@@ -733,7 +733,7 @@ func getTotalRAM() map[string]interface{} {
 	data, err := os.ReadFile("/proc/meminfo")
 	if err != nil {
 		return map[string]interface{}{
-			"total_mb": 0,
+			"total_mb": int64(0),
 			"error":    err.Error(),
 		}
 	}
@@ -749,7 +749,7 @@ func getTotalRAM() map[string]interface{} {
 			}
 		}
 	}
-	return map[string]interface{}{"total_mb": 0}
+	return map[string]interface{}{"total_mb": int64(0)}
 }
 
 func getTotalDisk() map[string]interface{} {
@@ -757,7 +757,7 @@ func getTotalDisk() map[string]interface{} {
 	out, err := cmd.Output()
 	if err != nil {
 		return map[string]interface{}{
-			"total_gb": 0,
+			"total_gb": int64(0),
 			"error":    err.Error(),
 		}
 	}
@@ -770,5 +770,5 @@ func getTotalDisk() map[string]interface{} {
 			"total_gb": size,
 		}
 	}
-	return map[string]interface{}{"total_gb": 0}
+	return map[string]interface{}{"total_gb": int64(0)}
 }
