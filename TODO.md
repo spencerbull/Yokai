@@ -1,9 +1,52 @@
 # Three-environment Firebase rollout
 
+## Firestore validation hardening (2026-07-20)
+
+### Goal and done criteria
+
+- [x] Reconcile current `main` into the cloud-sync development line without losing the Tailscale documentation or production workflow safeguards.
+- [x] Make Firestore envelope validation match the Go encryption format exactly.
+- [x] Cover valid create/read/update/delete plus malformed, unauthorized, query/list, type, length, encoding, and size rejection paths in the emulator.
+- [x] Pass focused cloud/rules tests, full repository checks, workflow/static validation, and independent security review.
+- [x] Push `sbull-agent/firestore-hardening` and open draft PR #88 targeting `develop`; do not merge or promote it in this loop.
+
+### Stream
+
+| Branch | Worktree | Base | Scope |
+|---|---|---|---|
+| `sbull-agent/firestore-hardening` | `/Users/spencerbull/src/github.com/spencerbull/Yokai-firestore-hardening-develop` | `origin/develop` + current `origin/main` | rules, emulator tests, branch reconciliation, CI/release preservation |
+
+### Allowed and forbidden actions
+
+- Allowed: isolated worktree/branch changes, local emulators, tests, static checks, push, and a PR targeting `develop`.
+- Forbidden without a new explicit approval: merge or promote the PR, approve `firebase-production`, deploy production rules, change secrets/billing/IAM, or touch real user data.
+
+### Required gates
+
+- [x] Firestore emulator validity/invalidity suite (55/55).
+- [x] Focused Go race tests and vet for cloud/config/daemon ownership.
+- [x] Full CI-equivalent build, lint, TUI, and release-package checks.
+- [x] Action/workflow contract checks and clean diff.
+- [x] Independent security and branch-reconciliation reviews resolved.
+- [x] GitHub push and PR checks green (runs `29801252009` and `29801264647`).
+
+### Current status
+
+- [x] Persistent isolated worktree created from current `origin/develop` (`162b476`).
+- [x] Merge current `origin/main` (`0f170d69`) and resolve the CI workflow intentionally.
+- [x] Implement and locally validate the hardening diff.
+- [x] Preserve the superseded staging-based work as `sbull-agent/firestore-hardening-staging-scratch` until the development PR lands.
+- [x] Resolve final-review findings for canonical Base64, method-specific conflict errors, and missing Firestore update times.
+
+### Open checkpoints
+
+- Production remains a human gate even after staging validation passes.
+- The production environment variable names and branch policy exist; values are not considered proven until the gated production workflows validate them.
+
 ## Goal and done criteria
 
 - [x] Create long-lived `develop`, `staging`, and `main` branches.
-- [x] Make `develop` the default branch and retarget feature PR #79.
+- [x] Retarget feature PR #79 to `develop`; `main` remains the public default branch.
 - [x] Require PRs, passing CI, resolved threads, and `@spencerbull` code-owner approval on all long-lived branches.
 - [x] Block direct pushes, force pushes, and deletion; keep CI/thread gates non-bypassable and allow Spencer to bypass only the self-approval rule while merging a PR.
 - [x] Map branches to `firebase-development`, `firebase-staging`, and `firebase-production` GitHub Environments.

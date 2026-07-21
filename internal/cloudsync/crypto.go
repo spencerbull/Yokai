@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"unicode/utf8"
 
 	"golang.org/x/crypto/argon2"
 
@@ -22,9 +23,16 @@ const (
 	envelopeVersion = 1
 	keySize         = 32
 	saltSize        = 16
+	nonceSize       = 12
+	gcmTagSize      = 16
 	argonTime       = 3
 	argonMemoryKiB  = 64 * 1024
 	argonThreads    = 4
+
+	minPassphraseCharacters  = 12
+	minSnapshotJSONSize      = len(`{"version":1,"devices":[]}`)
+	minCiphertextSize        = minSnapshotJSONSize + gcmTagSize
+	maxEncodedCiphertextSize = 900000
 )
 
 // Snapshot is the portable portion of Yokai configuration. Secrets contained
@@ -47,8 +55,14 @@ type Envelope struct {
 // Encrypt converts a device snapshot to an authenticated AES-256-GCM envelope
 // using an Argon2id key derived from passphrase.
 func Encrypt(snapshot Snapshot, passphrase string) (Envelope, error) {
-	if len(passphrase) < 12 {
+	if utf8.RuneCountInString(passphrase) < minPassphraseCharacters {
 		return Envelope{}, fmt.Errorf("passphrase must contain at least 12 characters")
+	}
+	if snapshot.Version != SnapshotVersion {
+		return Envelope{}, fmt.Errorf("unsupported device config version %d", snapshot.Version)
+	}
+	if snapshot.Devices == nil {
+		snapshot.Devices = []config.Device{}
 	}
 
 	plaintext, err := json.Marshal(snapshot)
@@ -78,32 +92,36 @@ func Encrypt(snapshot Snapshot, passphrase string) (Envelope, error) {
 
 	additionalData := []byte("yokai-device-config-v1")
 	ciphertext := gcm.Seal(nil, nonce, plaintext, additionalData)
-	return Envelope{
+	envelope := Envelope{
 		Version:    envelopeVersion,
 		Cipher:     "aes-256-gcm",
 		KDF:        "argon2id-3-65536-4",
 		Salt:       base64.RawStdEncoding.EncodeToString(salt),
 		Nonce:      base64.RawStdEncoding.EncodeToString(nonce),
 		Ciphertext: base64.RawStdEncoding.EncodeToString(ciphertext),
-	}, nil
+	}
+	if err := validateEnvelope(envelope); err != nil {
+		return Envelope{}, fmt.Errorf("validating encrypted config: %w", err)
+	}
+	return envelope, nil
 }
 
 // Decrypt authenticates and decrypts an envelope into a device snapshot.
 func Decrypt(envelope Envelope, passphrase string) (Snapshot, error) {
-	if envelope.Version != envelopeVersion || envelope.Cipher != "aes-256-gcm" || envelope.KDF != "argon2id-3-65536-4" {
-		return Snapshot{}, fmt.Errorf("unsupported encrypted config format")
+	if err := validateEnvelope(envelope); err != nil {
+		return Snapshot{}, err
 	}
 
-	salt, err := decodeField("salt", envelope.Salt, saltSize)
+	salt, err := decodeCanonicalField("salt", envelope.Salt, saltSize)
 	if err != nil {
 		return Snapshot{}, err
 	}
-	nonce, err := decodeField("nonce", envelope.Nonce, 12)
+	nonce, err := decodeCanonicalField("nonce", envelope.Nonce, nonceSize)
 	if err != nil {
 		return Snapshot{}, err
 	}
 	ciphertext, err := base64.RawStdEncoding.DecodeString(envelope.Ciphertext)
-	if err != nil || len(ciphertext) < 16 {
+	if err != nil {
 		return Snapshot{}, fmt.Errorf("invalid encrypted config ciphertext")
 	}
 
@@ -134,9 +152,29 @@ func Decrypt(envelope Envelope, passphrase string) (Snapshot, error) {
 	return snapshot, nil
 }
 
-func decodeField(name, value string, wantLen int) ([]byte, error) {
+func validateEnvelope(envelope Envelope) error {
+	if envelope.Version != envelopeVersion || envelope.Cipher != "aes-256-gcm" || envelope.KDF != "argon2id-3-65536-4" {
+		return fmt.Errorf("unsupported encrypted config format")
+	}
+	if _, err := decodeCanonicalField("salt", envelope.Salt, saltSize); err != nil {
+		return err
+	}
+	if _, err := decodeCanonicalField("nonce", envelope.Nonce, nonceSize); err != nil {
+		return err
+	}
+	if len(envelope.Ciphertext) > maxEncodedCiphertextSize {
+		return fmt.Errorf("encrypted config ciphertext exceeds %d characters", maxEncodedCiphertextSize)
+	}
+	ciphertext, err := base64.RawStdEncoding.DecodeString(envelope.Ciphertext)
+	if err != nil || len(ciphertext) < minCiphertextSize || base64.RawStdEncoding.EncodeToString(ciphertext) != envelope.Ciphertext {
+		return fmt.Errorf("invalid encrypted config ciphertext")
+	}
+	return nil
+}
+
+func decodeCanonicalField(name, value string, wantLen int) ([]byte, error) {
 	decoded, err := base64.RawStdEncoding.DecodeString(value)
-	if err != nil || len(decoded) != wantLen {
+	if err != nil || len(decoded) != wantLen || base64.RawStdEncoding.EncodeToString(decoded) != value {
 		return nil, fmt.Errorf("invalid encrypted config %s", name)
 	}
 	return decoded, nil
