@@ -8,7 +8,7 @@
 - [x] Make Firestore envelope validation match the Go encryption format exactly.
 - [x] Cover valid create/read/update/delete plus malformed, unauthorized, query/list, type, length, encoding, and size rejection paths in the emulator.
 - [x] Pass focused cloud/rules tests, full repository checks, workflow/static validation, and independent security review.
-- [ ] Push `sbull-agent/firestore-hardening` and open a reviewable PR targeting `develop`; do not merge or promote it in this loop.
+- [x] Push `sbull-agent/firestore-hardening` and open draft PR #88 targeting `develop`; do not merge or promote it in this loop.
 
 ### Stream
 
@@ -28,7 +28,7 @@
 - [x] Full CI-equivalent build, lint, TUI, and release-package checks.
 - [x] Action/workflow contract checks and clean diff.
 - [x] Independent security and branch-reconciliation reviews resolved.
-- [ ] GitHub PR checks green.
+- [x] GitHub push and PR checks green (runs `29801252009` and `29801264647`).
 
 ### Current status
 
