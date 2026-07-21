@@ -58,6 +58,7 @@ yokai solves all of this with a single binary. Install it, point it at your mach
 
 ### Fleet Management
 - **Onboarding wizard** -- connect devices via LAN scan, Tailscale peer discovery, or manual IP entry
+- **GPU-aware Tailscale discovery** -- surface peer tags and highlight dedicated compute nodes carrying Yokai's recommended `tag:ai-gpu` identity
 - **SSH bootstrap** -- pre-flight checks (Docker, GPU, disk space), agent deployment, and systemd service installation in one step
 - **Device manager** -- add, edit, remove, and test connectivity for all devices from the TUI
 - **Secure by default** -- auto-generated bearer tokens for agent authentication, SSH key resolution with agent/key/password fallback
@@ -134,6 +135,19 @@ yokai
 # 5. Set up your HuggingFace token (optional, for gated models)
 # 6. Tab over to "Deploy" and pick a Best-Known-Config to run your first model
 ```
+
+### Tag GPU compute nodes in Tailscale
+
+Yokai can import online peers from `tailscale status --json`. Dedicated GPU servers tagged with `tag:ai-gpu` receive an **AI GPU** badge and are easier to identify in the device picker. The tag is recommended, not required.
+
+Define `tag:ai-gpu` and its owner in your tailnet policy, then apply it from **Tailscale Admin Console -> Machines -> device -> Edit tags** or authenticate the dedicated server with the tag:
+
+```bash
+sudo tailscale login --advertise-tags=tag:ai-gpu
+sudo tailscale up --advertise-tags=tag:ai-gpu --force-reauth
+```
+
+Only tag dedicated, non-human server nodes: Tailscale tags replace user-based device identity and do not grant network or SSH access. See the [full Tailscale GPU-node guide](https://spencerbull.github.io/yokai-docs/guides/tailscale-gpu-nodes/) for `tagOwners`, access-policy examples, Yokai verification, and troubleshooting.
 
 ### Running the Daemon
 

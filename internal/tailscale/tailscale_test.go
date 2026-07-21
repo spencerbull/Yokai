@@ -98,9 +98,20 @@ func TestEnrollmentTagHelpMentionsAIGPUTag(t *testing.T) {
 	t.Parallel()
 
 	help := EnrollmentTagHelp()
-	for _, snippet := range []string{AIGPUTag, "tagOwners", "--advertise-tags=tag:ai-gpu"} {
+	for _, snippet := range []string{
+		AIGPUTag,
+		"tagOwners",
+		"you@example.com",
+		"tailscale login --advertise-tags=tag:ai-gpu",
+		"tailscale up --advertise-tags=tag:ai-gpu --force-reauth",
+		"does not grant access",
+		"replace user-based authentication",
+	} {
 		if !strings.Contains(help, snippet) {
 			t.Fatalf("expected help to contain %q", snippet)
 		}
+	}
+	if strings.Contains(help, "tailscale set --advertise-tags") {
+		t.Fatal("expected help to avoid the unsupported tailscale set --advertise-tags command")
 	}
 }
