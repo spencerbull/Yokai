@@ -4,37 +4,38 @@
 
 ### Goal and done criteria
 
-- [ ] Reconcile current `main` into the cloud-sync staging line without losing the Tailscale documentation or production workflow safeguards.
-- [ ] Make Firestore envelope validation match the Go encryption format exactly.
-- [ ] Cover valid create/read/update/delete plus malformed, unauthorized, query/list, type, length, encoding, and size rejection paths in the emulator.
+- [x] Reconcile current `main` into the cloud-sync development line without losing the Tailscale documentation or production workflow safeguards.
+- [x] Make Firestore envelope validation match the Go encryption format exactly.
+- [x] Cover valid create/read/update/delete plus malformed, unauthorized, query/list, type, length, encoding, and size rejection paths in the emulator.
 - [ ] Pass focused cloud/rules tests, full repository checks, workflow/static validation, and independent security review.
-- [ ] Push `sbull-agent/firestore-hardening` and open a reviewable PR targeting `staging`; do not merge or approve the production deployment in this loop.
+- [ ] Push `sbull-agent/firestore-hardening` and open a reviewable PR targeting `develop`; do not merge or promote it in this loop.
 
 ### Stream
 
 | Branch | Worktree | Base | Scope |
 |---|---|---|---|
-| `sbull-agent/firestore-hardening` | `/Users/spencerbull/src/github.com/spencerbull/Yokai-firestore-hardening` | `origin/staging` | rules, emulator tests, branch reconciliation, CI/release preservation |
+| `sbull-agent/firestore-hardening` | `/Users/spencerbull/src/github.com/spencerbull/Yokai-firestore-hardening-develop` | `origin/develop` + current `origin/main` | rules, emulator tests, branch reconciliation, CI/release preservation |
 
 ### Allowed and forbidden actions
 
-- Allowed: isolated worktree/branch changes, local emulators, tests, static checks, push, and a PR targeting `staging`.
-- Forbidden without a new explicit approval: merge to `staging` or `main`, approve `firebase-production`, deploy production rules, change secrets/billing/IAM, or touch real user data.
+- Allowed: isolated worktree/branch changes, local emulators, tests, static checks, push, and a PR targeting `develop`.
+- Forbidden without a new explicit approval: merge or promote the PR, approve `firebase-production`, deploy production rules, change secrets/billing/IAM, or touch real user data.
 
 ### Required gates
 
-- [ ] Firestore emulator validity/invalidity suite.
-- [ ] Focused Go race tests and vet for cloud/config/daemon ownership.
-- [ ] Full CI-equivalent build, lint, TUI, and release-package checks.
-- [ ] Action/workflow contract checks and clean diff.
+- [x] Firestore emulator validity/invalidity suite (50/50).
+- [x] Focused Go race tests and vet for cloud/config/daemon ownership.
+- [x] Full CI-equivalent build, lint, TUI, and release-package checks.
+- [x] Action/workflow contract checks and clean diff.
 - [ ] Independent security and branch-reconciliation reviews resolved.
 - [ ] GitHub PR checks green.
 
 ### Current status
 
-- [x] Persistent isolated worktree created from current `origin/staging` (`90e148cf`).
-- [ ] Merge current `origin/main` (`0f170d69`) and resolve shared files intentionally.
-- [ ] Implement and validate the hardening diff.
+- [x] Persistent isolated worktree created from current `origin/develop` (`162b476`).
+- [x] Merge current `origin/main` (`0f170d69`) and resolve the CI workflow intentionally.
+- [x] Implement and locally validate the hardening diff.
+- [x] Preserve the superseded staging-based work as `sbull-agent/firestore-hardening-staging-scratch` until the development PR lands.
 
 ### Open checkpoints
 
