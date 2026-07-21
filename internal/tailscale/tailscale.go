@@ -201,19 +201,23 @@ func EnrollmentTagHelp() string {
 Define the tag in your tailnet policy:
   {
     "tagOwners": {
-      "tag:ai-gpu": ["group:infra"]
+      "tag:ai-gpu": ["you@example.com"]
     }
   }
+  Replace you@example.com with the tag owner's tailnet identity.
 
 Apply it to the server:
   Admin console: Machines -> device -> Edit tags -> tag:ai-gpu
-  CLI: sudo tailscale set --advertise-tags=tag:ai-gpu
+  CLI: sudo tailscale login --advertise-tags=tag:ai-gpu
 
-If the device was authenticated as a user, you may need:
+For an already authenticated server that needs reauthentication:
   sudo tailscale up --advertise-tags=tag:ai-gpu --force-reauth
 
-Use tags for non-human server nodes. In Tailscale, tags become the
-device identity and replace user-based authentication on that machine.`
+The tag highlights the peer as AI GPU; it does not grant access.
+Your tailnet grants and optional Tailscale SSH policy still apply.
+
+Use tags only for dedicated server nodes. In Tailscale, tags become
+the device identity and replace user-based authentication.`
 }
 
 // InstallInstructions returns platform-specific install instructions.
