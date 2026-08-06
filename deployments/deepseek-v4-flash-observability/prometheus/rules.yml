@@ -1,0 +1,91 @@
+groups:
+  - name: deepseek-recording
+    interval: 10s
+    rules:
+      - record: deepseek:logical_input_tokens_per_second:rate5m
+        expr: sum by (cluster, model_name) (rate(vllm:prompt_tokens_total{cluster="deepseek-v4-flash"}[5m]))
+      - record: deepseek:prefill_compute_tokens_per_second:rate5m
+        expr: sum by (cluster, model_name) (rate(vllm:prompt_tokens_by_source_total{cluster="deepseek-v4-flash",source="local_compute"}[5m]))
+      - record: deepseek:cached_input_tokens_per_second:rate5m
+        expr: sum by (cluster, model_name) (rate(vllm:prompt_tokens_by_source_total{cluster="deepseek-v4-flash",source="local_cache_hit"}[5m]))
+      - record: deepseek:output_tokens_per_second:rate5m
+        expr: sum by (cluster, model_name) (rate(vllm:generation_tokens_total{cluster="deepseek-v4-flash"}[5m]))
+      - record: deepseek:prefix_cache_hit_ratio:rate5m
+        expr: sum by (cluster, model_name) (rate(vllm:prefix_cache_hits_total{cluster="deepseek-v4-flash"}[5m])) / clamp_min(sum by (cluster, model_name) (rate(vllm:prefix_cache_queries_total{cluster="deepseek-v4-flash"}[5m])), 1e-9)
+      - record: deepseek:speculative_acceptance_ratio:rate5m
+        expr: sum by (cluster, model_name) (rate(vllm:spec_decode_num_accepted_tokens_total{cluster="deepseek-v4-flash"}[5m])) / clamp_min(sum by (cluster, model_name) (rate(vllm:spec_decode_num_draft_tokens_total{cluster="deepseek-v4-flash"}[5m])), 1e-9)
+      - record: deepseek:host_memory_used_ratio
+        expr: 1 - (node_memory_MemAvailable_bytes{cluster="deepseek-v4-flash"} / node_memory_MemTotal_bytes{cluster="deepseek-v4-flash"})
+      - record: deepseek:unified_memory_used_ratio
+        expr: yokai_gpu_vram_used_bytes{cluster="deepseek-v4-flash"} / clamp_min(yokai_gpu_vram_total_bytes{cluster="deepseek-v4-flash"}, 1)
+
+  - name: deepseek-alerts
+    interval: 10s
+    rules:
+      - alert: DeepSeekMetricsTargetDown
+        expr: up{cluster="deepseek-v4-flash"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.job }} is down on {{ $labels.host }}"
+          description: "Prometheus has been unable to scrape {{ $labels.instance }} for two minutes."
+      - alert: DeepSeekMetricsTargetMissing
+        expr: |
+          absent(up{cluster="deepseek-v4-flash",job="deepseek-vllm",host="kyber"})
+          or absent(up{cluster="deepseek-v4-flash",job="yokai-agent-beskar",host="beskar"})
+          or absent(up{cluster="deepseek-v4-flash",job="yokai-agent-kyber",host="kyber"})
+          or absent(up{cluster="deepseek-v4-flash",job="node",host="beskar"})
+          or absent(up{cluster="deepseek-v4-flash",job="node",host="kyber"})
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.job }} telemetry is missing on {{ $labels.host }}"
+          description: An expected DeepSeek telemetry target is absent from Prometheus service discovery.
+      - alert: DeepSeekQueueBacklog
+        expr: sum by (cluster) (vllm:num_requests_waiting{cluster="deepseek-v4-flash"}) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: DeepSeek request queue is persistently non-empty
+          description: The aggregate request queue has remained non-empty for ten minutes.
+      - alert: DeepSeekHostMemoryCritical
+        expr: 100 * deepseek:host_memory_used_ratio > 95
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Unified host memory is critical on {{ $labels.host }}"
+          description: Available unified memory has remained below five percent for five minutes.
+      - alert: DeepSeekMemoryPressure
+        expr: 100 * rate(node_pressure_memory_waiting_seconds_total{cluster="deepseek-v4-flash"}[5m]) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Memory pressure is stalling work on {{ $labels.host }}"
+          description: Memory PSI some has exceeded five percent for five minutes.
+      - alert: DeepSeekOOMKill
+        expr: increase(node_vmstat_oom_kill{cluster="deepseek-v4-flash"}[5m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "OOM kill detected on {{ $labels.host }}"
+          description: The host kernel reported an out-of-memory kill in the last five minutes.
+      - alert: DeepSeekRequestFailure
+        expr: sum by (cluster) (increase(vllm:request_success_total{cluster="deepseek-v4-flash",finished_reason=~"error|abort"}[5m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: DeepSeek request failed or aborted
+          description: vLLM reported at least one error or abort in the last five minutes.
+      - alert: DeepSeekGPUHot
+        expr: yokai_gpu_temperature_celsius{cluster="deepseek-v4-flash"} > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "GB10 temperature is high on {{ $labels.host }}"
+          description: GPU temperature has exceeded 80 C for five minutes.

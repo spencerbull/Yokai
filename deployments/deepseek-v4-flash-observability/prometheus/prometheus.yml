@@ -1,0 +1,74 @@
+global:
+  scrape_interval: 10s
+  scrape_timeout: 8s
+  evaluation_interval: 10s
+  external_labels:
+    cluster: deepseek-v4-flash
+    monitor: beskar
+
+rule_files:
+  - /etc/prometheus/rules.yml
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: [prometheus:9090]
+        labels:
+          cluster: deepseek-v4-flash
+          host: beskar
+
+  - job_name: deepseek-vllm
+    scrape_interval: 5s
+    scrape_timeout: 4s
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/secrets/vllm-api-key
+    static_configs:
+      - targets: [100.71.89.40:8000]
+        labels:
+          cluster: deepseek-v4-flash
+          host: kyber
+          role: api-head
+
+  - job_name: yokai-agent-beskar
+    scrape_interval: 5s
+    scrape_timeout: 4s
+    metrics_path: /metrics/prometheus
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/secrets/beskar-agent-token
+    static_configs:
+      - targets: [192.168.201.1:7474]
+        labels:
+          cluster: deepseek-v4-flash
+          host: beskar
+          role: worker-rank-1
+
+  - job_name: yokai-agent-kyber
+    scrape_interval: 5s
+    scrape_timeout: 4s
+    metrics_path: /metrics/prometheus
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/secrets/kyber-agent-token
+    static_configs:
+      - targets: [192.168.201.2:7474]
+        labels:
+          cluster: deepseek-v4-flash
+          host: kyber
+          role: api-rank-0
+
+  - job_name: node
+    scrape_interval: 10s
+    static_configs:
+      - targets: [192.168.201.1:9100]
+        labels:
+          cluster: deepseek-v4-flash
+          host: beskar
+          role: worker-rank-1
+      - targets: [192.168.201.2:9100]
+        labels:
+          cluster: deepseek-v4-flash
+          host: kyber
+          role: api-rank-0

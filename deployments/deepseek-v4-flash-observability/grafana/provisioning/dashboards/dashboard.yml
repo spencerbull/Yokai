@@ -1,0 +1,14 @@
+apiVersion: 1
+
+providers:
+  - name: DeepSeek observability
+    orgId: 1
+    folder: Yokai
+    folderUid: yokai
+    type: file
+    disableDeletion: true
+    updateIntervalSeconds: 10
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

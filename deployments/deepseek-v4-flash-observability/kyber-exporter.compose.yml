@@ -1,0 +1,22 @@
+name: yokai-fleet-exporters
+
+services:
+  node_exporter:
+    image: prom/node-exporter@sha256:e9cff4fc67b1818f8c97adb115b9f12c9a54b533de86765d4a0effc01b357205
+    container_name: yokai-fleet-node-exporter
+    user: "0:0"
+    restart: unless-stopped
+    network_mode: host
+    pid: host
+    command:
+      - --web.listen-address=192.168.201.2:9100
+      - --path.procfs=/host/proc
+      - --path.rootfs=/rootfs
+      - --path.sysfs=/host/sys
+      - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro,rslave
+    security_opt:
+      - no-new-privileges:true
