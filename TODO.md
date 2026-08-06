@@ -16,6 +16,11 @@ two-node DeepSeek-V4-Flash-0731 vLLM deployment on Beskar and Kyber.
   retained-history totals never claim to predate telemetry collection.
 - The existing DeepSeek containers remain running throughout deployment.
 - Static/config tests, live PromQL checks, and browser-level dashboard QA pass.
+- Cost Compare shows selected-range local GPU electricity beside current
+  standard uncached API equivalents for a source-backed intelligence peer band.
+- Power tracking includes GPU energy, estimated electricity cost, telemetry
+  coverage, a configurable Texas statewide fallback for North Houston, and visible
+  GPU-domain versus wall-power limitations.
 
 ## Streams
 
@@ -81,3 +86,7 @@ two-node DeepSeek-V4-Flash-0731 vLLM deployment on Beskar and Kyber.
 - [x] Grafana 13 API and full-page Chromium render verified the seven-section
   dashboard. Idle/request-history panels are truthfully empty until new samples
   and requests arrive; host, GPU, and platform panels render live values.
+- [x] Cost Compare and power-cost extension passed static tests, all 94 live
+  PromQL checks, preserved both model-container identities, provisioned 85
+  panels with six healthy scrape targets, and rendered without browser errors,
+  failed requests, or missing data in the new section.

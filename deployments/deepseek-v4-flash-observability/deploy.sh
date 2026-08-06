@@ -49,7 +49,12 @@ cp -R "${SCRIPT_DIR}/prometheus/." "${stage_dir}/prometheus/"
   cd "${REPO_ROOT}"
   go run ./deployments/deepseek-v4-flash-observability/cmd/dashboard
 ) >"${stage_dir}/grafana/dashboards/deepseek-v4-flash.json"
-jq -e '.uid == "deepseek-v4-flash" and (.panels | length >= 50)' \
+jq -e '
+  .uid == "deepseek-v4-flash" and
+  (.panels | length >= 80) and
+  ([.panels[] | select(.title == "07 · Cost compare · local vs comparable APIs")] | length) == 1 and
+  ([.templating.list[] | select(.name == "electricity_rate")] | length) == 1
+' \
   "${stage_dir}/grafana/dashboards/deepseek-v4-flash.json" >/dev/null
 
 echo "Collecting existing credentials into a private temporary directory..."

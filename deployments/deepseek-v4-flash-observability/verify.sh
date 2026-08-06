@@ -108,7 +108,9 @@ done
 
 for query in \
   'count(node_uname_info{cluster="deepseek-v4-flash"})' \
-  'count(yokai_gpu_utilization{cluster="deepseek-v4-flash"})'; do
+  'count(yokai_gpu_utilization{cluster="deepseek-v4-flash"})' \
+  'count(yokai_gpu_power_draw_watts{cluster="deepseek-v4-flash"} > 0)' \
+  'count((time() - timestamp(yokai_gpu_power_draw_watts{cluster="deepseek-v4-flash"})) < 20)'; do
   result="$(prom_query "${query}")"
   observed="$(jq -r '.data.result[0].value[1] // "0" | tonumber' <<<"${result}")"
   if [[ "${observed}" != "2" ]]; then
@@ -123,6 +125,7 @@ while IFS= read -r query; do
   query="${query//\$__rate_interval/1m}"
   query="${query//\$__range_s/3600}"
   query="${query//\$__range/1h}"
+  query="${query//\$electricity_rate/0.1615}"
   query="${query//\$model/.+}"
   query="${query//\$host/.+}"
   result="$(prom_query "${query}")"
@@ -137,8 +140,17 @@ if ((query_failures > 0)); then
 fi
 
 dashboard_json="$(curl -fsS --max-time 10 "${GRAFANA_URL}/api/dashboards/uid/deepseek-v4-flash")"
-jq -e '.dashboard.uid == "deepseek-v4-flash" and (.dashboard.panels | length >= 50)' \
-  <<<"${dashboard_json}" >/dev/null
+if ! jq -e '
+    .dashboard.uid == "deepseek-v4-flash" and
+    (.dashboard.panels | length >= 80) and
+    ([.dashboard.panels[] | select(.title == "07 · Cost compare · local vs comparable APIs")] | length) == 1 and
+    ([.dashboard.templating.list[] | select(.name == "electricity_rate" and .query == "0.1615")] | length) == 1
+  ' <<<"${dashboard_json}" >/dev/null; then
+  echo "Grafana dashboard gate failed; expected UID, >=80 panels, Cost Compare row, and electricity_rate=0.1615." >&2
+  jq '{uid:.dashboard.uid,panels:(.dashboard.panels|length),cost_rows:([.dashboard.panels[]|select(.title=="07 · Cost compare · local vs comparable APIs")]|length),electricity_rate:([.dashboard.templating.list[]|select(.name=="electricity_rate")|.query])}' \
+    <<<"${dashboard_json}" >&2
+  exit 1
+fi
 
 printf 'healthy_targets=%s dashboard_panels=%s prompt_tokens=%s generated_tokens=%s\n' \
   "$(jq '.data.activeTargets | length' <<<"${targets_json}")" \

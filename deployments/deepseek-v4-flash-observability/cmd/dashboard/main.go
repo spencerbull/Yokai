@@ -13,7 +13,28 @@ const (
 	clusterMatch = `cluster="deepseek-v4-flash"`
 	modelMatch   = `model_name=~"$model"`
 	hostMatch    = `host=~"$host"`
+	// Yokai exposes nvidia-smi GPU-domain power on a fixed five-second scrape.
+	// This is not whole-system or wall power.
+	gpuPowerMatch           = `cluster="deepseek-v4-flash",host=~"beskar|kyber"`
+	gpuPowerScrapeSeconds   = 5
+	electricityRateVariable = "$electricity_rate"
 )
+
+type apiComparator struct {
+	label        string
+	intelligence int
+	inputPrice   float64
+	outputPrice  float64
+}
+
+// First-party standard, uncached USD prices per million tokens and Artificial
+// Analysis Intelligence Index v4.1.1 scores, captured 2026-08-06.
+var apiComparators = []apiComparator{
+	{label: "DeepSeek V4 Flash API · AA 52", intelligence: 52, inputPrice: 0.14, outputPrice: 0.28},
+	{label: "Gemini 3.6 Flash high · AA 52", intelligence: 52, inputPrice: 1.50, outputPrice: 7.50},
+	{label: "GPT-5.6 Terra high · AA 50", intelligence: 50, inputPrice: 2.00, outputPrice: 12.00},
+	{label: "Claude Sonnet 5 max · AA 55", intelligence: 55, inputPrice: 2.00, outputPrice: 10.00},
+}
 
 var datasource = map[string]any{
 	"type": "prometheus",
@@ -250,21 +271,24 @@ func piePanel(id int, title, description string, x, y, w, h int, queries []panel
 	}
 }
 
-func barGaugePanel(id int, title, description string, x, y, w, h int, query panelTarget, unit string) map[string]any {
+func barGaugePanel(id int, title, description string, x, y, w, h int, query panelTarget, unit string, decimals int, max *float64) map[string]any {
 	t := target(query, true)
-	t["legendFormat"] = "{{finished_reason}}"
+	defaults := map[string]any{
+		"color":      map[string]any{"mode": "continuous-BlPu"},
+		"decimals":   decimals,
+		"mappings":   []any{},
+		"min":        0,
+		"thresholds": map[string]any{"mode": "absolute", "steps": []any{map[string]any{"color": "blue", "value": nil}}},
+		"unit":       unit,
+	}
+	if max != nil {
+		defaults["max"] = *max
+	}
 	return map[string]any{
 		"datasource":  datasource,
 		"description": description,
 		"fieldConfig": map[string]any{
-			"defaults": map[string]any{
-				"color":      map[string]any{"mode": "continuous-BlPu"},
-				"decimals":   0,
-				"mappings":   []any{},
-				"min":        0,
-				"thresholds": map[string]any{"mode": "absolute", "steps": []any{map[string]any{"color": "blue", "value": nil}}},
-				"unit":       unit,
-			},
+			"defaults":  defaults,
 			"overrides": []any{},
 		},
 		"gridPos": map[string]any{"h": h, "w": w, "x": x, "y": y},
@@ -285,6 +309,17 @@ func barGaugePanel(id int, title, description string, x, y, w, h int, query pane
 		"targets":       []any{t},
 		"title":         title,
 		"type":          "bargauge",
+	}
+}
+
+func markdownPanel(id int, title, content string, x, y, w, h int) map[string]any {
+	return map[string]any{
+		"gridPos":       map[string]any{"h": h, "w": w, "x": x, "y": y},
+		"id":            id,
+		"options":       map[string]any{"code": map[string]any{"language": "plaintext", "showLineNumbers": false, "showMiniMap": false}, "content": content, "mode": "markdown"},
+		"pluginVersion": "13.0.1",
+		"title":         title,
+		"type":          "text",
 	}
 }
 
@@ -314,14 +349,73 @@ func textPanel(id, x, y, w, h int) map[string]any {
 - **Process lifetime** is the current vLLM process counter and resets with the engine. Hourly and selected-range totals are reset-aware after Prometheus began scraping.
 - GB10 uses **unified memory**. Host RAM and the Yokai “VRAM” fallback describe the same physical pool and must not be added together.
 - Native metrics have model/engine labels, not user or session identity. Per-user accounting requires bounded-label gateway instrumentation.`
-	return map[string]any{
-		"gridPos":       map[string]any{"h": h, "w": w, "x": x, "y": y},
-		"id":            id,
-		"options":       map[string]any{"code": map[string]any{"language": "plaintext", "showLineNumbers": false, "showMiniMap": false}, "content": content, "mode": "markdown"},
-		"pluginVersion": "13.0.1",
-		"title":         "Metric definitions and scope",
-		"type":          "text",
+	return markdownPanel(id, "Metric definitions and scope", content, x, y, w, h)
+}
+
+func selectedPromptTokensExpr() string {
+	return `sum(increase(vllm:prompt_tokens_total{` + clusterMatch + `,` + modelMatch + `}[$__range]))`
+}
+
+func selectedOutputTokensExpr() string {
+	return `sum(increase(vllm:generation_tokens_total{` + clusterMatch + `,` + modelMatch + `}[$__range]))`
+}
+
+func apiCostExpr(comparator apiComparator) string {
+	return fmt.Sprintf(`((%s) * %g + (%s) * %g) / 1000000`, selectedPromptTokensExpr(), comparator.inputPrice, selectedOutputTokensExpr(), comparator.outputPrice)
+}
+
+func gpuEnergyExpr(window string) string {
+	return fmt.Sprintf(`sum(sum_over_time(yokai_gpu_power_draw_watts{%s}[%s])) * %d / 3600000`, gpuPowerMatch, window, gpuPowerScrapeSeconds)
+}
+
+func gpuElectricityCostExpr(window string) string {
+	return `(` + gpuEnergyExpr(window) + `) * ` + electricityRateVariable
+}
+
+func powerCoverageExpr() string {
+	return fmt.Sprintf(`clamp_max(100 * sum(count_over_time(yokai_gpu_power_draw_watts{%s}[$__range])) / (2 * $__range_s / %d), 100)`, gpuPowerMatch, gpuPowerScrapeSeconds)
+}
+
+func projectedDailyGPUElectricityCostExpr() string {
+	projection := `sum(avg_over_time(yokai_gpu_power_draw_watts{` + gpuPowerMatch + `}[$__range])) * 24 / 1000 * ` + electricityRateVariable
+	return `(` + projection + `) and on() ((` + powerCoverageExpr() + `) >= 99)`
+}
+
+func labeledValue(expr, labelName, labelValue string) string {
+	return fmt.Sprintf(`label_replace((%s), %q, %q, "", "")`, expr, labelName, labelValue)
+}
+
+func apiCostComparisonExpr() string {
+	expr := labeledValue(gpuElectricityCostExpr("$__range"), "comparison", "Observed GPU electricity · includes idle")
+	for _, comparator := range apiComparators {
+		expr += ` or ` + labeledValue(apiCostExpr(comparator), "comparison", comparator.label)
 	}
+	return expr
+}
+
+func intelligenceComparisonExpr() string {
+	expr := ""
+	for index, comparator := range apiComparators {
+		if index > 0 {
+			expr += ` or `
+		}
+		expr += labeledValue(fmt.Sprintf("vector(%d)", comparator.intelligence), "comparison", comparator.label)
+	}
+	return expr
+}
+
+func costNotesPanel(id, x, y, w, h int) map[string]any {
+	content := `### What this comparison means
+
+- **Intelligence band:** Artificial Analysis Intelligence Index v4.1.1 snapshot captured Aug 6, 2026. DeepSeek V4 Flash 0731 max scores 52; Gemini 3.6 Flash high 52; GPT-5.6 Terra high 50; Claude Sonnet 5 max 55. Differences of up to three points should be treated as the same broad tier, not a task-level guarantee.
+- **API equivalent:** selected-range prompt and output tokens are repriced at current first-party, standard **uncached** list rates. This is a token-for-token counterfactual; models differ in token use, cache eligibility, tools, and task success. Terra uses its base tier; prompts above 272K cost more. Sonnet 5 uses introductory pricing through Aug 31, 2026; refresh the price snapshot before Sep 1, 2026.
+- **Local electricity:** all observed NVIDIA GPU-domain watts, including idle, integrated from five-second samples and multiplied by the editable electricity-rate assumption. It excludes CPU/SoC, memory, PSU loss, networking, cooling, fixed fees, and hardware amortization—so it is a lower bound, not total cost of ownership. Yokai currently publishes whole-watt readings.
+- **North Houston fallback:** the default **0.1615 USD/kWh** is the EIA Texas statewide residential year-to-date average through May 2026. It is not a North Houston tariff. Replace it with the variable portion of your actual plan or bill for a better estimate.
+
+[Artificial Analysis · DeepSeek](https://artificialanalysis.ai/models/deepseek-v4-flash) · [Gemini](https://artificialanalysis.ai/models/gemini-3-6-flash) · [Terra](https://artificialanalysis.ai/models/gpt-5-6-terra-high) · [Sonnet](https://artificialanalysis.ai/models/claude-sonnet-5)
+
+[Pricing · DeepSeek](https://api-docs.deepseek.com/quick_start/pricing) · [Google](https://ai.google.dev/gemini-api/docs/pricing) · [OpenAI](https://developers.openai.com/api/docs/models/gpt-5.6-terra) · [Anthropic](https://platform.claude.com/docs/en/about-claude/pricing) · [EIA Texas electricity](https://www.eia.gov/electricity/monthly/epm_table_grapher.php?t=epmt_5_06_b)`
+	return markdownPanel(id, "Assumptions, limitations, and sources", content, x, y, w, h)
 }
 
 func buildDashboard() map[string]any {
@@ -366,7 +460,7 @@ func buildDashboard() map[string]any {
 			{expr: `sum(increase(vllm:prompt_tokens_by_source_total{` + clusterMatch + `,` + modelMatch + `,source="local_cache_hit"}[$__range]))`, legend: "Local cache", refID: "B", color: "purple"},
 			{expr: `sum(increase(vllm:prompt_tokens_by_source_total{` + clusterMatch + `,` + modelMatch + `,source="external_kv_transfer"}[$__range]))`, legend: "External KV", refID: "C", color: "yellow"},
 		}, "locale"),
-		barGaugePanel(31, "Request outcomes", "Completed requests in the selected range, grouped by vLLM finish reason.", 18, 19, 6, 8, panelTarget{expr: `sum by (finished_reason) (increase(vllm:request_success_total{` + clusterMatch + `,` + modelMatch + `}[$__range]))`, legend: "{{finished_reason}}", refID: "A"}, "locale"),
+		barGaugePanel(31, "Request outcomes", "Completed requests in the selected range, grouped by vLLM finish reason.", 18, 19, 6, 8, panelTarget{expr: `sum by (finished_reason) (increase(vllm:request_success_total{` + clusterMatch + `,` + modelMatch + `}[$__range]))`, legend: "{{finished_reason}}", refID: "A"}, "locale", 0, nil),
 
 		rowPanel(40, "03 · Latency and user experience", 27),
 		statPanel(41, "TTFT p95", "95th-percentile time to first token over the selected range of completed requests.", 0, 28, 4, panelTarget{expr: `histogram_quantile(0.95, sum by (le) (increase(vllm:time_to_first_token_seconds_bucket{` + clusterMatch + `,` + modelMatch + `}[$__range])))`, legend: "TTFT p95", refID: "A"}, seconds),
@@ -437,34 +531,51 @@ func buildDashboard() map[string]any {
 		}, "percent", number(0), nil),
 
 		rowPanel(100, "06 · GPU, thermals, power, and efficiency", 87),
-		statPanel(101, "Cluster GPU power", "Combined reported GB10 power draw across both workers.", 0, 88, 4, panelTarget{expr: `sum(yokai_gpu_power_draw_watts{` + clusterMatch + `,` + hostMatch + `})`, legend: "Power", refID: "A"}, statStyle{unit: "watt", decimals: 1, baseColor: "blue", min: number(0)}),
-		statPanel(102, "Output efficiency", "Generated output tok/s divided by total reported GB10 watts. Since watts are joules per second, the unit is tokens per joule.", 4, 88, 4, panelTarget{expr: `sum(rate(vllm:generation_tokens_total{` + clusterMatch + `,` + modelMatch + `}[$__rate_interval])) / clamp_min(sum(yokai_gpu_power_draw_watts{` + clusterMatch + `,` + hostMatch + `}), 1)`, legend: "Efficiency", refID: "A"}, statStyle{unit: "suffix: tok/J", decimals: 3, baseColor: "blue", min: number(0)}),
+		statPanel(101, "Cluster GPU power", "Combined NVIDIA-reported GPU-domain power across both workers; this is not wall-system power.", 0, 88, 4, panelTarget{expr: `sum(yokai_gpu_power_draw_watts{` + gpuPowerMatch + `})`, legend: "GPU power", refID: "A"}, statStyle{unit: "watt", decimals: 1, baseColor: "blue", min: number(0)}),
+		statPanel(102, "GPU output efficiency", "Generated output tok/s divided by reported GPU-domain watts: output tokens per GPU joule, not whole-system efficiency.", 4, 88, 4, panelTarget{expr: `sum(rate(vllm:generation_tokens_total{` + clusterMatch + `,` + modelMatch + `}[$__rate_interval])) / clamp_min(sum(yokai_gpu_power_draw_watts{` + gpuPowerMatch + `}), 1)`, legend: "Efficiency", refID: "A"}, statStyle{unit: "suffix: tok/GPU J", decimals: 3, baseColor: "blue", min: number(0)}),
 		statPanel(103, "Max GB10 temperature", "Highest reported GB10 temperature across the selected hosts.", 8, 88, 4, panelTarget{expr: `max(yokai_gpu_temperature_celsius{` + clusterMatch + `,` + hostMatch + `})`, legend: "Temperature", refID: "A"}, statStyle{unit: "celsius", decimals: 0, baseColor: "green", warnAt: number(75), criticalAt: number(85), min: number(0)}),
 		statPanel(104, "Max GPU utilization", "Highest current GPU utilization across the two GB10 workers.", 12, 88, 4, panelTarget{expr: `max(yokai_gpu_utilization{` + clusterMatch + `,` + hostMatch + `})`, legend: "GPU", refID: "A"}, statStyle{unit: "percent", decimals: 1, baseColor: "blue", min: number(0), max: number(100)}),
 		statPanel(105, "Model process uptime", "Seconds since the vLLM API process started on Kyber.", 16, 88, 4, panelTarget{expr: `time() - max(process_start_time_seconds{` + clusterMatch + `,job="deepseek-vllm"})`, legend: "Uptime", refID: "A"}, statStyle{unit: "s", decimals: 0, baseColor: "blue", min: number(0)}),
 		statPanel(106, "Active Prometheus alerts", "Number of currently firing DeepSeek observability alerts.", 20, 88, 4, panelTarget{expr: `count(ALERTS{` + clusterMatch + `,alertstate="firing"}) or vector(0)`, legend: "Alerts", refID: "A"}, statStyle{unit: "short", decimals: 0, baseColor: "green", warnAt: number(1), criticalAt: number(2), min: number(0)}),
 		timeSeriesPanel(107, "GPU utilization", "Native Yokai/nvidia-smi utilization by GB10 host.", 0, 92, 8, 9, []panelTarget{{expr: `yokai_gpu_utilization{` + clusterMatch + `,` + hostMatch + `}`, legend: "{{host}}", refID: "A", color: "blue"}}, "percent", number(0), number(100)),
 		timeSeriesPanel(108, "GPU temperature", "GB10 temperature by host.", 8, 92, 8, 9, []panelTarget{{expr: `yokai_gpu_temperature_celsius{` + clusterMatch + `,` + hostMatch + `}`, legend: "{{host}}", refID: "A", color: "orange"}}, "celsius", number(0), nil),
-		timeSeriesPanel(109, "GPU power draw", "Reported GB10 power draw by host.", 16, 92, 8, 9, []panelTarget{{expr: `yokai_gpu_power_draw_watts{` + clusterMatch + `,` + hostMatch + `}`, legend: "{{host}}", refID: "A", color: "purple"}}, "watt", number(0), nil),
+		timeSeriesPanel(109, "GPU power draw", "NVIDIA-reported GPU-domain power by host; excludes the rest of each system and power-conversion losses.", 16, 92, 8, 9, []panelTarget{{expr: `yokai_gpu_power_draw_watts{` + clusterMatch + `,` + hostMatch + `}`, legend: "{{host}}", refID: "A", color: "purple"}}, "watt", number(0), nil),
+		statPanel(110, "GPU energy · selected", "Observed five-second GPU-domain power samples integrated over the selected range. Missed samples undercount.", 0, 101, 6, panelTarget{expr: gpuEnergyExpr("$__range"), legend: "GPU energy", refID: "A"}, statStyle{unit: "suffix: kWh", decimals: 3, baseColor: "blue", min: number(0)}),
+		statPanel(111, "GPU electricity · selected", "Selected-range GPU-domain energy multiplied by the dashboard electricity-rate assumption.", 6, 101, 6, panelTarget{expr: gpuElectricityCostExpr("$__range"), legend: "GPU electricity", refID: "A"}, statStyle{unit: "currencyUSD", decimals: 3, baseColor: "green", min: number(0)}),
+		statPanel(112, "Power telemetry coverage", "Observed five-second samples divided by the two-host sample count expected in the selected range.", 12, 101, 6, panelTarget{expr: powerCoverageExpr(), legend: "Coverage", refID: "A"}, statStyle{unit: "percent", decimals: 1, baseColor: "green", warnAt: number(95), criticalAt: number(99), lowIsBad: true, min: number(0), max: number(100)}),
+		statPanel(113, "Projected GPU cost / day", "Available selected-range GPU-domain samples projected across 24 hours at the configured electricity rate. Requires at least 99% telemetry coverage.", 18, 101, 6, panelTarget{expr: projectedDailyGPUElectricityCostExpr(), legend: "Daily GPU electricity", refID: "A"}, statStyle{unit: "currencyUSD", decimals: 2, baseColor: "blue", min: number(0)}),
+		timeSeriesPanel(114, "GPU energy · rolling hour", "Observed GPU-domain energy from five-second samples in each rolling hour, by host.", 0, 105, 12, 9, []panelTarget{{expr: fmt.Sprintf(`sum by (host) (sum_over_time(yokai_gpu_power_draw_watts{%s}[1h])) * %d / 3600000`, gpuPowerMatch, gpuPowerScrapeSeconds), legend: "{{host}}", refID: "A", color: "purple"}}, "suffix: kWh", number(0), nil),
+		timeSeriesPanel(115, "GPU electricity · rolling hour", "Rolling-hour GPU-domain energy multiplied by the configured electricity rate, by host.", 12, 105, 12, 9, []panelTarget{{expr: fmt.Sprintf(`sum by (host) (sum_over_time(yokai_gpu_power_draw_watts{%s}[1h])) * %d / 3600000 * %s`, gpuPowerMatch, gpuPowerScrapeSeconds, electricityRateVariable), legend: "{{host}}", refID: "A", color: "green"}}, "currencyUSD", number(0), nil),
 
-		rowPanel(120, "07 · Network, storage, and platform reliability", 101),
-		timeSeriesPanel(121, "Network throughput", "Receive and transmit traffic by host, excluding loopback and virtual bridge interfaces.", 0, 102, 12, 9, []panelTarget{
+		rowPanel(130, "07 · Cost compare · local vs comparable APIs", 114),
+		statPanel(131, "AA Index · upstream 0731", "Artificial Analysis Intelligence Index v4.1.1 score for the upstream DeepSeek V4 Flash 0731 checkpoint at max effort, captured Aug 6, 2026; local quantization is not independently re-benchmarked.", 0, 115, 4, panelTarget{expr: `vector(52)`, legend: "AA Index", refID: "A"}, statStyle{unit: "short", decimals: 0, baseColor: "blue", min: number(0)}),
+		statPanel(132, "Observed GPU electricity", "Selected-range GPU-domain electricity estimate, including idle; excludes whole-system power and hardware cost.", 4, 115, 4, panelTarget{expr: gpuElectricityCostExpr("$__range"), legend: "Local", refID: "A"}, statStyle{unit: "currencyUSD", decimals: 3, baseColor: "green", min: number(0)}),
+		statPanel(133, "DeepSeek API equivalent", "Selected-range token mix at DeepSeek V4 Flash standard uncached list prices: 0.14 USD/M input and 0.28 USD/M output.", 8, 115, 4, panelTarget{expr: apiCostExpr(apiComparators[0]), legend: "DeepSeek API", refID: "A"}, statStyle{unit: "currencyUSD", decimals: 2, baseColor: "blue", min: number(0)}),
+		statPanel(134, "Gemini 3.6 equivalent", "Selected-range token mix at Gemini 3.6 Flash standard uncached list prices: 1.50 USD/M input and 7.50 USD/M output.", 12, 115, 4, panelTarget{expr: apiCostExpr(apiComparators[1]), legend: "Gemini API", refID: "A"}, statStyle{unit: "currencyUSD", decimals: 2, baseColor: "blue", min: number(0)}),
+		statPanel(135, "GPT-5.6 Terra equivalent", "Selected-range token mix at Terra base-tier standard uncached list prices: 2.00 USD/M input and 12.00 USD/M output.", 16, 115, 4, panelTarget{expr: apiCostExpr(apiComparators[2]), legend: "OpenAI API", refID: "A"}, statStyle{unit: "currencyUSD", decimals: 2, baseColor: "blue", min: number(0)}),
+		statPanel(136, "Claude Sonnet 5 equivalent", "Selected-range token mix at Sonnet 5 introductory uncached list prices through Aug 31, 2026: 2.00 USD/M input and 10.00 USD/M output.", 20, 115, 4, panelTarget{expr: apiCostExpr(apiComparators[3]), legend: "Claude API", refID: "A"}, statStyle{unit: "currencyUSD", decimals: 2, baseColor: "blue", min: number(0)}),
+		barGaugePanel(137, "Selected-range variable-cost comparison", "Observed GPU-domain electricity, including idle, alongside token-for-token standard uncached API list-price equivalents.", 0, 119, 12, 9, panelTarget{expr: apiCostComparisonExpr(), legend: "{{comparison}}", refID: "A"}, "currencyUSD", 3, nil),
+		barGaugePanel(138, "Artificial Analysis intelligence band", "Independent AA Intelligence Index v4.1.1 snapshot captured Aug 6, 2026. Small gaps are not task-level guarantees; fixed 0–100 scale avoids exaggerating them.", 12, 119, 12, 9, panelTarget{expr: intelligenceComparisonExpr(), legend: "{{comparison}}", refID: "A"}, "short", 0, number(100)),
+		costNotesPanel(139, 0, 128, 24, 8),
+
+		rowPanel(120, "08 · Network, storage, and platform reliability", 136),
+		timeSeriesPanel(121, "Network throughput", "Receive and transmit traffic by host, excluding loopback and virtual bridge interfaces.", 0, 137, 12, 9, []panelTarget{
 			{expr: `sum by (host) (rate(node_network_receive_bytes_total{` + clusterMatch + `,` + hostMatch + `,device!~"lo|veth.*|docker.*|br-.*"}[$__rate_interval]))`, legend: "{{host}} · receive", refID: "A", color: "blue"},
 			{expr: `sum by (host) (rate(node_network_transmit_bytes_total{` + clusterMatch + `,` + hostMatch + `,device!~"lo|veth.*|docker.*|br-.*"}[$__rate_interval]))`, legend: "{{host}} · transmit", refID: "B", color: "orange"},
 		}, "Bps", number(0), nil),
-		timeSeriesPanel(122, "Disk throughput", "Physical block-device read and write throughput by host.", 12, 102, 12, 9, []panelTarget{
+		timeSeriesPanel(122, "Disk throughput", "Physical block-device read and write throughput by host.", 12, 137, 12, 9, []panelTarget{
 			{expr: `sum by (host) (rate(node_disk_read_bytes_total{` + clusterMatch + `,` + hostMatch + `,device!~"loop.*|ram.*|dm-.*"}[$__rate_interval]))`, legend: "{{host}} · read", refID: "A", color: "blue"},
 			{expr: `sum by (host) (rate(node_disk_written_bytes_total{` + clusterMatch + `,` + hostMatch + `,device!~"loop.*|ram.*|dm-.*"}[$__rate_interval]))`, legend: "{{host}} · write", refID: "B", color: "orange"},
 		}, "Bps", number(0), nil),
-		timeSeriesPanel(123, "Root filesystem free", "Available bytes for the root filesystem by host.", 0, 111, 12, 9, []panelTarget{
+		timeSeriesPanel(123, "Root filesystem free", "Available bytes for the root filesystem by host.", 0, 146, 12, 9, []panelTarget{
 			{expr: `node_filesystem_avail_bytes{` + clusterMatch + `,` + hostMatch + `,mountpoint="/",fstype!="rootfs"}`, legend: "{{host}} · available", refID: "A", color: "blue"},
 		}, "bytes", number(0), nil),
-		timeSeriesPanel(124, "Target health and scrape latency", "Health is one when a target is reachable. Scrape duration exposes exporter or network slowdown.", 12, 111, 12, 9, []panelTarget{
+		timeSeriesPanel(124, "Target health and scrape latency", "Health is one when a target is reachable. Scrape duration exposes exporter or network slowdown.", 12, 146, 12, 9, []panelTarget{
 			{expr: `up{` + clusterMatch + `}`, legend: "{{job}} · {{host}} · up", refID: "A", color: "blue"},
 			{expr: `scrape_duration_seconds{` + clusterMatch + `}`, legend: "{{job}} · {{host}} · scrape s", refID: "B", color: "orange"},
 		}, "short", number(0), nil),
-		alertTablePanel(125, 0, 120, 12, 8),
-		textPanel(126, 12, 120, 12, 8),
+		alertTablePanel(125, 0, 155, 12, 8),
+		textPanel(126, 12, 155, 12, 8),
 	}
 
 	return map[string]any{
@@ -479,7 +590,7 @@ func buildDashboard() map[string]any {
 				"type":       "dashboard",
 			}},
 		},
-		"description":          "DeepSeek-V4-Flash-0731 observability across the Beskar and Kyber GB10 cluster: tokens, latency, cache, scheduling, unified memory, thermals, power, and reliability.",
+		"description":          "DeepSeek-V4-Flash-0731 observability across the Beskar and Kyber GB10 cluster: tokens, latency, cache, scheduling, unified memory, thermals, GPU-domain power, cost comparison, and reliability.",
 		"editable":             false,
 		"fiscalYearStartMonth": 0,
 		"graphTooltip":         1,
@@ -524,6 +635,15 @@ func buildDashboard() map[string]any {
 					"regex":      "",
 					"sort":       1,
 					"type":       "query",
+				},
+				map[string]any{
+					"current": map[string]any{"selected": true, "text": "0.1615", "value": "0.1615"},
+					"hide":    0,
+					"label":   "Electricity rate · USD/kWh",
+					"name":    "electricity_rate",
+					"options": []any{},
+					"query":   "0.1615",
+					"type":    "textbox",
 				},
 			},
 		},

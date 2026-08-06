@@ -26,8 +26,8 @@ func TestDashboardIdentityAndBreadth(t *testing.T) {
 	}
 
 	panels := dashboardPanels(t)
-	if len(panels) < 50 {
-		t.Fatalf("dashboard has %d panels, want at least 50", len(panels))
+	if len(panels) < 80 {
+		t.Fatalf("dashboard has %d panels, want at least 80", len(panels))
 	}
 
 	rowTitles := make(map[string]bool)
@@ -54,7 +54,8 @@ func TestDashboardIdentityAndBreadth(t *testing.T) {
 		"04 · Cache, scheduler, and speculative decoding",
 		"05 · GB10 unified memory and host pressure",
 		"06 · GPU, thermals, power, and efficiency",
-		"07 · Network, storage, and platform reliability",
+		"07 · Cost compare · local vs comparable APIs",
+		"08 · Network, storage, and platform reliability",
 	}
 	for _, title := range wantRows {
 		if !rowTitles[title] {
@@ -88,6 +89,10 @@ func TestDashboardQueriesUseLiveMetricSemantics(t *testing.T) {
 		"node_pressure_memory_waiting_seconds_total",
 		"node_vmstat_oom_kill",
 		"yokai_gpu_power_draw_watts",
+		"sum_over_time(yokai_gpu_power_draw_watts",
+		"count_over_time(yokai_gpu_power_draw_watts",
+		"$electricity_rate",
+		"label_replace",
 		"$__rate_interval",
 		"$__range",
 	}
@@ -108,6 +113,72 @@ func TestDashboardQueriesUseLiveMetricSemantics(t *testing.T) {
 	} {
 		if strings.Contains(joined, forbidden) {
 			t.Errorf("dashboard query contains forbidden pattern %q", forbidden)
+		}
+	}
+}
+
+func TestCostComparisonAssumptionsAreExplicitAndCurrent(t *testing.T) {
+	if len(apiComparators) != 4 {
+		t.Fatalf("api comparators = %d, want 4", len(apiComparators))
+	}
+	want := []apiComparator{
+		{label: "DeepSeek V4 Flash API · AA 52", intelligence: 52, inputPrice: 0.14, outputPrice: 0.28},
+		{label: "Gemini 3.6 Flash high · AA 52", intelligence: 52, inputPrice: 1.50, outputPrice: 7.50},
+		{label: "GPT-5.6 Terra high · AA 50", intelligence: 50, inputPrice: 2.00, outputPrice: 12.00},
+		{label: "Claude Sonnet 5 max · AA 55", intelligence: 55, inputPrice: 2.00, outputPrice: 10.00},
+	}
+	for index := range want {
+		if apiComparators[index] != want[index] {
+			t.Errorf("api comparator %d = %+v, want %+v", index, apiComparators[index], want[index])
+		}
+	}
+
+	encoded, err := json.Marshal(buildDashboard())
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(encoded)
+	for _, required := range []string{
+		`"name":"electricity_rate"`,
+		`"query":"0.1615"`,
+		"standard **uncached** list rates",
+		"token-for-token counterfactual",
+		"observed NVIDIA GPU-domain watts",
+		"not total cost of ownership",
+		"including idle",
+		"year-to-date average through May 2026",
+		"not a North Houston tariff",
+		"Requires at least 99% telemetry coverage",
+		"local quantization is not independently re-benchmarked",
+		"EIA Texas statewide residential year-to-date average",
+		"captured Aug 6, 2026",
+	} {
+		if !strings.Contains(text, required) {
+			t.Errorf("dashboard cost copy is missing %q", required)
+		}
+	}
+}
+
+func TestIntelligenceComparisonUsesFixedScale(t *testing.T) {
+	for _, raw := range dashboardPanels(t) {
+		panel := raw.(map[string]any)
+		if panel["id"] != 138 {
+			continue
+		}
+		defaults := panel["fieldConfig"].(map[string]any)["defaults"].(map[string]any)
+		if defaults["min"] != 0 || defaults["max"] != float64(100) {
+			t.Fatalf("intelligence gauge scale = %v..%v, want 0..100", defaults["min"], defaults["max"])
+		}
+		return
+	}
+	t.Fatal("intelligence comparison panel not found")
+}
+
+func TestDailyProjectionRequiresPowerCoverage(t *testing.T) {
+	expr := projectedDailyGPUElectricityCostExpr()
+	for _, required := range []string{">= 99", "and on()", "count_over_time(yokai_gpu_power_draw_watts"} {
+		if !strings.Contains(expr, required) {
+			t.Errorf("daily projection is missing coverage gate %q: %s", required, expr)
 		}
 	}
 }
@@ -171,7 +242,7 @@ func TestDescriptionsDoNotOverclaimLifetimeOrDedicatedVRAM(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(encoded)
-	for _, required := range []string{"process lifetime", "resets when vLLM restarts", "unified memory"} {
+	for _, required := range []string{"process lifetime", "resets when vLLM restarts", "unified memory", "not wall-system power"} {
 		if !strings.Contains(strings.ToLower(text), strings.ToLower(required)) {
 			t.Errorf("dashboard copy is missing required caveat %q", required)
 		}

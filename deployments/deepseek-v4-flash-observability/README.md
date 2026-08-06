@@ -14,15 +14,16 @@ DeepSeek-V4-Flash-0731 vLLM engine running across Beskar and Kyber.
   temperature, and power.
 - Prometheus self-health and recording/alert rules.
 
-Grafana provisions one read-only dashboard with seven sections:
+Grafana provisions one read-only dashboard with eight sections:
 
 1. model pulse
 2. tokens, requests, and throughput
 3. latency and user experience
 4. cache, scheduler, and speculative decoding
 5. GB10 unified memory and host pressure
-6. GPU, thermals, power, and efficiency
-7. network, storage, and platform reliability
+6. GPU, thermals, power, energy, and efficiency
+7. cost compare: local GPU electricity versus comparable hosted APIs
+8. network, storage, and platform reliability
 
 ## Metric definitions that matter
 
@@ -41,11 +42,32 @@ Grafana provisions one read-only dashboard with seven sections:
   50 GB, whichever limit is reached first.
 - GB10 uses unified memory. Host RAM and Yokai's GPU-memory fallback are two
   views of the same physical pool and are never added together.
+- Energy and electricity-cost panels integrate NVIDIA-reported GPU-domain power
+  at the five-second scrape interval. They do not measure whole-system wall
+  power and exclude CPU/SoC, memory, PSU losses, networking, cooling, fixed
+  utility fees, and hardware amortization.
+- The electricity-rate variable defaults to `0.1615` USD/kWh, the latest EIA
+  Texas statewide residential year-to-date average available when captured on
+  August 6, 2026 (through May 2026). This is not a North Houston tariff; the
+  variable portion of the actual electricity plan or bill is the better input.
+- Cost Compare reprices the selected-range prompt/output mix at first-party
+  standard uncached API list prices captured August 6, 2026. It is a
+  token-for-token counterfactual rather than a claim that peers use the same
+  tokens or achieve identical task outcomes. Local cost includes observed idle
+  GPU-domain power but not the rest of either system. The peer band and prices are:
+  DeepSeek V4 Flash 0731 max (AA 52; 0.14/0.28 USD per M input/output), Gemini
+  3.6 Flash high (AA 52; 1.50/7.50), GPT-5.6 Terra high (AA 50; 2.00/12.00
+  base tier), and Claude Sonnet 5 max (AA 55; introductory 2.00/10.00 through
+  August 31, 2026). Refresh the pricing snapshot before September 1, 2026.
 
 Native vLLM metrics contain `model_name` and `engine`, but no user or session
 identity. The dashboard therefore stays aggregate/per-model. Per-user token
 accounting requires bounded-cardinality instrumentation in the authentication
 gateway; request IDs and API keys must never become Prometheus labels.
+
+Current comparison sources are linked directly in the dashboard: Artificial
+Analysis for the intelligence band; first-party DeepSeek, Google, OpenAI, and
+Anthropic pricing; and EIA for the Texas electricity-rate fallback.
 
 ## Deployment
 
