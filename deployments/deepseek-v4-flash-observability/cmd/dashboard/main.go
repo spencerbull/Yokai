@@ -11,6 +11,7 @@ import (
 const (
 	dashboardUID = "deepseek-v4-flash"
 	clusterMatch = `cluster="deepseek-v4-flash"`
+	colemanMatch = `cluster="coleman-vision-gateway",host="coleman"`
 	modelMatch   = `model_name=~"$model"`
 	hostMatch    = `host=~"$host"`
 	// Yokai exposes nvidia-smi GPU-domain power on a fixed five-second scrape.
@@ -576,6 +577,30 @@ func buildDashboard() map[string]any {
 		}, "short", number(0), nil),
 		alertTablePanel(125, 0, 155, 12, 8),
 		textPanel(126, 12, 155, 12, 8),
+
+		rowPanel(140, "09 · Coleman vision gateway", 164),
+		statPanel(141, "Coleman telemetry ready", "One only when Coleman node, Yokai GPU, Qwen3-VL, and Moon Bridge scrape targets are healthy and the gateway probe itself succeeds.", 0, 165, 4, panelTarget{expr: `(count(up{cluster="coleman-vision-gateway",job=~"node|coleman-yokai-agent|coleman-qwen-vllm|coleman-moonbridge"}) == bool 4) * (sum(up{cluster="coleman-vision-gateway",job=~"node|coleman-yokai-agent|coleman-qwen-vllm|coleman-moonbridge"}) == bool 4) * (sum(probe_success{cluster="coleman-vision-gateway",job="coleman-moonbridge"}) == bool 1)`, legend: "Ready", refID: "A"}, statStyle{unit: "short", decimals: 0, baseColor: "green", warnAt: number(1), criticalAt: number(1), lowIsBad: true, min: number(0), max: number(1)}),
+		statPanel(142, "Responses gateway", "Blackbox probe succeeds only when Moon Bridge is reachable and rejects an unauthenticated model-catalog request with HTTP 401.", 4, 165, 4, panelTarget{expr: `probe_success{` + colemanMatch + `,job="coleman-moonbridge"}`, legend: "Auth boundary", refID: "A"}, statStyle{unit: "short", decimals: 0, baseColor: "green", warnAt: number(1), criticalAt: number(1), lowIsBad: true, min: number(0), max: number(1)}),
+		statPanel(143, "Qwen terminal calls · selected", "Qwen3-VL requests reaching any terminal reason in the selected range. One user image request can make more than one visual call.", 8, 165, 4, panelTarget{expr: `sum(increase(vllm:request_success_total{` + colemanMatch + `}[$__range]))`, legend: "Qwen calls", refID: "A"}, count),
+		statPanel(144, "Qwen requests running", "Visual-analysis calls currently executing on Coleman.", 12, 165, 4, panelTarget{expr: `sum(vllm:num_requests_running{` + colemanMatch + `})`, legend: "Running", refID: "A"}, green),
+		statPanel(145, "Qwen queue depth", "Visual-analysis calls waiting for Coleman scheduling capacity.", 16, 165, 4, panelTarget{expr: `sum(vllm:num_requests_waiting{` + colemanMatch + `})`, legend: "Waiting", refID: "A"}, statStyle{unit: "short", decimals: 0, baseColor: "green", warnAt: number(1), criticalAt: number(2), min: number(0)}),
+		statPanel(146, "Coleman unified memory", "Host-memory utilization on Coleman. GB10 shares this pool with Qwen3-VL and the preserved Qwen3.6 service.", 20, 165, 4, panelTarget{expr: `100 * coleman:host_memory_used_ratio{host="coleman"}`, legend: "Used", refID: "A"}, percentHighBad),
+		timeSeriesPanel(147, "Qwen3-VL token throughput", "Prompt and generated tokens per second for Coleman's visual evidence model only; these do not enter DeepSeek cost calculations.", 0, 169, 12, 9, []panelTarget{
+			{expr: `sum(rate(vllm:prompt_tokens_total{` + colemanMatch + `}[$__rate_interval]))`, legend: "Prompt tok/s", refID: "A", color: "blue"},
+			{expr: `sum(rate(vllm:generation_tokens_total{` + colemanMatch + `}[$__rate_interval]))`, legend: "Output tok/s", refID: "B", color: "orange"},
+		}, "suffix: tok/s", number(0), nil),
+		timeSeriesPanel(148, "Qwen3-VL scheduler", "Running and waiting visual calls on the Coleman vLLM scheduler.", 12, 169, 12, 9, []panelTarget{
+			{expr: `sum(vllm:num_requests_running{` + colemanMatch + `})`, legend: "Running", refID: "A", color: "blue"},
+			{expr: `sum(vllm:num_requests_waiting{` + colemanMatch + `})`, legend: "Waiting", refID: "B", color: "orange"},
+		}, "short", number(0), nil),
+		timeSeriesPanel(149, "Coleman host and unified-memory utilization", "CPU busy and the host/Yokai views of Coleman's shared unified-memory pool.", 0, 178, 12, 9, []panelTarget{
+			{expr: `100 * (1 - avg(rate(node_cpu_seconds_total{` + colemanMatch + `,mode="idle"}[$__rate_interval])))`, legend: "CPU", refID: "A", color: "blue"},
+			{expr: `100 * coleman:host_memory_used_ratio{host="coleman"}`, legend: "Host memory", refID: "B", color: "orange"},
+			{expr: `100 * coleman:unified_memory_used_ratio{host="coleman"}`, legend: "GPU memory view", refID: "C", color: "purple"},
+		}, "percent", number(0), number(100)),
+		timeSeriesPanel(150, "Coleman GB10 GPU-domain power", "NVIDIA-reported GPU-domain power for Coleman; excludes the rest of the system and is not included in the two-node DeepSeek electricity estimate.", 12, 178, 12, 9, []panelTarget{
+			{expr: `yokai_gpu_power_draw_watts{` + colemanMatch + `}`, legend: "Coleman", refID: "A", color: "purple"},
+		}, "watt", number(0), nil),
 	}
 
 	return map[string]any{
@@ -590,7 +615,7 @@ func buildDashboard() map[string]any {
 				"type":       "dashboard",
 			}},
 		},
-		"description":          "DeepSeek-V4-Flash-0731 observability across the Beskar and Kyber GB10 cluster: tokens, latency, cache, scheduling, unified memory, thermals, GPU-domain power, cost comparison, and reliability.",
+		"description":          "DeepSeek-V4-Flash-0731 observability across Beskar and Kyber plus the Coleman Qwen3-VL vision gateway: tokens, latency, cache, scheduling, unified memory, thermals, GPU-domain power, cost comparison, and reliability.",
 		"editable":             false,
 		"fiscalYearStartMonth": 0,
 		"graphTooltip":         1,
@@ -603,7 +628,7 @@ func buildDashboard() map[string]any {
 		"preload":       false,
 		"refresh":       "5s",
 		"schemaVersion": 41,
-		"tags":          []any{"yokai", "deepseek", "vllm", "gb10", "beskar", "kyber"},
+		"tags":          []any{"yokai", "deepseek", "vllm", "vision", "gb10", "beskar", "kyber", "coleman"},
 		"templating": map[string]any{
 			"list": []any{
 				map[string]any{

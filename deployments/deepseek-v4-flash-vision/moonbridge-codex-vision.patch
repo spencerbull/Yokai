@@ -1,0 +1,301 @@
+--- a/internal/extension/visual/core_orchestrator.go
++++ b/internal/extension/visual/core_orchestrator.go
+@@ -61,6 +61,7 @@ func (o *CoreOrchestrator) CreateCore(ctx context.Context, req *format.CoreReque
+ 	log := slog.Default()
+ 	aggregatedUsage := format.CoreUsage{}
+ 	hasAggregatedUsage := false
++	visualRounds := 0
+ 
+ 	for round := 0; round < o.maxRounds; round++ {
+ 		roundReq := cloneCoreRequest(req)
+@@ -92,9 +93,18 @@ func (o *CoreOrchestrator) CreateCore(ctx context.Context, req *format.CoreReque
+ 			return applyCoreUsageAggregation(resp, aggregatedUsage, hasAggregatedUsage), nil
+ 		}
+ 		if len(nonVisual) > 0 {
+-			// Execute visual tools, feed results back to model, and continue.
+-			// Non-visual tool_uses remain in the assistant message so the Bridge
+-			// can process them on the next round.
++			// Execute visual tools first and let the model re-plan client-owned tools
++			// after it sees the image evidence. Keeping non-visual tool uses in the
++			// assistant message would create an invalid Chat history because this
++			// orchestrator cannot supply their tool results.
++			visualAssistant := *lastAssistant
++			visualAssistant.Content = make([]format.CoreContentBlock, 0, len(lastAssistant.Content)-len(nonVisual))
++			for _, block := range lastAssistant.Content {
++				if block.Type == "tool_use" && !IsVisualTool(block.ToolName) {
++					continue
++				}
++				visualAssistant.Content = append(visualAssistant.Content, block)
++			}
+ 			toolResults := make([]format.CoreContentBlock, 0, len(toolUses))
+ 			for _, toolUse := range toolUses {
+ 				result := o.executeCoreVisualTool(ctx, toolUse, availableImages)
+@@ -104,7 +114,11 @@ func (o *CoreOrchestrator) CreateCore(ctx context.Context, req *format.CoreReque
+ 					ToolResultContent: []format.CoreContentBlock{{Type: "text", Text: result}},
+ 				})
+ 			}
+-			req.Messages = append(req.Messages, *lastAssistant)
++			visualRounds++
++			if visualRounds >= 2 {
++				req.Tools = coreWithoutVisualTools(req.Tools)
++			}
++			req.Messages = append(req.Messages, visualAssistant)
+ 			req.Messages = append(req.Messages, format.CoreMessage{
+ 				Role:    "tool",
+ 				Content: toolResults,
+@@ -126,6 +140,10 @@ func (o *CoreOrchestrator) CreateCore(ctx context.Context, req *format.CoreReque
+ 				ToolResultContent: []format.CoreContentBlock{{Type: "text", Text: result}},
+ 			})
+ 		}
++		visualRounds++
++		if visualRounds >= 2 {
++			req.Tools = coreWithoutVisualTools(req.Tools)
++		}
+ 
+ 		// Append assistant message and tool_result message for next round.
+ 		req.Messages = append(req.Messages, *lastAssistant)
+@@ -259,6 +277,17 @@ func coreSplitVisualToolUses(blocks []format.CoreContentBlock) (visualUses, nonV
+ 	return visualUses, nonVisualToolUses
+ }
+ 
++func coreWithoutVisualTools(tools []format.CoreTool) []format.CoreTool {
++	filtered := make([]format.CoreTool, 0, len(tools))
++	for _, tool := range tools {
++		if IsVisualTool(tool.Name) {
++			continue
++		}
++		filtered = append(filtered, tool)
++	}
++	return filtered
++}
++
+ // executeCoreVisualTool runs the vision model and returns a formatted result string.
+ func (o *CoreOrchestrator) executeCoreVisualTool(ctx context.Context, toolUse format.CoreContentBlock, availableImages []ImageInput) string {
+ 	request, err := coreAnalysisRequestFromToolUse(toolUse, availableImages)
+--- a/internal/extension/visual/core_orchestrator_test.go
++++ b/internal/extension/visual/core_orchestrator_test.go
+@@ -375,6 +375,89 @@ func TestCoreOrchestratorLeavesNonVisualToolUse(t *testing.T) {
+ 	}
+ }
+ 
++func TestCoreOrchestratorReplansMixedVisualAndClientTools(t *testing.T) {
++	upstream := &fakeCoreUpstream{
++		responses: []*format.CoreResponse{
++			{
++				ID: "msg_mixed", Status: "completed", StopReason: "tool_use",
++				Messages: []format.CoreMessage{{
++					Role: "assistant",
++					Content: []format.CoreContentBlock{
++						{
++							Type: "tool_use", ToolUseID: "toolu_visual", ToolName: ToolVisualBrief,
++							ToolInput: json.RawMessage(`{"image_refs":["Image #1"],"context":"read the status"}`),
++						},
++						{
++							Type: "tool_use", ToolUseID: "toolu_lookup_early", ToolName: "lookup_ticket",
++							ToolInput: json.RawMessage(`{"id":"731"}`),
++						},
++					},
++				}},
++			},
++			{
++				ID: "msg_client_tool", Status: "completed", StopReason: "tool_use",
++				Messages: []format.CoreMessage{{
++					Role: "assistant",
++					Content: []format.CoreContentBlock{{
++						Type: "tool_use", ToolUseID: "toolu_lookup_final", ToolName: "lookup_ticket",
++						ToolInput: json.RawMessage(`{"id":"731","visual_status":"ready"}`),
++					}},
++				}},
++			},
++		},
++	}
++	vision := &fakeCoreVisionClient{text: "status is ready"}
++	orchestrator := NewCoreOrchestrator(CoreOrchestratorConfig{
++		Upstream:  upstream,
++		Client:    vision,
++		MaxRounds: 3,
++	})
++
++	resp, err := orchestrator.CreateCore(context.Background(), &format.CoreRequest{
++		Model: "test-model",
++		Messages: []format.CoreMessage{{
++			Role: "user",
++			Content: []format.CoreContentBlock{
++				{Type: "text", Text: "inspect then look up"},
++				{Type: "image", ImageData: "abc123", MediaType: "image/png"},
++			},
++		}},
++		Tools: []format.CoreTool{
++			{Name: ToolVisualBrief},
++			{Name: "lookup_ticket"},
++		},
++		ToolChoice: &format.CoreToolChoice{Mode: "required"},
++	})
++	if err != nil {
++		t.Fatalf("CreateCore() error = %v", err)
++	}
++	if resp.ID != "msg_client_tool" {
++		t.Fatalf("response ID = %q, want msg_client_tool", resp.ID)
++	}
++	if len(vision.requests) != 1 {
++		t.Fatalf("vision requests = %d, want 1", len(vision.requests))
++	}
++	if len(upstream.requests) != 2 {
++		t.Fatalf("upstream requests = %d, want 2", len(upstream.requests))
++	}
++
++	followUp := upstream.requests[1]
++	if followUp.ToolChoice == nil || followUp.ToolChoice.Mode != "auto" {
++		t.Fatalf("follow-up tool choice = %+v, want auto", followUp.ToolChoice)
++	}
++	for _, msg := range followUp.Messages {
++		for _, block := range msg.Content {
++			if block.Type == "tool_use" && block.ToolName == "lookup_ticket" {
++				t.Fatalf("unresolved client tool leaked into visual history: %+v", block)
++			}
++		}
++	}
++	last := followUp.Messages[len(followUp.Messages)-1]
++	if last.Role != "tool" || len(last.Content) != 1 || last.Content[0].ToolUseID != "toolu_visual" {
++		t.Fatalf("visual result history = %+v", followUp.Messages)
++	}
++}
++
+ func TestCoreOrchestratorMaxRounds(t *testing.T) {
+ 	// Upstream that always returns tool_use, causing the orchestrator to loop indefinitely.
+ 	toolUseResp := &format.CoreResponse{
+--- a/internal/service/server/adapter_dispatch.go
++++ b/internal/service/server/adapter_dispatch.go
+@@ -422,7 +422,7 @@ func (s *Server) handleWithAdapters(
+ 		// the chat-protocol endpoint instead.
+ 		visualCandidate := preferred
+ 		visualCandidate.Client = &chatProviderClient{c: chatClient}
+-		if visProv := s.wrapWithVisual(ctx, openAIReq.Model, visualCandidate, providerAdapter, finalizeChatUpstream); visProv != nil {
++		if visProv := s.wrapWithVisual(ctx, openAIReq.Model, visualCandidate, providerAdapter, finalizeChatUpstream); coreRequestHasImage(coreReq) && visProv != nil {
+ 			coreResp, err = visProv.CreateCore(ctx, coreReq)
+ 			if err != nil {
+ 				log.Error("adapter path: chat visual CreateCore failed", "error", err)
+@@ -1215,7 +1215,7 @@ func (s *Server) handleAdapterStream(
+ 		if s.pluginRegistry != nil && s.runtime != nil && openAIReq.Model != "" && ok && providerAdapter != nil {
+ 			cfgV := s.runtime.Current().Config
+ 			visCfg, visOk := visualpkg.ConfigForModelFromResolvedConfig(cfgV, openAIReq.Model)
+-			if visOk && visCfg.Provider != "" && visCfg.Model != "" {
++			if coreRequestHasImage(coreReq) && visOk && visCfg.Provider != "" && visCfg.Model != "" {
+				finalizeUpstream := func(_ context.Context, upstream any) (any, error) {
+					req, ok := upstream.(*chat.ChatRequest)
+					if !ok {
+--- a/internal/service/server/server.go
++++ b/internal/service/server/server.go
+@@ -10,6 +10,7 @@ import (
+ 	"time"
+ 
+ 	"moonbridge/internal/config"
++	"moonbridge/internal/extension/codex"
+ 	"moonbridge/internal/extension/plugin"
+ 	"moonbridge/internal/format"
+ 	"moonbridge/internal/logger"
+@@ -230,7 +231,7 @@ func (s *Server) handleModels(writer http.ResponseWriter, request *http.Request)
+ 	}
+ 	models := s.listModels()
+ 	resp := struct {
+-		Models []map[string]any `json:"models"`
++		Models []codex.ModelInfo `json:"models"`
+ 	}{
+ 		Models: models,
+ 	}
+@@ -238,45 +239,15 @@ func (s *Server) handleModels(writer http.ResponseWriter, request *http.Request)
+ 	json.NewEncoder(writer).Encode(resp)
+ }
+ 
+-func (s *Server) listModels() []map[string]any {
+-	var models []map[string]any
+-
+-	// Get provider data from runtime (full config snapshot).
+-	var providerDefs map[string]config.ProviderDef
+-	var routes map[string]config.RouteEntry
+-	if s.runtime != nil {
+-		fullCfg := s.runtime.Current().Config
+-		providerDefs = fullCfg.ProviderDefs
+-		routes = fullCfg.Routes
++func (s *Server) listModels() []codex.ModelInfo {
++	if s.runtime == nil {
++		return []codex.ModelInfo{}
+ 	}
+-
+-	for key, def := range providerDefs {
+-		for modelName := range def.Models {
+-			models = append(models, map[string]any{
+-				"slug":     key + "/" + modelName,
+-				"name":     modelName,
+-				"provider": key,
+-			})
+-		}
+-	}
+-
+-	for alias, route := range routes {
+-		displayName := route.DisplayName
+-		if displayName == "" {
+-			// When no explicit display_name is configured for this route,
+-			// derive from the alias slug (e.g. "gpt-5.4" -> "GPT 5.4").
+-			// This avoids inheriting the underlying model's DisplayName,
+-			// which would cause duplicates when multiple routes point to the same model.
+-			displayName = slugDisplayName(alias)
+-		}
+-		models = append(models, map[string]any{
+-			"slug":     alias,
+-			"name":     displayName,
+-			"provider": route.Provider,
+-			"model":    route.Model,
+-		})
+-	}
+-	return models
++	fullCfg := s.runtime.Current().Config
++	return codex.BuildModelInfosFromConfig(
++		config.ProviderFromGlobalConfig(&fullCfg),
++		config.PluginFromGlobalConfig(&fullCfg),
++	)
+ }
+ 
+ func (s *Server) currentConfig() config.ServerConfig {
+--- a/internal/service/server/server_test.go
++++ b/internal/service/server/server_test.go
+@@ -1105,6 +1105,39 @@ func TestAuthRejectsRequestsWithoutValidToken(t *testing.T) {
+ 	}
+ }
+ 
++func TestModelsCatalogReturnsCodexMetadata(t *testing.T) {
++	cfg := minimalRuntimeConfig()
++	rt := runtime.NewRuntime(cfg, nil, nil)
++	handler := server.New(server.Config{
++		ServerCfg: config.ServerConfig{AuthToken: "my-secret"},
++		Runtime:   rt,
++	})
++
++	recorder := httptest.NewRecorder()
++	request := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
++	request.Header.Set("Authorization", "Bearer my-secret")
++	handler.ServeHTTP(recorder, request)
++	if recorder.Code != http.StatusOK {
++		t.Fatalf("/v1/models status = %d, body = %s", recorder.Code, recorder.Body.String())
++	}
++	var response struct {
++		Models []codex.ModelInfo `json:"models"`
++	}
++	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
++		t.Fatalf("decode models response: %v", err)
++	}
++	if len(response.Models) != 1 {
++		t.Fatalf("models = %d, want 1: %+v", len(response.Models), response.Models)
++	}
++	model := response.Models[0]
++	if model.Slug != "test-model" || model.DisplayName != "Test Model" {
++		t.Fatalf("model identity = %+v", model)
++	}
++	if model.InputModalities == nil || model.SupportedReasoningLevels == nil {
++		t.Fatalf("model is missing required Codex metadata: %+v", model)
++	}
++}
++
+ func TestConsoleStaticBypassesAuthButAPIStillRequiresAuth(t *testing.T) {
+ 	cfg := minimalRuntimeConfig()
+ 	rt := runtime.NewRuntime(cfg, nil, nil)

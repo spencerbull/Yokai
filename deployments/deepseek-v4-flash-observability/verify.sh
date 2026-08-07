@@ -39,7 +39,11 @@ for ((attempt = 1; attempt <= 12; attempt++)); do
       ([.data.activeTargets[] | "\(.labels.job)/\(.labels.host)"] | sort) ==
         ([
           "deepseek-vllm/kyber",
+          "coleman-moonbridge/coleman",
+          "coleman-qwen-vllm/coleman",
+          "coleman-yokai-agent/coleman",
           "node/beskar",
+          "node/coleman",
           "node/kyber",
           "prometheus/beskar",
           "yokai-agent-beskar/beskar",
@@ -55,7 +59,7 @@ for ((attempt = 1; attempt <= 12; attempt++)); do
 done
 
 if [[ "${targets_ready}" != "true" ]]; then
-  echo "Prometheus did not reach the exact six-target healthy inventory." >&2
+  echo "Prometheus did not reach the exact ten-target healthy inventory." >&2
   jq '.data.activeTargets[]? | {scrapePool,scrapeUrl,job:.labels.job,host:.labels.host,health,lastError}' \
     <<<"${targets_json}" >&2 || true
   exit 1
@@ -100,10 +104,28 @@ representative_checks=(
   'yokai_gpu_power_draw_watts{cluster="deepseek-v4-flash"}|2|GPU power metrics'
   'count by (host) (node_network_receive_bytes_total{cluster="deepseek-v4-flash"})|2|network metrics on both hosts'
   'count by (host) (node_disk_read_bytes_total{cluster="deepseek-v4-flash"})|2|disk metrics on both hosts'
+  'node_uname_info{cluster="coleman-vision-gateway",host="coleman"}|1|Coleman host metrics'
+  'yokai_gpu_utilization{cluster="coleman-vision-gateway",host="coleman"}|1|Coleman GPU utilization'
+  'yokai_gpu_power_draw_watts{cluster="coleman-vision-gateway",host="coleman"}|1|Coleman GPU power'
+  'vllm:num_requests_running{cluster="coleman-vision-gateway",host="coleman"}|1|Qwen3-VL scheduler metrics'
+  'probe_success{cluster="coleman-vision-gateway",host="coleman"}|1|Moon Bridge auth-boundary probe'
 )
 for check in "${representative_checks[@]}"; do
   IFS='|' read -r query minimum description <<<"${check}"
   require_series "${query}" "${minimum}" "${description}"
+done
+
+for query in \
+  'sum(up{cluster="coleman-vision-gateway"})' \
+  'sum(probe_success{cluster="coleman-vision-gateway",job="coleman-moonbridge"})'; do
+  result="$(prom_query "${query}")"
+  observed="$(jq -r '.data.result[0].value[1] // "0" | tonumber' <<<"${result}")"
+  expected=4
+  [[ "${query}" == *probe_success* ]] && expected=1
+  if [[ "${observed}" != "${expected}" ]]; then
+    echo "Coleman readiness failed for ${query}; observed ${observed}, expected ${expected}." >&2
+    exit 1
+  fi
 done
 
 for query in \
@@ -142,11 +164,12 @@ fi
 dashboard_json="$(curl -fsS --max-time 10 "${GRAFANA_URL}/api/dashboards/uid/deepseek-v4-flash")"
 if ! jq -e '
     .dashboard.uid == "deepseek-v4-flash" and
-    (.dashboard.panels | length >= 80) and
+    (.dashboard.panels | length >= 96) and
     ([.dashboard.panels[] | select(.title == "07 · Cost compare · local vs comparable APIs")] | length) == 1 and
+    ([.dashboard.panels[] | select(.title == "09 · Coleman vision gateway")] | length) == 1 and
     ([.dashboard.templating.list[] | select(.name == "electricity_rate" and .query == "0.1615")] | length) == 1
   ' <<<"${dashboard_json}" >/dev/null; then
-  echo "Grafana dashboard gate failed; expected UID, >=80 panels, Cost Compare row, and electricity_rate=0.1615." >&2
+  echo "Grafana dashboard gate failed; expected UID, >=96 panels, Cost Compare, Coleman row, and electricity_rate=0.1615." >&2
   jq '{uid:.dashboard.uid,panels:(.dashboard.panels|length),cost_rows:([.dashboard.panels[]|select(.title=="07 · Cost compare · local vs comparable APIs")]|length),electricity_rate:([.dashboard.templating.list[]|select(.name=="electricity_rate")|.query])}' \
     <<<"${dashboard_json}" >&2
   exit 1

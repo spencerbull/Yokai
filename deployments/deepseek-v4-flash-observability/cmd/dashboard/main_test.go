@@ -26,8 +26,8 @@ func TestDashboardIdentityAndBreadth(t *testing.T) {
 	}
 
 	panels := dashboardPanels(t)
-	if len(panels) < 80 {
-		t.Fatalf("dashboard has %d panels, want at least 80", len(panels))
+	if len(panels) < 96 {
+		t.Fatalf("dashboard has %d panels, want at least 96", len(panels))
 	}
 
 	rowTitles := make(map[string]bool)
@@ -56,6 +56,7 @@ func TestDashboardIdentityAndBreadth(t *testing.T) {
 		"06 · GPU, thermals, power, and efficiency",
 		"07 · Cost compare · local vs comparable APIs",
 		"08 · Network, storage, and platform reliability",
+		"09 · Coleman vision gateway",
 	}
 	for _, title := range wantRows {
 		if !rowTitles[title] {
@@ -95,6 +96,9 @@ func TestDashboardQueriesUseLiveMetricSemantics(t *testing.T) {
 		"label_replace",
 		"$__rate_interval",
 		"$__range",
+		`cluster="coleman-vision-gateway"`,
+		`job="coleman-moonbridge"`,
+		"probe_success",
 	}
 	for _, fragment := range wantFragments {
 		if !strings.Contains(joined, fragment) {
@@ -113,6 +117,36 @@ func TestDashboardQueriesUseLiveMetricSemantics(t *testing.T) {
 	} {
 		if strings.Contains(joined, forbidden) {
 			t.Errorf("dashboard query contains forbidden pattern %q", forbidden)
+		}
+	}
+}
+
+func TestColemanMetricsStayOutOfDeepSeekCostAndPowerMath(t *testing.T) {
+	for name, expr := range map[string]string{
+		"selected prompt tokens": selectedPromptTokensExpr(),
+		"selected output tokens": selectedOutputTokensExpr(),
+		"GPU energy":             gpuEnergyExpr("$__range"),
+		"power coverage":         powerCoverageExpr(),
+		"API comparison":         apiCostComparisonExpr(),
+	} {
+		if strings.Contains(expr, "coleman") || strings.Contains(expr, "coleman-vision-gateway") {
+			t.Errorf("%s unexpectedly includes Coleman: %s", name, expr)
+		}
+	}
+
+	encoded, err := json.Marshal(buildDashboard())
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(encoded)
+	for _, required := range []string{
+		"09 · Coleman vision gateway",
+		`cluster=\"coleman-vision-gateway\"`,
+		"these do not enter DeepSeek cost calculations",
+		"not included in the two-node DeepSeek electricity estimate",
+	} {
+		if !strings.Contains(text, required) {
+			t.Errorf("Coleman dashboard section is missing %q", required)
 		}
 	}
 }

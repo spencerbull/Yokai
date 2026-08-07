@@ -5,6 +5,7 @@ readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly REPO_ROOT="$(git -C "${SCRIPT_DIR}" rev-parse --show-toplevel)"
 readonly BESKAR="dell@beskar"
 readonly KYBER="dell@kyber"
+readonly COLEMAN="dell@coleman.trout-rooster.ts.net"
 readonly REMOTE_MONITOR_DIR="/home/dell/.local/share/yokai/monitoring"
 readonly REMOTE_EXPORTER_DIR="/home/dell/.local/share/yokai/fleet-exporters"
 readonly MODEL_CONTAINER="deepseek-v4-flash-vllm-dspark-1"
@@ -27,12 +28,23 @@ model_identity() {
     "docker inspect '${MODEL_CONTAINER}' --format '{{.Id}}|{{.State.StartedAt}}|{{.State.Running}}'"
 }
 
+vision_identity() {
+  tailscale ssh "${COLEMAN}" \
+    "docker inspect deepseek-vision-qwen3-vl deepseek-vision-moonbridge --format '{{.Name}}|{{.Id}}|{{.State.StartedAt}}|{{.State.Running}}'" \
+    | sort
+}
+
 echo "Recording DeepSeek container identities..."
 beskar_model_before="$(model_identity "${BESKAR}")"
 kyber_model_before="$(model_identity "${KYBER}")"
+vision_before="$(vision_identity)"
 
 if [[ "${beskar_model_before}" != *"|true" || "${kyber_model_before}" != *"|true" ]]; then
   echo "Refusing to deploy: both DeepSeek workers must already be running." >&2
+  exit 1
+fi
+if [[ "$(grep -c '|true$' <<<"${vision_before}")" != "2" ]]; then
+  echo "Refusing to deploy: Coleman vision services must already be running." >&2
   exit 1
 fi
 
@@ -51,8 +63,9 @@ cp -R "${SCRIPT_DIR}/prometheus/." "${stage_dir}/prometheus/"
 ) >"${stage_dir}/grafana/dashboards/deepseek-v4-flash.json"
 jq -e '
   .uid == "deepseek-v4-flash" and
-  (.panels | length >= 80) and
+  (.panels | length >= 96) and
   ([.panels[] | select(.title == "07 · Cost compare · local vs comparable APIs")] | length) == 1 and
+  ([.panels[] | select(.title == "09 · Coleman vision gateway")] | length) == 1 and
   ([.templating.list[] | select(.name == "electricity_rate")] | length) == 1
 ' \
   "${stage_dir}/grafana/dashboards/deepseek-v4-flash.json" >/dev/null
@@ -67,6 +80,9 @@ ssh "${SSH_OPTIONS[@]}" "${KYBER}" \
 ssh "${SSH_OPTIONS[@]}" "${KYBER}" \
   'cd /home/dell/src/github.com/spencerbull/dgx-spark-deepseek-v4-flash && set -a && . ./.env && set +a && test -n "${VLLM_API_KEY}" && printf "%s\n" "${VLLM_API_KEY}"' \
   >"${stage_dir}/secrets/vllm-api-key"
+tailscale ssh "${COLEMAN}" \
+  'jq -er .token /home/dell/.config/yokai/agent.json' \
+  >"${stage_dir}/secrets/coleman-agent-token"
 chmod 0700 "${stage_dir}/secrets"
 chmod 0600 "${stage_dir}/secrets/"*
 
@@ -148,8 +164,9 @@ REMOTE_BESKAR
 echo "Verifying the inference workers were not recreated..."
 beskar_model_after="$(model_identity "${BESKAR}")"
 kyber_model_after="$(model_identity "${KYBER}")"
-if [[ "${beskar_model_before}" != "${beskar_model_after}" || "${kyber_model_before}" != "${kyber_model_after}" ]]; then
-  echo "DeepSeek container identity changed unexpectedly; stop and inspect immediately." >&2
+vision_after="$(vision_identity)"
+if [[ "${beskar_model_before}" != "${beskar_model_after}" || "${kyber_model_before}" != "${kyber_model_after}" || "${vision_before}" != "${vision_after}" ]]; then
+  echo "Inference container identity changed unexpectedly; stop and inspect immediately." >&2
   exit 1
 fi
 

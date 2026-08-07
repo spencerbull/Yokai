@@ -1,0 +1,106 @@
+mode: Transform
+
+trace:
+  enabled: false
+
+log:
+  level: info
+  format: json
+
+server:
+  addr: 0.0.0.0:38440
+  auth_token: __GATEWAY_API_KEY__
+  max_sessions: 64
+  session_ttl: 168h
+
+defaults:
+  model: deepseek-v4-flash-0731-vision
+  max_tokens: 65536
+  system_prompt: >-
+    When an Image placeholder is present, call visual_brief exactly once before
+    answering. Call visual_qa at most once, and only when one specific fact
+    essential to the user's task is missing from the brief. Never repeat a
+    visual question. After the visual result or single follow-up, stop calling
+    visual tools, treat their output as evidence, preserve uncertainty, and
+    produce the final answer yourself.
+
+cache:
+  mode: off
+  prompt_caching: false
+
+extensions:
+  deepseek_v4:
+    config:
+      reinforce_instructions: true
+  visual:
+    config:
+      provider: qwen-vision
+      model: qwen3-vl-30b-a3b-instruct-fp8
+      max_rounds: 4
+      max_tokens: 4096
+  metrics:
+    enabled: false
+
+models:
+  deepseek-v4-flash-0731-vision:
+    context_window: 1048576
+    max_output_tokens: 65536
+    display_name: DeepSeek V4 Flash 0731 Vision
+    description: DeepSeek V4 Flash on Kyber and Beskar with local Qwen3-VL vision routing on Coleman.
+    supports_reasoning: true
+    default_reasoning_level: high
+    supported_reasoning_levels:
+      - effort: high
+        description: High reasoning effort
+      - effort: xhigh
+        description: Maximum DeepSeek reasoning effort
+    supports_reasoning_summaries: true
+    default_reasoning_summary: auto
+    input_modalities: [text, image]
+    supports_image_detail_original: false
+    extensions:
+      deepseek_v4:
+        enabled: true
+      visual:
+        enabled: true
+
+  qwen3-vl-30b-a3b-instruct-fp8:
+    context_window: 32768
+    max_output_tokens: 4096
+    display_name: Qwen3-VL 30B A3B Instruct FP8
+    description: Local visual evidence model on Coleman; not exposed as the final coding model.
+    input_modalities: [text, image]
+    supports_image_detail_original: false
+    extensions: {}
+
+providers:
+  deepseek-cluster:
+    protocol: openai-chat
+    base_url: http://kyber.trout-rooster.ts.net:8000/v1
+    api_key: __DEEPSEEK_API_KEY__
+    user_agent: deepseek-vision-gateway/1.0
+    offers:
+      - model: deepseek-v4-flash-0731-vision
+        upstream_name: deepseek-v4-flash-0731
+
+  qwen-vision:
+    protocol: openai-chat
+    base_url: http://qwen3-vl:8000/v1
+    api_key: __QWEN_API_KEY__
+    user_agent: deepseek-vision-gateway/1.0
+    offers:
+      - model: qwen3-vl-30b-a3b-instruct-fp8
+        upstream_name: qwen3-vl-30b-a3b-instruct-fp8
+
+routes:
+  deepseek-v4-flash-0731-vision:
+    model: deepseek-v4-flash-0731-vision
+    provider: deepseek-cluster
+    display_name: DeepSeek V4 Flash 0731 Vision
+    description: Responses-native DeepSeek with local image routing through Coleman.
+    context_window: 1048576
+    extensions:
+      deepseek_v4:
+        enabled: true
+      visual:
+        enabled: true

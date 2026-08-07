@@ -59,6 +59,51 @@ scrape_configs:
           host: kyber
           role: api-rank-0
 
+  - job_name: coleman-yokai-agent
+    scrape_interval: 5s
+    scrape_timeout: 4s
+    metrics_path: /metrics/prometheus
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/secrets/coleman-agent-token
+    static_configs:
+      - targets: [100.104.98.40:7474]
+        labels:
+          cluster: coleman-vision-gateway
+          host: coleman
+          role: vision-gateway
+
+  - job_name: coleman-qwen-vllm
+    scrape_interval: 5s
+    scrape_timeout: 4s
+    metrics_path: /metrics
+    static_configs:
+      - targets: [100.104.98.40:8001]
+        labels:
+          cluster: coleman-vision-gateway
+          host: coleman
+          role: vision-backend
+
+  - job_name: coleman-moonbridge
+    scrape_interval: 10s
+    scrape_timeout: 8s
+    metrics_path: /probe
+    params:
+      module: [moonbridge_auth_boundary]
+    static_configs:
+      - targets: [http://coleman.trout-rooster.ts.net:38440/v1/models]
+        labels:
+          cluster: coleman-vision-gateway
+          host: coleman
+          role: responses-gateway
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox_exporter:9115
+
   - job_name: node
     scrape_interval: 10s
     static_configs:
@@ -72,3 +117,8 @@ scrape_configs:
           cluster: deepseek-v4-flash
           host: kyber
           role: api-rank-0
+      - targets: [100.104.98.40:9100]
+        labels:
+          cluster: coleman-vision-gateway
+          host: coleman
+          role: vision-gateway

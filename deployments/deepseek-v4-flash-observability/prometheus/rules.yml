@@ -89,3 +89,76 @@ groups:
         annotations:
           summary: "GB10 temperature is high on {{ $labels.host }}"
           description: GPU temperature has exceeded 80 C for five minutes.
+
+  - name: coleman-recording
+    interval: 10s
+    rules:
+      - record: coleman:host_memory_used_ratio
+        expr: 1 - (node_memory_MemAvailable_bytes{cluster="coleman-vision-gateway",host="coleman"} / node_memory_MemTotal_bytes{cluster="coleman-vision-gateway",host="coleman"})
+      - record: coleman:unified_memory_used_ratio
+        expr: yokai_gpu_vram_used_bytes{cluster="coleman-vision-gateway",host="coleman"} / clamp_min(yokai_gpu_vram_total_bytes{cluster="coleman-vision-gateway",host="coleman"}, 1)
+      - record: coleman:qwen_output_tokens_per_second:rate5m
+        expr: sum by (cluster, model_name) (rate(vllm:generation_tokens_total{cluster="coleman-vision-gateway"}[5m]))
+
+  - name: coleman-alerts
+    interval: 10s
+    rules:
+      - alert: ColemanMetricsTargetDown
+        expr: up{cluster="coleman-vision-gateway"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.job }} is down on Coleman"
+          description: "Prometheus has been unable to scrape {{ $labels.instance }} for two minutes."
+      - alert: ColemanMetricsTargetMissing
+        expr: |
+          absent(up{cluster="coleman-vision-gateway",job="coleman-yokai-agent",host="coleman"})
+          or absent(up{cluster="coleman-vision-gateway",job="coleman-qwen-vllm",host="coleman"})
+          or absent(up{cluster="coleman-vision-gateway",job="coleman-moonbridge",host="coleman"})
+          or absent(up{cluster="coleman-vision-gateway",job="node",host="coleman"})
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Coleman telemetry target is missing
+          description: An expected Coleman vision-gateway target is absent from Prometheus service discovery.
+      - alert: ColemanGatewayProbeFailed
+        expr: probe_success{cluster="coleman-vision-gateway",job="coleman-moonbridge",host="coleman"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Coleman Responses gateway probe is failing
+          description: Prometheus can reach the blackbox exporter, but Moon Bridge is unreachable or no longer enforcing the expected unauthenticated HTTP 401 boundary.
+      - alert: ColemanVisionQueueBacklog
+        expr: sum(vllm:num_requests_waiting{cluster="coleman-vision-gateway"}) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Coleman vision queue is persistently non-empty
+          description: Qwen3-VL has had queued visual work for ten minutes.
+      - alert: ColemanHostMemoryCritical
+        expr: 100 * coleman:host_memory_used_ratio > 95
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Coleman unified host memory is critical
+          description: Available unified memory has remained below five percent for five minutes.
+      - alert: ColemanOOMKill
+        expr: increase(node_vmstat_oom_kill{cluster="coleman-vision-gateway",host="coleman"}[5m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: OOM kill detected on Coleman
+          description: The host kernel reported an out-of-memory kill in the last five minutes.
+      - alert: ColemanGPUHot
+        expr: yokai_gpu_temperature_celsius{cluster="coleman-vision-gateway",host="coleman"} > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Coleman GB10 temperature is high
+          description: GPU temperature has exceeded 80 C for five minutes.

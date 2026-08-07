@@ -1,0 +1,32 @@
+FROM golang:1.25.5-alpine3.23@sha256:ac09a5f469f307e5da71e766b0bd59c9c49ea460a528cc3e6686513d64a6f1fb AS build
+
+ARG MOONBRIDGE_COMMIT=c9ae8a8ee824c02ce1166893543838f3e414fde0
+ARG MOONBRIDGE_ARCHIVE_SHA256=4ef3fdbe273a2846ce7e034de57e5335e1241899185e11b654c1cde52a0683df
+
+RUN apk add --no-cache ca-certificates patch
+ADD https://github.com/ZhiYi-R/moon-bridge/archive/${MOONBRIDGE_COMMIT}.tar.gz /tmp/moonbridge.tar.gz
+RUN echo "${MOONBRIDGE_ARCHIVE_SHA256}  /tmp/moonbridge.tar.gz" | sha256sum -c - \
+    && mkdir /src \
+    && tar -xzf /tmp/moonbridge.tar.gz -C /src --strip-components=1
+
+COPY moonbridge-codex-vision.patch /tmp/moonbridge-codex-vision.patch
+
+WORKDIR /src
+RUN patch -p1 < /tmp/moonbridge-codex-vision.patch \
+    && go test ./internal/extension/visual ./internal/service/server ./internal/extension/codex ./internal/config \
+    && CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/moonbridge ./cmd/moonbridge
+
+FROM alpine:3.23.2@sha256:865b95f46d98cf867a156fe4a135ad3fe50d2056aa3f25ed31662dff6da4eb62
+
+RUN apk add --no-cache ca-certificates su-exec \
+    && addgroup -S -g 65532 moonbridge \
+    && adduser -S -D -H -u 65532 -G moonbridge moonbridge
+
+COPY --from=build /out/moonbridge /usr/local/bin/moonbridge
+COPY --chown=65532:65532 moonbridge-config.yml.template /opt/moonbridge/config.yml.template
+COPY --chown=65532:65532 moonbridge-entrypoint.sh /usr/local/bin/moonbridge-entrypoint
+
+WORKDIR /run/moonbridge
+EXPOSE 38440
+
+ENTRYPOINT ["/usr/local/bin/moonbridge-entrypoint"]

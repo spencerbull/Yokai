@@ -1,0 +1,99 @@
+name: deepseek-vision
+
+services:
+  qwen3-vl:
+    image: nvcr.io/nvidia/vllm@sha256:95c498a475142c20c989c65e5d223348c09fed83ba17ddf44f117610c0bd3268
+    container_name: deepseek-vision-qwen3-vl
+    restart: unless-stopped
+    entrypoint: ["/bin/bash", "/opt/deepseek-vision/qwen-entrypoint.sh"]
+    gpus: all
+    ipc: host
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    ports:
+      - "100.104.98.40:8001:8000"
+    environment:
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      VLLM_USAGE_STATS_SERVER: ""
+      VLLM_USE_DEEP_GEMM: "0"
+      VLLM_MOE_USE_DEEP_GEMM: "0"
+      VLLM_LOGGING_LEVEL: INFO
+      TMPDIR: /tmp/vllm
+    volumes:
+      - /home/dell/.cache/huggingface/hub/models--Qwen--Qwen3-VL-30B-A3B-Instruct-FP8:/models/qwen3-vl:ro
+      - ./qwen-entrypoint.sh:/opt/deepseek-vision/qwen-entrypoint.sh:ro
+      - qwen_vllm_cache:/root/.cache/vllm
+      - qwen_flashinfer_cache:/root/.cache/flashinfer
+      - qwen_torch_cache:/root/.cache/torch
+    secrets:
+      - qwen-api-key
+    tmpfs:
+      - /tmp/vllm:size=8G,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/health >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 120
+      start_period: 60s
+    networks:
+      - vision
+
+  moonbridge:
+    build:
+      context: .
+      dockerfile: Dockerfile.moonbridge
+      args:
+        MOONBRIDGE_COMMIT: c9ae8a8ee824c02ce1166893543838f3e414fde0
+        MOONBRIDGE_ARCHIVE_SHA256: 4ef3fdbe273a2846ce7e034de57e5335e1241899185e11b654c1cde52a0683df
+    image: deepseek-vision-moonbridge:${MOONBRIDGE_RELEASE_TAG:-c9ae8a8}
+    container_name: deepseek-vision-moonbridge
+    restart: unless-stopped
+    depends_on:
+      qwen3-vl:
+        condition: service_healthy
+    ports:
+      - "100.104.98.40:38440:38440"
+    secrets:
+      - gateway-api-key
+      - deepseek-api-key
+      - qwen-api-key
+    tmpfs:
+      - /run/moonbridge:size=16M,mode=0700,uid=65532,gid=65532
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - DAC_OVERRIDE
+      - SETGID
+      - SETUID
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --header=\"Authorization: Bearer $$(tr -d '\\r\\n' </run/secrets/gateway-api-key)\" -O /dev/null http://127.0.0.1:38440/v1/models"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    networks:
+      - vision
+
+secrets:
+  gateway-api-key:
+    file: /home/dell/.config/deepseek-vision/gateway-api-key
+  deepseek-api-key:
+    file: /home/dell/.config/deepseek-vision/deepseek-api-key
+  qwen-api-key:
+    file: /home/dell/.config/deepseek-vision/qwen-api-key
+
+networks:
+  vision:
+    driver: bridge
+
+volumes:
+  qwen_vllm_cache:
+  qwen_flashinfer_cache:
+  qwen_torch_cache:

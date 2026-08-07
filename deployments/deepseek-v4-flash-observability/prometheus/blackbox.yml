@@ -1,0 +1,9 @@
+modules:
+  moonbridge_auth_boundary:
+    prober: http
+    timeout: 5s
+    http:
+      method: GET
+      valid_status_codes: [401]
+      follow_redirects: false
+      preferred_ip_protocol: ip4
