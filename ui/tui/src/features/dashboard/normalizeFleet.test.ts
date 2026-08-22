@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 
 import type { DeviceRecord, MetricsResponse } from "../../contracts/fleet"
-import { normalizeFleetSnapshot } from "./normalizeFleet"
+import { inferServiceType, normalizeFleetSnapshot } from "./normalizeFleet"
 
 describe("normalizeFleetSnapshot", () => {
   test("sorts alerting services first and enriches device labels", () => {
@@ -127,5 +127,12 @@ describe("normalizeFleetSnapshot", () => {
     expect(snapshot.totals.avgGpuUtilPercent).toBe(50)
     expect(snapshot.devices[0].gpuName).toBe("NVIDIA RTX 4090")
     expect(snapshot.devices[0].gpuUtilPercent).toBe(50)
+  })
+})
+
+describe("inferServiceType", () => {
+  test("classifies SGLang containers by name or image", () => {
+    expect(inferServiceType("yokai-sglang-qwen3-8", "lmsysorg/sglang:latest")).toBe("sglang")
+    expect(inferServiceType("custom-runtime", "lmsysorg/sglang@sha256:abc123")).toBe("sglang")
   })
 })

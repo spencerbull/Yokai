@@ -167,6 +167,9 @@ export function inferServiceType(name: string, image?: string) {
   if (haystack.includes("vllm")) {
     return "vllm"
   }
+  if (haystack.includes("sglang")) {
+    return "sglang"
+  }
   if (haystack.includes("llama")) {
     return "llamacpp"
   }
