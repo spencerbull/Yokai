@@ -62,9 +62,9 @@ func init() {
 			Arch:            ArchBlackwell,
 		},
 
-		// Upstream-validated on a single RTX PRO 6000 Blackwell 96 GB. This
-		// remains a sibling of the production DSpark BKC so operators can
-		// benchmark both speculative decoders without losing the rollback path.
+		// MiaAI-Lab high-throughput profile for a single RTX PRO 6000
+		// Blackwell 96 GB, adapted to the newer pinned upstream image so the
+		// repository's DFlash2 backport overlay is not required.
 		Config{
 			ID:       "qwen3-8-27b-nvfp4-sglang-dflash2",
 			Name:     "Qwen3.8 27B NVFP4 + DFlash2 (SGLang)",
@@ -79,15 +79,13 @@ func init() {
 				"--served-model-name Qwen3.8-27B",
 				"--tp-size 1",
 				"--context-length 262144",
-				"--mem-fraction-static 0.85",
-				"--max-running-requests 3",
-				"--max-mamba-cache-size 12",
-				"--mamba-radix-cache-strategy extra_buffer_lazy",
-				"--mamba-ssm-dtype bfloat16",
+				"--mem-fraction-static 0.90",
+				"--max-running-requests 8",
+				"--cuda-graph-max-bs-decode 8",
 				"--kv-cache-dtype fp8_e4m3",
 				"--attention-backend flashinfer",
-				"--chunked-prefill-size 2048",
-				"--cuda-graph-max-bs 3",
+				"--chunked-prefill-size 4096",
+				"--max-prefill-tokens 4096",
 				"--reasoning-parser qwen3",
 				"--tool-call-parser qwen3_coder",
 				`--default-chat-template-kwargs {"enable_thinking":false}`,
@@ -95,6 +93,10 @@ func init() {
 				"--speculative-draft-model-path incoai/Qwen3.8-27B-DFlash2",
 				"--speculative-draft-model-revision dedf8df68adfb1afeaf7b7480c0a0243108177b4",
 				"--speculative-num-draft-tokens 8",
+				"--speculative-draft-model-quantization unquant",
+				"--speculative-draft-attention-backend flashinfer",
+				"--min-free-slots-delay 1",
+				"--sampling-defaults model",
 				"--enable-metrics",
 			}, " "),
 			Volumes: hfMountDefault,
@@ -102,13 +104,13 @@ func init() {
 				IPCMode: "host",
 				ShmSize: "32g",
 			},
-			Description: "Qwen3.8 27B NVFP4 with DFlash2 block-diffusion speculative decoding on one RTX PRO 6000 Blackwell, retaining the Finn 262K/3-request capacity policy.",
-			Source:      "SGLang Qwen3.8-27B cookbook + DFlash2 model card (2026-08-22)",
+			Description: "Qwen3.8 27B NVFP4 with DFlash2 block-diffusion speculative decoding on one RTX PRO 6000 Blackwell, tuned for aggregate throughput across up to eight requests.",
+			Source:      "MiaAI-Lab RTX PRO 6000 blueprint c17240548287 + SGLang cookbook + DFlash2 model card (2026-08-22)",
 			Notes: []string{
-				"Pins the multi-arch SGLang DFlash2 image, BF16-lm_head target revision, and trained DFlash2 drafter revision.",
+				"Adapts MiaAI-Lab's DFlash2 blueprint to the pinned upstream DFlash2 image and model revisions, eliminating its source-overlay mount.",
 				"Upstream RTX PRO 6000 validation for the high-throughput/bfloat16 profile reports 7.84 ms TPOT, 127.6 output tok/s, and 3.20-token acceptance at concurrency one.",
-				"Finn validation with 1,024-token short-prompt generations measured 163.1 tok/s solo and 385.4 tok/s aggregate at three-way concurrency with about 3.9-token acceptance; DSpark remains the preferred default on Finn.",
-				"Keeps the production 262,144-token context, FP8 KV cache, and three-active-request limit for direct comparison with the DSpark BKC.",
+				"Finn validation with 1,024-token short-prompt generations measured 130.6-151.4 tok/s solo and 798.3 tok/s aggregate at eight-way concurrency; DSpark remains the preferred low-concurrency default on Finn.",
+				"The current image auto-allocated 71 target Mamba slots and a 954,636-token FP8 KV pool: one request can use the full 262,144-token context, but eight simultaneous requests share that pool.",
 			},
 			TargetDevices:   []string{DeviceRTXPRO6000},
 			MinVRAMGBPerGPU: 90,

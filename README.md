@@ -367,7 +367,7 @@ The BKC catalog is a library of pre-validated deploy recipes. Each entry pins th
 - **Vision-language** — Qwen2.5-VL-7B/72B, Qwen3-VL-235B (BF16 + FP8), InternVL3.5-8B, ERNIE-4.5-VL-28B / VL-424B, PaddleOCR-VL, DeepSeek-OCR.
 - **Small / edge-friendly** — Qwen3-0.6B / 1.7B / 4B / 8B, Qwen3Guard-Gen-0.6B, Phi-4, Gemma 3 2B/4B/12B, validated for RTX 4090, RTX 5090, L40S, GB10, and Jetson Thor.
 - **AMD CDNA4** — `amd/gpt-oss-120b-w-mxfp4-a-fp8` tuned for MI355X with the ROCm vLLM image.
-- **SGLang speculative decoding** — sibling Qwen3.8 27B NVFP4 recipes for DSpark and DFlash2 on RTX PRO 6000, with pinned target/drafter/image revisions, 262K context, three active requests, FlashInfer, FP8 KV cache, and native metrics.
+- **SGLang speculative decoding** — sibling Qwen3.8 27B NVFP4 recipes for DSpark and DFlash2 on RTX PRO 6000, with pinned target/drafter/image revisions, 262K context, FlashInfer, FP8 KV cache, and native metrics. DSpark preserves Finn's three-request full-context capacity policy; the MiaAI-Lab-derived DFlash2 profile favors aggregate throughput across up to eight requests sharing its KV pool.
 
 ### Device-aware selection
 

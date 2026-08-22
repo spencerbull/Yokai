@@ -109,15 +109,26 @@ func TestLookupAllFindsQwen38SGLangSpeculativeVariants(t *testing.T) {
 	for _, want := range []string{
 		"--revision 91cea059647696fd83964e43d57db122ff745993",
 		"--context-length 262144",
-		"--max-running-requests 3",
-		"--max-mamba-cache-size 12",
+		"--mem-fraction-static 0.90",
+		"--max-running-requests 8",
+		"--cuda-graph-max-bs-decode 8",
+		"--chunked-prefill-size 4096",
+		"--max-prefill-tokens 4096",
 		"--speculative-algorithm DFLASH",
 		"--speculative-draft-model-path incoai/Qwen3.8-27B-DFlash2",
 		"--speculative-draft-model-revision dedf8df68adfb1afeaf7b7480c0a0243108177b4",
 		"--speculative-num-draft-tokens 8",
+		"--speculative-draft-model-quantization unquant",
+		"--speculative-draft-attention-backend flashinfer",
+		"--min-free-slots-delay 1",
 	} {
 		if !strings.Contains(cfg.ExtraArgs, want) {
 			t.Fatalf("expected %q in extra args, got %q", want, cfg.ExtraArgs)
+		}
+	}
+	for _, unwanted := range []string{"--max-mamba-cache-size", "--mamba-radix-cache-strategy", "--mamba-ssm-dtype"} {
+		if strings.Contains(cfg.ExtraArgs, unwanted) {
+			t.Fatalf("did not expect fixed Mamba override %q in the auto-sized DFlash2 profile: %q", unwanted, cfg.ExtraArgs)
 		}
 	}
 }
