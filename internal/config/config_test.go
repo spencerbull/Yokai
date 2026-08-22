@@ -35,6 +35,9 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Preferences.DefaultVLLMImage != "vllm/vllm-openai:latest" {
 		t.Errorf("expected vllm image 'vllm/vllm-openai:latest', got '%s'", cfg.Preferences.DefaultVLLMImage)
 	}
+	if cfg.Preferences.DefaultSGLangImage != "lmsysorg/sglang:latest" {
+		t.Errorf("expected SGLang image 'lmsysorg/sglang:latest', got '%s'", cfg.Preferences.DefaultSGLangImage)
+	}
 	if cfg.Preferences.DefaultLlamaImage != "ghcr.io/ggml-org/llama.cpp:server-cuda" {
 		t.Errorf("expected llama image 'ghcr.io/ggml-org/llama.cpp:server-cuda', got '%s'", cfg.Preferences.DefaultLlamaImage)
 	}
@@ -118,10 +121,11 @@ func TestSaveAndLoad(t *testing.T) {
 			},
 		},
 		Preferences: Preferences{
-			Theme:             "dark",
-			DefaultVLLMImage:  "custom/vllm:latest",
-			DefaultLlamaImage: "custom/llama:latest",
-			DefaultComfyImage: "custom/comfy:latest",
+			Theme:              "dark",
+			DefaultVLLMImage:   "custom/vllm:latest",
+			DefaultSGLangImage: "custom/sglang:latest",
+			DefaultLlamaImage:  "custom/llama:latest",
+			DefaultComfyImage:  "custom/comfy:latest",
 		},
 	}
 

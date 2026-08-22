@@ -84,12 +84,14 @@ func runConfigSet(args []string) {
 		cfg.Preferences.Theme = value
 	case "preferences.default_vllm_image":
 		cfg.Preferences.DefaultVLLMImage = value
+	case "preferences.default_sglang_image":
+		cfg.Preferences.DefaultSGLangImage = value
 	case "preferences.default_llama_image":
 		cfg.Preferences.DefaultLlamaImage = value
 	case "preferences.default_comfyui_image":
 		cfg.Preferences.DefaultComfyImage = value
 	default:
-		exitError(fmt.Sprintf("unknown config key: %s\nValid keys: hf_token, daemon.listen, daemon.metrics_poll_interval, daemon.reconnect_interval, preferences.theme, preferences.default_vllm_image, preferences.default_llama_image, preferences.default_comfyui_image", key))
+		exitError(fmt.Sprintf("unknown config key: %s\nValid keys: hf_token, daemon.listen, daemon.metrics_poll_interval, daemon.reconnect_interval, preferences.theme, preferences.default_vllm_image, preferences.default_sglang_image, preferences.default_llama_image, preferences.default_comfyui_image", key))
 	}
 
 	if err := config.Save(cfg); err != nil {

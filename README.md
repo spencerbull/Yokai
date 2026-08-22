@@ -7,7 +7,7 @@
 
 **One binary to deploy, monitor, and manage LLM inference across all your GPUs.**
 
-yokai is a terminal-based fleet manager for running **vLLM**, **llama.cpp**, and **ComfyUI** on any number of GPU machines. Connect your devices, deploy curated Best-Known-Configs (or roll your own through a guided wizard), and watch everything on a btop-style dashboard -- all from a single binary with zero dependencies on the target machines.
+yokai is a terminal-based fleet manager for running **vLLM**, **SGLang**, **llama.cpp**, and **ComfyUI** on any number of GPU machines. Connect your devices, deploy curated Best-Known-Configs (or roll your own through a guided wizard), and watch everything on a btop-style dashboard -- all from a single binary with zero dependencies on the target machines.
 
 ```
  ┌───────────┐ ╔══════════════════╗ ┌──────────────┐ ┌─────────────┐ ┌───────────────┐
@@ -64,7 +64,7 @@ yokai solves all of this with a single binary. Install it, point it at your mach
 - **Secure by default** -- auto-generated bearer tokens for agent authentication, SSH key resolution with agent/key/password fallback
 
 ### Workload Deployment
-- **Best Known Configs (BKC)** -- pick from a built-in catalog of pre-validated vLLM and llama.cpp deploys grouped by vendor (NVIDIA, OpenAI, Meta/Llama, Google, Mistral, Qwen, DeepSeek, GLM, Moonshot, Microsoft, and more) and filtered to the GPUs each device actually has
+- **Best Known Configs (BKC)** -- pick from a built-in catalog of pre-validated vLLM, SGLang, and llama.cpp deploys grouped by vendor (NVIDIA, OpenAI, Meta/Llama, Google, Mistral, Qwen, DeepSeek, GLM, Moonshot, Microsoft, and more) and filtered to the GPUs each device actually has
 - **Guided deploy wizard** -- pick workload type, target device, Docker image, model, and runtime config when you want to deviate from the catalog
 - **HuggingFace integration** -- search models directly, browse GGUF quantizations, auto-download during deployment
 - **VRAM estimator** -- `hf-mem`-backed memory estimate for vLLM weights + KV cache before you commit to a deploy
@@ -248,9 +248,9 @@ Your Machine                              GPU Device(s)
 │         ▲            │                  │                      │
 │         │ launches   │                  │  Docker containers   │
 │         ▼            │   SSH tunnel     │  ├── vLLM :8000      │
-│  yokai daemon        │◄═══════════════► │  ├── llama.cpp :8080 │
-│  ├── SSH Tunnels     │                  │  └── ComfyUI :8188   │
-│  ├── Metrics Agg.    │                  │                      │
+│  yokai daemon        │◄═══════════════► │  ├── SGLang :30000   │
+│  ├── SSH Tunnels     │                  │  ├── llama.cpp :8080 │
+│  ├── Metrics Agg.    │                  │  └── ComfyUI :8188   │
 │  ├── BKC Catalog     │                  │  Monitoring stack    │
 │  ├── HF + hf-mem     │                  │  ├── Prometheus      │
 │  └── Tool Configs    │                  │  ├── Grafana         │
@@ -317,6 +317,7 @@ All state lives in `~/.config/yokai/config.json`. Copy this file to another mach
   "preferences": {
     "theme": "tokyonight",
     "default_vllm_image": "vllm/vllm-openai:latest",
+    "default_sglang_image": "lmsysorg/sglang:latest",
     "default_llama_image": "ghcr.io/ggml-org/llama.cpp:server-cuda",
     "default_comfyui_image": "yanwk/comfyui-boot:latest"
   }
@@ -329,11 +330,12 @@ All state lives in `~/.config/yokai/config.json`. Copy this file to another mach
 
 The BKC catalog is a library of pre-validated deploy recipes. Each entry pins the Docker image, tensor-parallel size, quantization flags, GPU memory utilization, chat template, tool-call parser, and any runtime options (`--ipc=host`, `--shm-size`, `ulimit`s) needed for a given model on a given GPU. The deploy wizard matches your model against the catalog, filters recipes by the target device's VRAM and GPU count, and offers one-click apply.
 
-**87 vLLM configs across 83 models from 23 publishers** (as of this commit). Entries are grouped by publisher and live in `internal/bkc/catalog_*.go`:
+**87 vLLM configs plus one production-validated SGLang/DSpark config across 84 models from 24 publishers** (as of this commit). Entries are grouped by publisher and live in `internal/bkc/catalog_*.go`:
 
-| Publisher | Unique models | vLLM configs | Catalog file |
+| Publisher | Unique models | Serving configs | Catalog file |
 |---|---:|---:|---|
 | `Qwen` | 20 | 20 | [`catalog_qwen.go`](internal/bkc/catalog_qwen.go) |
+| `RadixArk` | 1 | 1 SGLang | [`catalog_qwen.go`](internal/bkc/catalog_qwen.go) |
 | `nvidia` | 13 | 15 | [`catalog_nvidia.go`](internal/bkc/catalog_nvidia.go), [`catalog_google.go`](internal/bkc/catalog_google.go), [`catalog_llama.go`](internal/bkc/catalog_llama.go), [`catalog_moonshotai.go`](internal/bkc/catalog_moonshotai.go), [`catalog_qwen.go`](internal/bkc/catalog_qwen.go) |
 | `zai-org` (GLM) | 7 | 7 | [`catalog_glm.go`](internal/bkc/catalog_glm.go) |
 | `deepseek-ai` | 6 | 6 | [`catalog_deepseek.go`](internal/bkc/catalog_deepseek.go) |
@@ -356,7 +358,7 @@ The BKC catalog is a library of pre-validated deploy recipes. Each entry pins th
 | `inclusionAI` | 1 | 1 | [`catalog_others.go`](internal/bkc/catalog_others.go) |
 | `jinaai` | 1 | 1 | [`catalog_others.go`](internal/bkc/catalog_others.go) |
 | `stepfun-ai` | 1 | 1 | [`catalog_others.go`](internal/bkc/catalog_others.go) |
-| **Total** | **83** | **87** | |
+| **Total** | **84** | **88** | |
 
 ### Notable recipes
 
@@ -365,6 +367,7 @@ The BKC catalog is a library of pre-validated deploy recipes. Each entry pins th
 - **Vision-language** — Qwen2.5-VL-7B/72B, Qwen3-VL-235B (BF16 + FP8), InternVL3.5-8B, ERNIE-4.5-VL-28B / VL-424B, PaddleOCR-VL, DeepSeek-OCR.
 - **Small / edge-friendly** — Qwen3-0.6B / 1.7B / 4B / 8B, Qwen3Guard-Gen-0.6B, Phi-4, Gemma 3 2B/4B/12B, validated for RTX 4090, RTX 5090, L40S, GB10, and Jetson Thor.
 - **AMD CDNA4** — `amd/gpt-oss-120b-w-mxfp4-a-fp8` tuned for MI355X with the ROCm vLLM image.
+- **SGLang + DSpark** — pinned Qwen3.8 27B NVFP4 recipe validated on RTX PRO 6000 with 262K context, three active requests, FlashInfer, FP8 KV cache, and native metrics.
 
 ### Device-aware selection
 

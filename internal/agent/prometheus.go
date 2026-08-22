@@ -193,6 +193,8 @@ func inferenceBackend(container Container) string {
 	switch {
 	case isVLLMImage(container.Image):
 		return "vllm"
+	case isSGLangImage(container.Image):
+		return "sglang"
 	case isLlamaCppImage(container.Image):
 		return "llamacpp"
 	case isComfyUIImage(container.Image):

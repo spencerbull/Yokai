@@ -29,18 +29,18 @@ type DaemonConfig struct {
 }
 
 type Device struct {
-	ID             string   `json:"id"`
-	Label          string   `json:"label,omitempty"`
-	Host           string   `json:"host"`
-	SSHUser        string   `json:"ssh_user,omitempty"`
-	SSHKey         string   `json:"ssh_key,omitempty"`
-	SSHPort        int      `json:"ssh_port,omitempty"` // default 22
-	ConnectionType string   `json:"connection_type"`    // "tailscale", "local", "manual"
-	AgentPort      int      `json:"agent_port"`
-	AgentToken     string   `json:"agent_token,omitempty"`
-	MonitoringInstalled bool `json:"monitoring_installed,omitempty"`
-	GPUType        string   `json:"gpu_type,omitempty"` // "nvidia", "amd", "apple", ""
-	Tags           []string `json:"tags,omitempty"`
+	ID                  string   `json:"id"`
+	Label               string   `json:"label,omitempty"`
+	Host                string   `json:"host"`
+	SSHUser             string   `json:"ssh_user,omitempty"`
+	SSHKey              string   `json:"ssh_key,omitempty"`
+	SSHPort             int      `json:"ssh_port,omitempty"` // default 22
+	ConnectionType      string   `json:"connection_type"`    // "tailscale", "local", "manual"
+	AgentPort           int      `json:"agent_port"`
+	AgentToken          string   `json:"agent_token,omitempty"`
+	MonitoringInstalled bool     `json:"monitoring_installed,omitempty"`
+	GPUType             string   `json:"gpu_type,omitempty"` // "nvidia", "amd", "apple", ""
+	Tags                []string `json:"tags,omitempty"`
 }
 
 // SSHPortOrDefault returns the device's SSH port, defaulting to 22.
@@ -52,21 +52,21 @@ func (d Device) SSHPortOrDefault() int {
 }
 
 type Service struct {
-	ID           string            `json:"id"`
-	DeviceID     string            `json:"device_id"`
-	Type         string            `json:"type"` // "vllm", "llamacpp", "comfyui"
-	Image        string            `json:"image"`
-	Model        string            `json:"model,omitempty"`
-	GGUFVariant  string            `json:"gguf_variant,omitempty"`
-	GGUFFiles    []string          `json:"gguf_files,omitempty"`
-	Port         int               `json:"port"`
-	GPUIDs       string            `json:"gpu_ids,omitempty"`
-	ExtraArgs    string            `json:"extra_args,omitempty"`
-	Env          map[string]string `json:"env,omitempty"`
-	Volumes      map[string]string `json:"volumes,omitempty"`
-	Plugins      []string          `json:"plugins,omitempty"`
-	Runtime      RuntimeOptions    `json:"runtime,omitempty"`
-	ContainerID  string            `json:"container_id,omitempty"`
+	ID          string            `json:"id"`
+	DeviceID    string            `json:"device_id"`
+	Type        string            `json:"type"` // "vllm", "sglang", "llamacpp", "comfyui"
+	Image       string            `json:"image"`
+	Model       string            `json:"model,omitempty"`
+	GGUFVariant string            `json:"gguf_variant,omitempty"`
+	GGUFFiles   []string          `json:"gguf_files,omitempty"`
+	Port        int               `json:"port"`
+	GPUIDs      string            `json:"gpu_ids,omitempty"`
+	ExtraArgs   string            `json:"extra_args,omitempty"`
+	Env         map[string]string `json:"env,omitempty"`
+	Volumes     map[string]string `json:"volumes,omitempty"`
+	Plugins     []string          `json:"plugins,omitempty"`
+	Runtime     RuntimeOptions    `json:"runtime,omitempty"`
+	ContainerID string            `json:"container_id,omitempty"`
 }
 
 type RuntimeOptions struct {
@@ -76,10 +76,11 @@ type RuntimeOptions struct {
 }
 
 type Preferences struct {
-	Theme             string `json:"theme"`
-	DefaultVLLMImage  string `json:"default_vllm_image"`
-	DefaultLlamaImage string `json:"default_llama_image"`
-	DefaultComfyImage string `json:"default_comfyui_image"`
+	Theme              string `json:"theme"`
+	DefaultVLLMImage   string `json:"default_vllm_image"`
+	DefaultSGLangImage string `json:"default_sglang_image"`
+	DefaultLlamaImage  string `json:"default_llama_image"`
+	DefaultComfyImage  string `json:"default_comfyui_image"`
 }
 
 // DefaultConfig returns a config with sensible defaults.
@@ -94,10 +95,11 @@ func DefaultConfig() *Config {
 		Devices:  []Device{},
 		Services: []Service{},
 		Preferences: Preferences{
-			Theme:             "tokyonight",
-			DefaultVLLMImage:  "vllm/vllm-openai:latest",
-			DefaultLlamaImage: "ghcr.io/ggml-org/llama.cpp:server-cuda",
-			DefaultComfyImage: "spencerbull/yokai-comfyui:latest",
+			Theme:              "tokyonight",
+			DefaultVLLMImage:   "vllm/vllm-openai:latest",
+			DefaultSGLangImage: "lmsysorg/sglang:latest",
+			DefaultLlamaImage:  "ghcr.io/ggml-org/llama.cpp:server-cuda",
+			DefaultComfyImage:  "spencerbull/yokai-comfyui:latest",
 		},
 	}
 }
@@ -161,6 +163,9 @@ func Load() (*Config, error) {
 	}
 	if cfg.Preferences.DefaultVLLMImage == "" {
 		cfg.Preferences.DefaultVLLMImage = "vllm/vllm-openai:latest"
+	}
+	if cfg.Preferences.DefaultSGLangImage == "" {
+		cfg.Preferences.DefaultSGLangImage = "lmsysorg/sglang:latest"
 	}
 	if cfg.Preferences.DefaultLlamaImage == "" {
 		cfg.Preferences.DefaultLlamaImage = "ghcr.io/ggml-org/llama.cpp:server-cuda"

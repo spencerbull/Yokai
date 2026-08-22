@@ -28,13 +28,14 @@ type KeyLike = {
 }
 
 const STEPS: DeployStep[] = ["workload", "device", "image", "model", "variant", "config", "review"]
-const WORKLOADS: WorkloadType[] = ["vllm", "llamacpp", "comfyui"]
+const WORKLOADS: WorkloadType[] = ["vllm", "sglang", "llamacpp", "comfyui"]
 
 const EMPTY_SETTINGS: SettingsDocument = {
   hf: { configured: false, source: "none" },
   preferences: {
     theme: "auto",
     default_vllm_image: "",
+    default_sglang_image: "",
     default_llama_image: "",
     default_comfyui_image: "",
   },
@@ -149,7 +150,7 @@ export function useDeployController(active: boolean, onComplete: () => void) {
     if (!active) {
       return
     }
-    if (form.workload !== "vllm" && form.workload !== "llamacpp") {
+    if (form.workload !== "vllm" && form.workload !== "sglang" && form.workload !== "llamacpp") {
       setBkc(null)
       return
     }
@@ -181,7 +182,7 @@ export function useDeployController(active: boolean, onComplete: () => void) {
     if (!active) {
       return
     }
-    if (form.workload === "comfyui") {
+    if (form.workload === "comfyui" || form.workload === "sglang") {
       setGGUFVariants([])
       setGGUFError(undefined)
       setGGUFLoading(false)
@@ -250,7 +251,7 @@ export function useDeployController(active: boolean, onComplete: () => void) {
   }
 
   function advanceFromModel() {
-    if (form.workload === "comfyui") {
+    if (form.workload === "comfyui" || form.workload === "sglang") {
       setStep("config")
       setCursor(0)
       return
@@ -348,7 +349,7 @@ export function useDeployController(active: boolean, onComplete: () => void) {
       setForm((current) => ({ ...current, model: modelId, ggufVariant: "", ggufFiles: [] }))
       setSearchError(undefined)
       setModelResults([])
-      if (form.workload === "comfyui") {
+      if (form.workload === "comfyui" || form.workload === "sglang") {
         setStep("config")
         setCursor(0)
         return
@@ -395,6 +396,7 @@ export function useDeployController(active: boolean, onComplete: () => void) {
       case "1":
       case "2":
       case "3":
+      case "4":
         selectWorkloadByIndex(Number(key.name) - 1)
         return true
       case "return":
@@ -742,6 +744,17 @@ function applyWorkloadDefaults(form: DeployForm, settings: SettingsDocument, wor
         model: "",
         name: defaultName(workload, "comfyui"),
         port: "8188",
+        extraArgs: workload === form.workload ? form.extraArgs : "",
+        ggufVariant: "",
+        ggufFiles: [],
+        workload,
+      }
+    case "sglang":
+      return {
+        ...form,
+        image: form.workload === workload && form.image ? form.image : settings.preferences.default_sglang_image,
+        name: defaultName(workload, form.model),
+        port: "30000",
         extraArgs: workload === form.workload ? form.extraArgs : "",
         ggufVariant: "",
         ggufFiles: [],

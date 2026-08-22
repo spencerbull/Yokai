@@ -12,6 +12,7 @@ type Workload string
 
 const (
 	WorkloadVLLM     Workload = "vllm"
+	WorkloadSGLang   Workload = "sglang"
 	WorkloadLlamaCpp Workload = "llamacpp"
 )
 
@@ -310,6 +311,7 @@ const (
 	imageVLLMGemma4    = "vllm/vllm-openai:gemma4"
 	imageVLLMGemma4Cu  = "vllm/vllm-openai:gemma4-cu130"
 	imageVLLMROCmGemma = "vllm/vllm-openai-rocm:gemma4"
+	imageSGLangQwen38  = "lmsysorg/sglang@sha256:506525a5907ea22c9d445afb7c03603959b912de034d86915cf17da814f1a124"
 )
 
 // hfMountDefault is the default Hugging Face cache mount shared by every

@@ -55,6 +55,42 @@ func TestLookupFindsQwen36NVFP4(t *testing.T) {
 	}
 }
 
+func TestLookupFindsQwen38SGLangDSpark(t *testing.T) {
+	t.Parallel()
+
+	cfg, ok := Lookup(WorkloadSGLang, "RadixArk/Qwen3.8-27B-NVFP4")
+	if !ok {
+		t.Fatal("expected matching SGLang BKC")
+	}
+	if cfg.ID != "qwen3-8-27b-nvfp4-sglang-dspark" {
+		t.Fatalf("unexpected BKC %q", cfg.ID)
+	}
+	if cfg.Port != "30000" || cfg.MinGPUCount != 1 || cfg.MinVRAMGBPerGPU != 90 {
+		t.Fatalf("unexpected capacity metadata: %#v", cfg)
+	}
+	if cfg.Image != imageSGLangQwen38 {
+		t.Fatalf("expected pinned SGLang image, got %q", cfg.Image)
+	}
+	for _, want := range []string{
+		"sglang serve",
+		"--revision 554ebba9b5f1b79dc11246341960360e6ef05ef4",
+		"--context-length 262144",
+		"--max-running-requests 3",
+		"--kv-cache-dtype fp8_e4m3",
+		"--speculative-algorithm DSPARK",
+		"--speculative-draft-model-path RadixArk/Qwen3.8-27B-DSpark",
+		"--speculative-draft-model-revision 85ef153be924f17ce4bf62726954eeaa4a73e854",
+		"--enable-metrics",
+	} {
+		if !strings.Contains(cfg.ExtraArgs, want) {
+			t.Fatalf("expected %q in extra args, got %q", want, cfg.ExtraArgs)
+		}
+	}
+	if _, ok := Lookup(WorkloadVLLM, cfg.ModelID); ok {
+		t.Fatal("did not expect SGLang BKC to match the vLLM workload")
+	}
+}
+
 func TestLookupFindsQwen36TextNVFP4MTP(t *testing.T) {
 	t.Parallel()
 

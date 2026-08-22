@@ -20,7 +20,9 @@ import (
 	"github.com/spencerbull/yokai/internal/plugins"
 )
 
-// VLLMMetrics holds vLLM inference throughput metrics.
+// VLLMMetrics holds OpenAI-compatible inference throughput metrics. The JSON
+// field name is retained for API compatibility, but values may come from vLLM
+// or SGLang.
 type VLLMMetrics struct {
 	Model                    string             `json:"model,omitempty"`
 	GenerationTokPerSec      float64            `json:"generation_tok_per_s"`
@@ -144,8 +146,8 @@ func listContainers() ([]Container, error) {
 			Uptime:  uptime,
 		}
 
-		// Scrape vLLM metrics for vLLM containers
-		if isVLLMImage(container.Image) && container.Status == "running" {
+		// Scrape native metrics for supported inference containers.
+		if (isVLLMImage(container.Image) || isSGLangImage(container.Image)) && container.Status == "running" {
 			for _, ext := range container.Ports {
 				if ext != "" {
 					if vm, err := scrapeVLLMMetrics(ext); err == nil {
@@ -240,6 +242,18 @@ func runContainer(req ContainerRequest) (*ContainerResponse, error) {
 		req.Ports = normalizeServicePorts(req.Ports, "8000")
 		req.ExtraArgs = withHostArg(req.ExtraArgs, "--host", "0.0.0.0")
 		req.ExtraArgs = withVLLMToolCallArgs(req.ExtraArgs, req.Model)
+	}
+
+	if isSGLangImage(req.Image) {
+		if req.Model != "" {
+			if req.Volumes == nil {
+				req.Volumes = make(map[string]string)
+			}
+			ensureHFCacheVolume(req.Volumes)
+		}
+		req.ExtraArgs = withSGLangServeArgs(req.ExtraArgs, req.Model)
+		req.Ports = normalizeServicePorts(req.Ports, "30000")
+		req.ExtraArgs = withHostArg(req.ExtraArgs, "--host", "0.0.0.0")
 	}
 
 	if isComfyUIImage(req.Image) {
@@ -372,6 +386,10 @@ func sanitizeName(name string) string {
 
 func isVLLMImage(image string) bool {
 	return strings.Contains(strings.ToLower(image), "vllm")
+}
+
+func isSGLangImage(image string) bool {
+	return strings.Contains(strings.ToLower(image), "sglang")
 }
 
 func isLlamaCppImage(image string) bool {
@@ -510,6 +528,36 @@ func withVLLMModelArg(extraArgs, model string) string {
 	return fmt.Sprintf("--model %s %s", model, extraArgs)
 }
 
+// withSGLangServeArgs makes the stock lmsysorg/sglang image launch its OpenAI
+// compatible server and injects the selected Hugging Face model unless the
+// caller already supplied --model-path/--model.
+func withSGLangServeArgs(extraArgs, model string) string {
+	tokens := strings.Fields(extraArgs)
+	hasServeCommand := len(tokens) >= 2 && tokens[0] == "sglang" && tokens[1] == "serve"
+	hasModel := false
+	for _, token := range tokens {
+		if hasFlag(token, "--model-path") || hasFlag(token, "--model") {
+			hasModel = true
+			break
+		}
+	}
+
+	args := strings.TrimSpace(extraArgs)
+	if !hasServeCommand {
+		args = appendArg("sglang serve", args)
+	}
+	if model == "" || hasModel {
+		return args
+	}
+
+	tokens = strings.Fields(args)
+	if len(tokens) >= 2 && tokens[0] == "sglang" && tokens[1] == "serve" {
+		rest := strings.Join(tokens[2:], " ")
+		return appendArg(fmt.Sprintf("sglang serve --model-path %s", model), rest)
+	}
+	return appendArg(args, "--model-path "+model)
+}
+
 func withLlamaModelArg(extraArgs, model string) string {
 	if model == "" {
 		return extraArgs
@@ -634,7 +682,7 @@ func imageSupportsPlatform(manifestJSON []byte, hostOS, hostArch string) (bool, 
 }
 
 // probeContainerHealth checks if a container's service is responding.
-// It tries the first external port it finds. For vLLM/llama.cpp it hits /health,
+// It tries the first external port it finds. For inference servers it hits /health,
 // for other services it does a simple TCP dial.
 // Returns "healthy", "unhealthy", or "starting".
 func probeContainerHealth(ports map[string]string, image string) string {
@@ -656,7 +704,7 @@ func probeContainerHealth(ports map[string]string, image string) string {
 
 	// For known inference servers, try their /health endpoint
 	imageLower := strings.ToLower(image)
-	if strings.Contains(imageLower, "vllm") || strings.Contains(imageLower, "llama") {
+	if strings.Contains(imageLower, "vllm") || strings.Contains(imageLower, "sglang") || strings.Contains(imageLower, "llama") {
 		client := &http.Client{Timeout: 2 * time.Second}
 		resp, err := client.Get("http://" + addr + "/health")
 		if err != nil {
@@ -691,7 +739,7 @@ func scrapeVLLMMetrics(port string) (*VLLMMetrics, error) {
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("vllm metrics returned %d", resp.StatusCode)
+		return nil, fmt.Errorf("inference metrics returned %d", resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
@@ -719,30 +767,30 @@ func scrapeVLLMMetrics(port string) (*VLLMMetrics, error) {
 		}
 
 		switch name {
-		case "vllm:avg_generation_throughput_toks_per_s":
+		case "vllm:avg_generation_throughput_toks_per_s", "sglang:gen_throughput":
 			m.GenerationTokPerSec += value
 			m.HasGenerationTokPerSec = true
 		case "vllm:avg_prompt_throughput_toks_per_s":
 			m.PromptTokPerSec += value
 			m.HasPromptTokPerSec = true
-		case "vllm:num_requests_running":
+		case "vllm:num_requests_running", "sglang:num_running_reqs":
 			m.RequestsRunning += value
 			m.HasRequestsRunning = true
-		case "vllm:num_requests_waiting":
+		case "vllm:num_requests_waiting", "sglang:num_queue_reqs":
 			m.RequestsWaiting += value
 			m.HasRequestsWaiting = true
-		case "vllm:prompt_tokens_total", "vllm:prompt_tokens":
+		case "vllm:prompt_tokens_total", "vllm:prompt_tokens", "sglang:prompt_tokens_total":
 			m.PromptTokensTotal += value
 			m.HasPromptTokensTotal = true
-		case "vllm:generation_tokens_total", "vllm:generation_tokens":
+		case "vllm:generation_tokens_total", "vllm:generation_tokens", "sglang:generation_tokens_total":
 			m.GenerationTokensTotal += value
 			m.HasGenerationTokensTotal = true
-		case "vllm:prompt_tokens_cached_total", "vllm:prompt_tokens_cached":
+		case "vllm:prompt_tokens_cached_total", "vllm:prompt_tokens_cached", "sglang:cached_tokens_total":
 			m.CachedPromptTokensTotal += value
 			m.HasCachedPromptTokens = true
 		case "vllm:prefix_cache_hits_total", "vllm:prefix_cache_hits", "vllm:external_prefix_cache_hits_total", "vllm:external_prefix_cache_hits":
 			cachedPromptTokensFallback += value
-		case "vllm:time_to_first_token_seconds_bucket":
+		case "vllm:time_to_first_token_seconds_bucket", "sglang:time_to_first_token_seconds_bucket":
 			le := labels["le"]
 			if le == "" {
 				continue
@@ -752,10 +800,10 @@ func scrapeVLLMMetrics(port string) (*VLLMMetrics, error) {
 			}
 			m.TTFTBuckets[le] += value
 			m.HasTTFT = true
-		case "vllm:time_to_first_token_seconds_sum":
+		case "vllm:time_to_first_token_seconds_sum", "sglang:time_to_first_token_seconds_sum":
 			m.TTFTSum += value
 			m.HasTTFT = true
-		case "vllm:time_to_first_token_seconds_count":
+		case "vllm:time_to_first_token_seconds_count", "sglang:time_to_first_token_seconds_count":
 			m.TTFTCount += value
 			m.HasTTFT = true
 		}

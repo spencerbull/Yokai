@@ -48,10 +48,11 @@ type settingsPatchRequest struct {
 }
 
 type preferencesPatch struct {
-	Theme             *string `json:"theme,omitempty"`
-	DefaultVLLMImage  *string `json:"default_vllm_image,omitempty"`
-	DefaultLlamaImage *string `json:"default_llama_image,omitempty"`
-	DefaultComfyImage *string `json:"default_comfyui_image,omitempty"`
+	Theme              *string `json:"theme,omitempty"`
+	DefaultVLLMImage   *string `json:"default_vllm_image,omitempty"`
+	DefaultSGLangImage *string `json:"default_sglang_image,omitempty"`
+	DefaultLlamaImage  *string `json:"default_llama_image,omitempty"`
+	DefaultComfyImage  *string `json:"default_comfyui_image,omitempty"`
 }
 
 type hfTokenRequest struct {
@@ -255,6 +256,9 @@ func applyPreferencesPatch(preferences *config.Preferences, patch *preferencesPa
 	}
 	if patch.DefaultVLLMImage != nil {
 		preferences.DefaultVLLMImage = strings.TrimSpace(*patch.DefaultVLLMImage)
+	}
+	if patch.DefaultSGLangImage != nil {
+		preferences.DefaultSGLangImage = strings.TrimSpace(*patch.DefaultSGLangImage)
 	}
 	if patch.DefaultLlamaImage != nil {
 		preferences.DefaultLlamaImage = strings.TrimSpace(*patch.DefaultLlamaImage)

@@ -1,9 +1,67 @@
 package bkc
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/spencerbull/yokai/internal/config"
+)
 
 func init() {
 	register(
+		// Production-validated on Finn's single RTX PRO 6000 Blackwell 96 GB.
+		// The target and DSpark revisions match the live deployment exactly.
+		Config{
+			ID:       "qwen3-8-27b-nvfp4-sglang-dspark",
+			Name:     "Qwen3.8 27B NVFP4 + DSpark (SGLang)",
+			Workload: WorkloadSGLang,
+			ModelID:  "RadixArk/Qwen3.8-27B-NVFP4",
+			Image:    imageSGLangQwen38,
+			Port:     "30000",
+			ExtraArgs: strings.Join([]string{
+				"sglang serve",
+				"--trust-remote-code",
+				"--revision 554ebba9b5f1b79dc11246341960360e6ef05ef4",
+				"--served-model-name Qwen3.8-27B",
+				"--tp-size 1",
+				"--context-length 262144",
+				"--mem-fraction-static 0.85",
+				"--max-running-requests 3",
+				"--max-mamba-cache-size 12",
+				"--mamba-radix-cache-strategy extra_buffer_lazy",
+				"--mamba-ssm-dtype bfloat16",
+				"--kv-cache-dtype fp8_e4m3",
+				"--attention-backend flashinfer",
+				"--chunked-prefill-size 2048",
+				"--cuda-graph-max-bs 3",
+				"--reasoning-parser qwen3",
+				"--tool-call-parser qwen3_coder",
+				`--default-chat-template-kwargs {"enable_thinking":false}`,
+				"--speculative-algorithm DSPARK",
+				"--speculative-draft-model-path RadixArk/Qwen3.8-27B-DSpark",
+				"--speculative-draft-model-revision 85ef153be924f17ce4bf62726954eeaa4a73e854",
+				"--speculative-draft-attention-backend flashinfer",
+				"--speculative-dspark-block-size 7",
+				"--enable-metrics",
+			}, " "),
+			Volumes: hfMountDefault,
+			Runtime: config.RuntimeOptions{
+				IPCMode: "host",
+				ShmSize: "32g",
+			},
+			Description: "Qwen3.8 27B NVFP4 with DSpark speculative decoding on one RTX PRO 6000 Blackwell, using the validated 262K/3-request Finn capacity policy.",
+			Source:      "SGLang Qwen3.8 recipe + production validation on Finn (2026-08-21)",
+			Notes: []string{
+				"Pinned target, draft-model, and container revisions reproduce the live Finn deployment.",
+				"Validated OpenAI chat/tool calls, native SGLang metrics, and 262,144-token context with at most three active requests.",
+				"Recorded microbenchmark: 298.4 output tok/s solo and 899.6 tok/s aggregate at four-way load before the production three-request cap.",
+			},
+			TargetDevices:   []string{DeviceRTXPRO6000},
+			MinVRAMGBPerGPU: 90,
+			MinGPUCount:     1,
+			Quantization:    QuantNVFP4,
+			Arch:            ArchBlackwell,
+		},
+
 		// Qwen3 dense small checkpoints — fit almost any consumer/workstation GPU.
 		qwenSmallDense("qwen3-0-6b", "Qwen3 0.6B", "Qwen/Qwen3-0.6B", 6),
 		qwenSmallDense("qwen3-1-7b", "Qwen3 1.7B", "Qwen/Qwen3-1.7B", 8),

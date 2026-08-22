@@ -91,7 +91,7 @@ func TestHandlePatchSettings(t *testing.T) {
 	}
 
 	d := &Daemon{cfg: cfg}
-	body := bytes.NewBufferString(`{"preferences":{"theme":"midnight","default_vllm_image":"custom/vllm:latest"}}`)
+	body := bytes.NewBufferString(`{"preferences":{"theme":"midnight","default_vllm_image":"custom/vllm:latest","default_sglang_image":"custom/sglang:latest"}}`)
 	req := httptest.NewRequest("PATCH", "/settings", body)
 	rr := httptest.NewRecorder()
 
@@ -105,6 +105,9 @@ func TestHandlePatchSettings(t *testing.T) {
 	}
 	if d.cfg.Preferences.DefaultVLLMImage != "custom/vllm:latest" {
 		t.Fatalf("expected updated vllm image, got %q", d.cfg.Preferences.DefaultVLLMImage)
+	}
+	if d.cfg.Preferences.DefaultSGLangImage != "custom/sglang:latest" {
+		t.Fatalf("expected updated SGLang image, got %q", d.cfg.Preferences.DefaultSGLangImage)
 	}
 }
 

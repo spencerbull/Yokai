@@ -7,6 +7,7 @@ export type HFSettings = {
 export type Preferences = {
   theme: string
   default_vllm_image: string
+  default_sglang_image: string
   default_llama_image: string
   default_comfyui_image: string
 }

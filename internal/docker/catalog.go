@@ -177,8 +177,9 @@ func (c *Catalog) fetchGHCR(image string) ([]Tag, error) {
 // KnownImages returns the default image options for each service type.
 func KnownImages() map[string][]string {
 	return map[string][]string{
-		"vllm":    {"vllm/vllm-openai"},
+		"vllm":     {"vllm/vllm-openai"},
+		"sglang":   {"lmsysorg/sglang"},
 		"llamacpp": {"ghcr.io/ggml-org/llama.cpp"},
-		"comfyui": {"spencerbull/yokai-comfyui"},
+		"comfyui":  {"spencerbull/yokai-comfyui"},
 	}
 }

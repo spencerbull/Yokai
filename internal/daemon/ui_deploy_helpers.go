@@ -89,6 +89,8 @@ func (d *Daemon) handleDeployBKC(w http.ResponseWriter, r *http.Request) {
 	switch workload {
 	case string(bkc.WorkloadVLLM):
 		target = bkc.WorkloadVLLM
+	case string(bkc.WorkloadSGLang):
+		target = bkc.WorkloadSGLang
 	case string(bkc.WorkloadLlamaCpp):
 		target = bkc.WorkloadLlamaCpp
 	default:
