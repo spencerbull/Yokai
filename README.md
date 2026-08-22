@@ -64,7 +64,7 @@ yokai solves all of this with a single binary. Install it, point it at your mach
 - **Secure by default** -- auto-generated bearer tokens for agent authentication, SSH key resolution with agent/key/password fallback
 
 ### Workload Deployment
-- **Best Known Configs (BKC)** -- pick from a built-in catalog of pre-validated vLLM, SGLang, and llama.cpp deploys grouped by vendor (NVIDIA, OpenAI, Meta/Llama, Google, Mistral, Qwen, DeepSeek, GLM, Moonshot, Microsoft, and more) and filtered to the GPUs each device actually has
+- **Best Known Configs (BKC)** -- pick from a built-in catalog of pre-validated vLLM, SGLang, and llama.cpp deploys grouped by vendor (NVIDIA, OpenAI, Meta/Llama, Google, Mistral, Qwen, DeepSeek, GLM, Moonshot, Microsoft, and more), filtered to the GPUs each device actually has, with sibling recipes selectable when a model has multiple validated runtimes
 - **Guided deploy wizard** -- pick workload type, target device, Docker image, model, and runtime config when you want to deviate from the catalog
 - **HuggingFace integration** -- search models directly, browse GGUF quantizations, auto-download during deployment
 - **VRAM estimator** -- `hf-mem`-backed memory estimate for vLLM weights + KV cache before you commit to a deploy
@@ -328,14 +328,14 @@ All state lives in `~/.config/yokai/config.json`. Copy this file to another mach
 
 ## Best Known Configurations (BKC)
 
-The BKC catalog is a library of pre-validated deploy recipes. Each entry pins the Docker image, tensor-parallel size, quantization flags, GPU memory utilization, chat template, tool-call parser, and any runtime options (`--ipc=host`, `--shm-size`, `ulimit`s) needed for a given model on a given GPU. The deploy wizard matches your model against the catalog, filters recipes by the target device's VRAM and GPU count, and offers one-click apply.
+The BKC catalog is a library of pre-validated deploy recipes. Each entry pins the Docker image, tensor-parallel size, quantization flags, GPU memory utilization, chat template, tool-call parser, and any runtime options (`--ipc=host`, `--shm-size`, `ulimit`s) needed for a given model on a given GPU. The deploy wizard matches your model against the catalog, filters recipes by the target device's VRAM and GPU count, lets you cycle through sibling recipes, and offers one-click apply.
 
-**87 vLLM configs plus one production-validated SGLang/DSpark config across 84 models from 24 publishers** (as of this commit). Entries are grouped by publisher and live in `internal/bkc/catalog_*.go`:
+**89 serving configs (87 vLLM plus two SGLang) across 84 models from 24 publishers** (as of this commit). Entries are grouped by publisher and live in `internal/bkc/catalog_*.go`:
 
 | Publisher | Unique models | Serving configs | Catalog file |
 |---|---:|---:|---|
 | `Qwen` | 20 | 20 | [`catalog_qwen.go`](internal/bkc/catalog_qwen.go) |
-| `RadixArk` | 1 | 1 SGLang | [`catalog_qwen.go`](internal/bkc/catalog_qwen.go) |
+| `RadixArk` | 1 | 2 SGLang | [`catalog_qwen.go`](internal/bkc/catalog_qwen.go) |
 | `nvidia` | 13 | 15 | [`catalog_nvidia.go`](internal/bkc/catalog_nvidia.go), [`catalog_google.go`](internal/bkc/catalog_google.go), [`catalog_llama.go`](internal/bkc/catalog_llama.go), [`catalog_moonshotai.go`](internal/bkc/catalog_moonshotai.go), [`catalog_qwen.go`](internal/bkc/catalog_qwen.go) |
 | `zai-org` (GLM) | 7 | 7 | [`catalog_glm.go`](internal/bkc/catalog_glm.go) |
 | `deepseek-ai` | 6 | 6 | [`catalog_deepseek.go`](internal/bkc/catalog_deepseek.go) |
@@ -367,7 +367,7 @@ The BKC catalog is a library of pre-validated deploy recipes. Each entry pins th
 - **Vision-language** — Qwen2.5-VL-7B/72B, Qwen3-VL-235B (BF16 + FP8), InternVL3.5-8B, ERNIE-4.5-VL-28B / VL-424B, PaddleOCR-VL, DeepSeek-OCR.
 - **Small / edge-friendly** — Qwen3-0.6B / 1.7B / 4B / 8B, Qwen3Guard-Gen-0.6B, Phi-4, Gemma 3 2B/4B/12B, validated for RTX 4090, RTX 5090, L40S, GB10, and Jetson Thor.
 - **AMD CDNA4** — `amd/gpt-oss-120b-w-mxfp4-a-fp8` tuned for MI355X with the ROCm vLLM image.
-- **SGLang + DSpark** — pinned Qwen3.8 27B NVFP4 recipe validated on RTX PRO 6000 with 262K context, three active requests, FlashInfer, FP8 KV cache, and native metrics.
+- **SGLang speculative decoding** — sibling Qwen3.8 27B NVFP4 recipes for DSpark and DFlash2 on RTX PRO 6000, with pinned target/drafter/image revisions, 262K context, three active requests, FlashInfer, FP8 KV cache, and native metrics.
 
 ### Device-aware selection
 
@@ -376,7 +376,7 @@ BKC entries carry explicit hardware tags so the deploy wizard can hand you the r
 - NVIDIA: `gb10` (DGX Spark), `jetson-thor`, `rtx-pro-6000`, `rtx-5090`, `rtx-4090`, `l40s`, `a100-80`, `h100-80`, `h100-94`, `h200`, `h20`, `b200`, `gb200`
 - AMD: `mi300x`, `mi325x`, `mi355x`, `radeon-r9700`
 
-When multiple BKCs target the same model (e.g. Llama 3.3 70B has BF16, FP8, and FP4 variants), the daemon prefers the most specialised recipe whose `TargetDevices` include your device profile, then falls back to the first recipe whose `MinVRAMGBPerGPU` and `MinGPUCount` the device can satisfy.
+When multiple BKCs target the same model (for example, Qwen3.8 27B has DSpark and DFlash2 speculative decoders), the daemon puts the most specialised recipe whose `TargetDevices` include your device profile first. The deploy wizard exposes the remaining sibling recipes with Previous/Next controls, then falls back to the first recipe whose `MinVRAMGBPerGPU` and `MinGPUCount` the device can satisfy.
 
 ### Adding a BKC
 

@@ -66,13 +66,16 @@ export async function getGGUFVariants(model: string) {
   return response.variants ?? []
 }
 
-export async function getDeployBKC(workload: WorkloadType, model: string, deviceId?: string) {
+export async function getDeployBKCs(workload: WorkloadType, model: string, deviceId?: string) {
   const params = new URLSearchParams({ workload, model })
   if (deviceId) {
     params.set("device_id", deviceId)
   }
-  const response = await daemonRequest<{ config?: DeployBKC }>(`/deploy/bkc?${params.toString()}`)
-  return response.config ?? null
+  const response = await daemonRequest<{ config?: DeployBKC; configs?: DeployBKC[] }>(`/deploy/bkc?${params.toString()}`)
+  if (response.configs && response.configs.length > 0) {
+    return response.configs
+  }
+  return response.config ? [response.config] : []
 }
 
 export async function getVLLMMemoryEstimate(request: {

@@ -91,6 +91,37 @@ func TestLookupFindsQwen38SGLangDSpark(t *testing.T) {
 	}
 }
 
+func TestLookupAllFindsQwen38SGLangSpeculativeVariants(t *testing.T) {
+	t.Parallel()
+
+	configs := LookupAll(WorkloadSGLang, "RadixArk/Qwen3.8-27B-NVFP4")
+	if len(configs) != 2 {
+		t.Fatalf("expected DSpark and DFlash2 BKCs, got %#v", configs)
+	}
+	if configs[0].ID != "qwen3-8-27b-nvfp4-sglang-dspark" || configs[1].ID != "qwen3-8-27b-nvfp4-sglang-dflash2" {
+		t.Fatalf("unexpected BKC order: %#v", configs)
+	}
+
+	cfg := configs[1]
+	if cfg.Image != imageSGLangQwen38DFlash2 {
+		t.Fatalf("expected pinned DFlash2 image, got %q", cfg.Image)
+	}
+	for _, want := range []string{
+		"--revision 91cea059647696fd83964e43d57db122ff745993",
+		"--context-length 262144",
+		"--max-running-requests 3",
+		"--max-mamba-cache-size 12",
+		"--speculative-algorithm DFLASH",
+		"--speculative-draft-model-path incoai/Qwen3.8-27B-DFlash2",
+		"--speculative-draft-model-revision dedf8df68adfb1afeaf7b7480c0a0243108177b4",
+		"--speculative-num-draft-tokens 8",
+	} {
+		if !strings.Contains(cfg.ExtraArgs, want) {
+			t.Fatalf("expected %q in extra args, got %q", want, cfg.ExtraArgs)
+		}
+	}
+}
+
 func TestLookupFindsQwen36TextNVFP4MTP(t *testing.T) {
 	t.Parallel()
 

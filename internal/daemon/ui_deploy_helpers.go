@@ -14,7 +14,8 @@ import (
 )
 
 type deployBKCResponse struct {
-	Config *deployBKCRecord `json:"config,omitempty"`
+	Config  *deployBKCRecord  `json:"config,omitempty"`
+	Configs []deployBKCRecord `json:"configs,omitempty"`
 }
 
 type deployBKCRecord struct {
@@ -124,7 +125,24 @@ func (d *Daemon) handleDeployBKC(w http.ResponseWriter, r *http.Request) {
 		warning = fmt.Sprintf("Suggested BKC for a similar model. Applying it will use %s and its image, port, and flags.", cfg.ModelID)
 	}
 
-	writeJSON(w, http.StatusOK, deployBKCResponse{Config: &deployBKCRecord{
+	configs := []bkc.Config{cfg}
+	if matchType == bkc.MatchExact {
+		for _, candidate := range bkc.LookupAll(target, model) {
+			if candidate.ID != cfg.ID {
+				configs = append(configs, candidate)
+			}
+		}
+	}
+	records := make([]deployBKCRecord, 0, len(configs))
+	for _, candidate := range configs {
+		records = append(records, deployBKCRecordFromConfig(candidate, matchType, warning))
+	}
+	selected := records[0]
+	writeJSON(w, http.StatusOK, deployBKCResponse{Config: &selected, Configs: records})
+}
+
+func deployBKCRecordFromConfig(cfg bkc.Config, matchType bkc.MatchType, warning string) deployBKCRecord {
+	return deployBKCRecord{
 		ID:        cfg.ID,
 		Name:      cfg.Name,
 		Workload:  string(cfg.Workload),
@@ -150,7 +168,7 @@ func (d *Daemon) handleDeployBKC(w http.ResponseWriter, r *http.Request) {
 		MinGPUCount:     cfg.MinGPUCount,
 		Quantization:    cfg.Quantization,
 		Arch:            cfg.Arch,
-	}})
+	}
 }
 
 func (d *Daemon) handleVLLMMemoryEstimate(w http.ResponseWriter, r *http.Request) {

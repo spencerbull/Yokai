@@ -3,7 +3,7 @@ import { startTransition, useEffect, useMemo, useState } from "react"
 import type { DeployBKC, DeployForm, GGUFVariant, HFModel, VLLMMemoryEstimate, WorkloadType } from "../../contracts/deploy"
 import type { DeviceRecord } from "../../contracts/fleet"
 import type { SettingsDocument } from "../../contracts/settings"
-import { deployService, getDeployBKC, getDevices, getGGUFVariants, getHFModels, getSettings, getVLLMMemoryEstimate, putDeployHistory } from "../../services/daemon-client"
+import { deployService, getDeployBKCs, getDevices, getGGUFVariants, getHFModels, getSettings, getVLLMMemoryEstimate, putDeployHistory } from "../../services/daemon-client"
 
 type DeployStep = "workload" | "device" | "image" | "model" | "variant" | "config" | "review"
 type ConfigField = "port" | "extraArgs" | "bkcAction" | "contextLength" | "overheadGB" | "hfmemCalculate" | "hfmemApply"
@@ -61,7 +61,8 @@ export function useDeployController(active: boolean, onComplete: () => void) {
   const [pendingAction, setPendingAction] = useState<string | null>(null)
   const [modelResults, setModelResults] = useState<HFModel[]>([])
   const [searchError, setSearchError] = useState<string>()
-  const [bkc, setBkc] = useState<DeployBKC | null>(null)
+  const [bkcs, setBkcs] = useState<DeployBKC[]>([])
+  const [bkcIndex, setBkcIndex] = useState(0)
   const [appliedBKCId, setAppliedBKCId] = useState("")
   const [ggufVariants, setGGUFVariants] = useState<GGUFVariant[]>([])
   const [ggufLoading, setGGUFLoading] = useState(false)
@@ -72,6 +73,7 @@ export function useDeployController(active: boolean, onComplete: () => void) {
     loading: false,
     overheadGB: "1.5",
   })
+  const bkc = bkcs[bkcIndex] ?? null
 
   useEffect(() => {
     if (!active) {
@@ -151,25 +153,29 @@ export function useDeployController(active: boolean, onComplete: () => void) {
       return
     }
     if (form.workload !== "vllm" && form.workload !== "sglang" && form.workload !== "llamacpp") {
-      setBkc(null)
+      setBkcs([])
+      setBkcIndex(0)
       return
     }
     const model = form.model.trim()
     if (model === "") {
-      setBkc(null)
+      setBkcs([])
+      setBkcIndex(0)
       return
     }
 
     let cancelled = false
-    void getDeployBKC(form.workload, model, form.deviceId || undefined)
-      .then((config) => {
+    void getDeployBKCs(form.workload, model, form.deviceId || undefined)
+      .then((configs) => {
         if (!cancelled) {
-          setBkc(config)
+          setBkcs(configs)
+          setBkcIndex(0)
         }
       })
       .catch(() => {
         if (!cancelled) {
-          setBkc(null)
+          setBkcs([])
+          setBkcIndex(0)
         }
       })
 
@@ -282,8 +288,13 @@ export function useDeployController(active: boolean, onComplete: () => void) {
   return {
     activeBKC: bkc && appliedBKCId === bkc.id ? bkc : null,
     availableBKC: bkc,
+    availableBKCCount: bkcs.length,
+    availableBKCIndex: bkcIndex,
     applyBKC() {
       applyBKCToForm()
+    },
+    selectBKC(direction: -1 | 1) {
+      selectBKCByOffset(direction)
     },
     ggufVariants,
     ggufLoading,
@@ -551,6 +562,20 @@ export function useDeployController(active: boolean, onComplete: () => void) {
           return true
         }
         return false
+      case "left":
+      case "h":
+        if (configField === "bkcAction" && bkcs.length > 1) {
+          selectBKCByOffset(-1)
+          return true
+        }
+        return false
+      case "right":
+      case "l":
+        if (configField === "bkcAction" && bkcs.length > 1) {
+          selectBKCByOffset(1)
+          return true
+        }
+        return false
       case "return":
       case "enter":
         if (configField === "extraArgs") {
@@ -702,6 +727,13 @@ export function useDeployController(active: boolean, onComplete: () => void) {
       error: `Applied BKC: ${bkc.name}`,
       estimate: null,
     }))
+  }
+
+  function selectBKCByOffset(direction: -1 | 1) {
+    if (bkcs.length < 2) {
+      return
+    }
+    setBkcIndex((current) => (current + direction + bkcs.length) % bkcs.length)
   }
 }
 

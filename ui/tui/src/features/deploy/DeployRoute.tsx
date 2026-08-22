@@ -262,12 +262,21 @@ function ConfigStep(props: { controller: DeployController }) {
         <text fg={theme.colors.text}><strong>BKC</strong></text>
         {bkc ? (
           <>
-            <text fg={theme.colors.textMuted}>{bkc.name}</text>
+            <text fg={theme.colors.textMuted}>
+              {bkc.name}{props.controller.availableBKCCount > 1 ? ` · ${props.controller.availableBKCIndex + 1}/${props.controller.availableBKCCount}` : ""}
+            </text>
             <text fg={theme.colors.textSubtle}>{bkc.description}</text>
             {bkc.match_type === "suggested" && bkc.warning ? <text fg={theme.colors.warning}>{bkc.warning}</text> : null}
             {bkc.notes.map((note, index) => (
               <text key={`${bkc.id}-${index}`} fg={theme.colors.textSubtle}>• {note}</text>
             ))}
+            {props.controller.availableBKCCount > 1 ? (
+              <box flexDirection="row" gap={1}>
+                <ActionChip active={false} onSelect={() => props.controller.selectBKC(-1)}>Previous BKC</ActionChip>
+                <ActionChip active={false} onSelect={() => props.controller.selectBKC(1)}>Next BKC</ActionChip>
+                <text fg={theme.colors.textSubtle}>Left/Right selects</text>
+              </box>
+            ) : null}
             <ActionChip active={props.controller.configField === "bkcAction"} onSelect={props.controller.applyBKC}>{props.controller.hasAppliedBKC ? "Reapply BKC" : bkc.match_type === "suggested" ? "Apply suggested BKC" : "Apply BKC"}</ActionChip>
             {props.controller.hasAppliedBKC ? <text fg={theme.colors.success}>BKC active. You can still override image, port, and extra args before deploying.</text> : null}
           </>

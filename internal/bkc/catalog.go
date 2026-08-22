@@ -300,18 +300,19 @@ func abs(v int) int {
 
 // Common Docker image tags used by the BKC catalog.
 const (
-	imageVLLMStable    = "vllm/vllm-openai:v0.12.0"
-	imageVLLMLatest    = "vllm/vllm-openai:latest"
-	imageVLLMCU130     = "vllm/vllm-openai:v0.14.1-cu130"
-	imageVLLMCU130_019 = "vllm/vllm-openai:v0.19.1-cu130"
-	imageVLLM020       = "vllm/vllm-openai:v0.20.0"
-	imageVLLM020Audio  = "ghcr.io/spencerbull/yokai/vllm-openai-audio:v0.20.0"
-	imageVLLMNGC       = "nvcr.io/nvidia/vllm:25.12.post1-py3"
-	imageVLLMJetson    = "ghcr.io/nvidia-ai-iot/vllm:latest-jetson-thor"
-	imageVLLMGemma4    = "vllm/vllm-openai:gemma4"
-	imageVLLMGemma4Cu  = "vllm/vllm-openai:gemma4-cu130"
-	imageVLLMROCmGemma = "vllm/vllm-openai-rocm:gemma4"
-	imageSGLangQwen38  = "lmsysorg/sglang@sha256:506525a5907ea22c9d445afb7c03603959b912de034d86915cf17da814f1a124"
+	imageVLLMStable          = "vllm/vllm-openai:v0.12.0"
+	imageVLLMLatest          = "vllm/vllm-openai:latest"
+	imageVLLMCU130           = "vllm/vllm-openai:v0.14.1-cu130"
+	imageVLLMCU130_019       = "vllm/vllm-openai:v0.19.1-cu130"
+	imageVLLM020             = "vllm/vllm-openai:v0.20.0"
+	imageVLLM020Audio        = "ghcr.io/spencerbull/yokai/vllm-openai-audio:v0.20.0"
+	imageVLLMNGC             = "nvcr.io/nvidia/vllm:25.12.post1-py3"
+	imageVLLMJetson          = "ghcr.io/nvidia-ai-iot/vllm:latest-jetson-thor"
+	imageVLLMGemma4          = "vllm/vllm-openai:gemma4"
+	imageVLLMGemma4Cu        = "vllm/vllm-openai:gemma4-cu130"
+	imageVLLMROCmGemma       = "vllm/vllm-openai-rocm:gemma4"
+	imageSGLangQwen38        = "lmsysorg/sglang@sha256:506525a5907ea22c9d445afb7c03603959b912de034d86915cf17da814f1a124"
+	imageSGLangQwen38DFlash2 = "lmsysorg/sglang@sha256:616a3e97f45191af975896cfa644279096cb31bd408a071c2e99ca7209c3cafe"
 )
 
 // hfMountDefault is the default Hugging Face cache mount shared by every
