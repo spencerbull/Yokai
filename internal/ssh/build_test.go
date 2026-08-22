@@ -1,9 +1,11 @@
 package ssh
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
 )
 
@@ -107,5 +109,37 @@ func TestLocalGoBuildCommandFallsBackToGo(t *testing.T) {
 	wantArgs := []string{goPath, "build", "-o", "/tmp/yokai-test", "./cmd/yokai"}
 	if !reflect.DeepEqual(cmd.Args, wantArgs) {
 		t.Fatalf("command args = %#v, want %#v", cmd.Args, wantArgs)
+	}
+}
+
+func TestBuildLocalBinaryForCurrentTargetCopiesExecutable(t *testing.T) {
+	binaryPath, err := BuildLocalBinaryForTarget(runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		t.Fatalf("BuildLocalBinaryForTarget() unexpected error: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(filepath.Dir(binaryPath)) }()
+
+	executablePath, err := os.Executable()
+	if err != nil {
+		t.Fatalf("locating test executable: %v", err)
+	}
+	want, err := os.ReadFile(executablePath)
+	if err != nil {
+		t.Fatalf("reading test executable: %v", err)
+	}
+	got, err := os.ReadFile(binaryPath)
+	if err != nil {
+		t.Fatalf("reading staged executable: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatal("staged executable does not match the running executable")
+	}
+
+	info, err := os.Stat(binaryPath)
+	if err != nil {
+		t.Fatalf("stating staged executable: %v", err)
+	}
+	if info.Mode()&0o111 == 0 {
+		t.Fatalf("staged executable mode %v is not executable", info.Mode())
 	}
 }
