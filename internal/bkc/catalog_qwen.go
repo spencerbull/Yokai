@@ -107,6 +107,7 @@ func init() {
 			Notes: []string{
 				"Pins the multi-arch SGLang DFlash2 image, BF16-lm_head target revision, and trained DFlash2 drafter revision.",
 				"Upstream RTX PRO 6000 validation for the high-throughput/bfloat16 profile reports 7.84 ms TPOT, 127.6 output tok/s, and 3.20-token acceptance at concurrency one.",
+				"Finn validation with 1,024-token short-prompt generations measured 163.1 tok/s solo and 385.4 tok/s aggregate at three-way concurrency with about 3.9-token acceptance; DSpark remains the preferred default on Finn.",
 				"Keeps the production 262,144-token context, FP8 KV cache, and three-active-request limit for direct comparison with the DSpark BKC.",
 			},
 			TargetDevices:   []string{DeviceRTXPRO6000},
