@@ -367,7 +367,7 @@ The BKC catalog is a library of pre-validated deploy recipes. Each entry pins th
 - **Vision-language** — Qwen2.5-VL-7B/72B, Qwen3-VL-235B (BF16 + FP8), InternVL3.5-8B, ERNIE-4.5-VL-28B / VL-424B, PaddleOCR-VL, DeepSeek-OCR.
 - **Small / edge-friendly** — Qwen3-0.6B / 1.7B / 4B / 8B, Qwen3Guard-Gen-0.6B, Phi-4, Gemma 3 2B/4B/12B, validated for RTX 4090, RTX 5090, L40S, GB10, and Jetson Thor.
 - **AMD CDNA4** — `amd/gpt-oss-120b-w-mxfp4-a-fp8` tuned for MI355X with the ROCm vLLM image.
-- **SGLang speculative decoding** — sibling Qwen3.8 27B NVFP4 recipes for DSpark and DFlash2 on RTX PRO 6000, with pinned target/drafter/image revisions, 262K context, FlashInfer, FP8 KV cache, and native metrics. DSpark preserves Finn's three-request full-context capacity policy; the MiaAI-Lab-derived DFlash2 profile favors aggregate throughput across up to eight requests sharing its KV pool.
+- **SGLang speculative decoding** — sibling Qwen3.8 27B NVFP4 recipes for DFlash2 and DSpark on RTX PRO 6000, with pinned target/drafter/image revisions, 262K context, FlashInfer, FP8 KV cache, and native metrics. Finn's validated DFlash2 profile is the default and supports up to eight requests sharing its KV pool; DSpark remains available as the three-request rollback recipe.
 
 ### Device-aware selection
 
@@ -376,7 +376,7 @@ BKC entries carry explicit hardware tags so the deploy wizard can hand you the r
 - NVIDIA: `gb10` (DGX Spark), `jetson-thor`, `rtx-pro-6000`, `rtx-5090`, `rtx-4090`, `l40s`, `a100-80`, `h100-80`, `h100-94`, `h200`, `h20`, `b200`, `gb200`
 - AMD: `mi300x`, `mi325x`, `mi355x`, `radeon-r9700`
 
-When multiple BKCs target the same model (for example, Qwen3.8 27B has DSpark and DFlash2 speculative decoders), the daemon puts the most specialised recipe whose `TargetDevices` include your device profile first. The deploy wizard exposes the remaining sibling recipes with Previous/Next controls, then falls back to the first recipe whose `MinVRAMGBPerGPU` and `MinGPUCount` the device can satisfy.
+When multiple BKCs target the same model (for example, Qwen3.8 27B has DFlash2 and DSpark speculative decoders), the daemon puts the most specialised recipe whose `TargetDevices` include your device profile first. The deploy wizard exposes the remaining sibling recipes with Previous/Next controls, then falls back to the first recipe whose `MinVRAMGBPerGPU` and `MinGPUCount` the device can satisfy.
 
 ### Adding a BKC
 

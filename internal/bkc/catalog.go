@@ -315,8 +315,8 @@ const (
 	imageSGLangQwen38DFlash2 = "lmsysorg/sglang@sha256:616a3e97f45191af975896cfa644279096cb31bd408a071c2e99ca7209c3cafe"
 )
 
-// hfMountDefault is the default Hugging Face cache mount shared by every
-// vLLM recipe so weights are cached on the host between deployments.
+// hfMountDefault is the default Hugging Face cache mount shared by inference
+// recipes so weights are cached on the host between deployments.
 var hfMountDefault = map[string]string{
 	"/var/lib/yokai/huggingface": "/root/.cache/huggingface",
 }
