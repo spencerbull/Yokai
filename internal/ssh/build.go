@@ -43,12 +43,12 @@ func BuildLocalBinaryForTarget(kernelOS, arch string) (string, error) {
 }
 
 func localGoBuildCommand(binaryPath string) (*exec.Cmd, error) {
-	if goPath, err := exec.LookPath("go"); err == nil {
-		return exec.Command(goPath, "build", "-o", binaryPath, "./cmd/yokai"), nil
-	}
-
 	if misePath, err := exec.LookPath("mise"); err == nil {
 		return exec.Command(misePath, "exec", "go@"+defaultGoVersion, "--", "go", "build", "-o", binaryPath, "./cmd/yokai"), nil
+	}
+
+	if goPath, err := exec.LookPath("go"); err == nil {
+		return exec.Command(goPath, "build", "-o", binaryPath, "./cmd/yokai"), nil
 	}
 
 	return nil, fmt.Errorf("go toolchain not found locally (expected either `go` on PATH or `mise exec go@%s`)", defaultGoVersion)
