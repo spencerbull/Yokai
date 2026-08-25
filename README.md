@@ -330,12 +330,12 @@ All state lives in `~/.config/yokai/config.json`. Copy this file to another mach
 
 The BKC catalog is a library of pre-validated deploy recipes. Each entry pins the Docker image, tensor-parallel size, quantization flags, GPU memory utilization, chat template, tool-call parser, and any runtime options (`--ipc=host`, `--shm-size`, `ulimit`s) needed for a given model on a given GPU. The deploy wizard matches your model against the catalog, filters recipes by the target device's VRAM and GPU count, lets you cycle through sibling recipes, and offers one-click apply.
 
-**89 serving configs (87 vLLM plus two SGLang) across 84 models from 24 publishers** (as of this commit). Entries are grouped by publisher and live in `internal/bkc/catalog_*.go`:
+**90 serving configs (87 vLLM plus three SGLang) across 85 models from 24 publishers** (as of this commit). Entries are grouped by publisher and live in `internal/bkc/catalog_*.go`:
 
 | Publisher | Unique models | Serving configs | Catalog file |
 |---|---:|---:|---|
 | `Qwen` | 20 | 20 | [`catalog_qwen.go`](internal/bkc/catalog_qwen.go) |
-| `RadixArk` | 1 | 2 SGLang | [`catalog_qwen.go`](internal/bkc/catalog_qwen.go) |
+| `RadixArk` | 2 | 3 SGLang | [`catalog_qwen.go`](internal/bkc/catalog_qwen.go) |
 | `nvidia` | 13 | 15 | [`catalog_nvidia.go`](internal/bkc/catalog_nvidia.go), [`catalog_google.go`](internal/bkc/catalog_google.go), [`catalog_llama.go`](internal/bkc/catalog_llama.go), [`catalog_moonshotai.go`](internal/bkc/catalog_moonshotai.go), [`catalog_qwen.go`](internal/bkc/catalog_qwen.go) |
 | `zai-org` (GLM) | 7 | 7 | [`catalog_glm.go`](internal/bkc/catalog_glm.go) |
 | `deepseek-ai` | 6 | 6 | [`catalog_deepseek.go`](internal/bkc/catalog_deepseek.go) |
