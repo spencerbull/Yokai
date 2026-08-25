@@ -35,3 +35,28 @@ func TestHandleDeployBKCReturnsSpeculativeVariants(t *testing.T) {
 		t.Fatalf("expected DSpark rollback BKC, got %#v", response.Configs)
 	}
 }
+
+func TestHandleDeployBKCReturnsBF16LMHeadDefault(t *testing.T) {
+	t.Parallel()
+
+	d := &Daemon{}
+	model := url.QueryEscape("RadixArk/Qwen3.8-27B-NVFP4-BF16-LMHead")
+	req := httptest.NewRequest(http.MethodGet, "/deploy/bkc?workload=sglang&model="+model, nil)
+	recorder := httptest.NewRecorder()
+
+	d.handleDeployBKC(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var response deployBKCResponse
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.Config == nil || response.Config.ID != "qwen3-8-27b-nvfp4-bf16-lmhead-sglang-dflash2" {
+		t.Fatalf("expected BF16 lm_head DFlash2 BKC, got %#v", response.Config)
+	}
+	if len(response.Configs) != 1 {
+		t.Fatalf("expected one BF16 lm_head BKC, got %#v", response.Configs)
+	}
+}

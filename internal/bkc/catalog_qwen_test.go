@@ -55,14 +55,14 @@ func TestLookupFindsQwen36NVFP4(t *testing.T) {
 	}
 }
 
-func TestLookupFindsQwen38SGLangDFlash2Default(t *testing.T) {
+func TestLookupFindsQwen38BF16LMHeadSGLangDFlash2Default(t *testing.T) {
 	t.Parallel()
 
-	cfg, ok := Lookup(WorkloadSGLang, "RadixArk/Qwen3.8-27B-NVFP4")
+	cfg, ok := Lookup(WorkloadSGLang, "RadixArk/Qwen3.8-27B-NVFP4-BF16-LMHead")
 	if !ok {
 		t.Fatal("expected matching SGLang BKC")
 	}
-	if cfg.ID != "qwen3-8-27b-nvfp4-sglang-dflash2" {
+	if cfg.ID != "qwen3-8-27b-nvfp4-bf16-lmhead-sglang-dflash2" {
 		t.Fatalf("unexpected BKC %q", cfg.ID)
 	}
 	if cfg.Port != "30000" || cfg.MinGPUCount != 1 || cfg.MinVRAMGBPerGPU != 90 {
@@ -73,7 +73,7 @@ func TestLookupFindsQwen38SGLangDFlash2Default(t *testing.T) {
 	}
 	for _, want := range []string{
 		"sglang serve",
-		"--revision 319f741cce68d7914884900c138a1fbb70a42f30",
+		"--revision 009632fef96dd349150baa780c984e62e70e91fe",
 		"--context-length 262144",
 		"--mem-fraction-static 0.85",
 		"--max-running-requests 8",
@@ -106,6 +106,21 @@ func TestLookupFindsQwen38SGLangDFlash2Default(t *testing.T) {
 	}
 	if _, ok := Lookup(WorkloadVLLM, cfg.ModelID); ok {
 		t.Fatal("did not expect SGLang BKC to match the vLLM workload")
+	}
+}
+
+func TestLookupFindsQwen38PackedLMHeadSGLangDFlash2Rollback(t *testing.T) {
+	t.Parallel()
+
+	cfg, ok := Lookup(WorkloadSGLang, "RadixArk/Qwen3.8-27B-NVFP4")
+	if !ok {
+		t.Fatal("expected matching packed-head SGLang BKC")
+	}
+	if cfg.ID != "qwen3-8-27b-nvfp4-sglang-dflash2" {
+		t.Fatalf("unexpected packed-head default BKC %q", cfg.ID)
+	}
+	if !strings.Contains(cfg.ExtraArgs, "--revision 319f741cce68d7914884900c138a1fbb70a42f30") {
+		t.Fatalf("expected pinned packed-head revision, got %q", cfg.ExtraArgs)
 	}
 }
 

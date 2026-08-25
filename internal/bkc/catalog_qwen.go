@@ -8,11 +8,66 @@ import (
 
 func init() {
 	register(
+		// MiaAI Lab switched the RTX PRO 6000 recipe to the dense BF16
+		// lm_head export on 2026-08-25. The packed-head profile below remains
+		// available as a rollback so existing cached weights stay usable.
+		Config{
+			ID:       "qwen3-8-27b-nvfp4-bf16-lmhead-sglang-dflash2",
+			Name:     "Qwen3.8 27B NVFP4 BF16 lm_head + DFlash2 (SGLang)",
+			Workload: WorkloadSGLang,
+			ModelID:  "RadixArk/Qwen3.8-27B-NVFP4-BF16-LMHead",
+			Image:    imageSGLangQwen38DFlash2,
+			Port:     "30000",
+			ExtraArgs: strings.Join([]string{
+				"sglang serve",
+				"--trust-remote-code",
+				"--revision 009632fef96dd349150baa780c984e62e70e91fe",
+				"--served-model-name Qwen3.8-27B",
+				"--tp-size 1",
+				"--context-length 262144",
+				"--mem-fraction-static 0.85",
+				"--max-running-requests 8",
+				"--cuda-graph-max-bs-decode 8",
+				"--mamba-radix-cache-strategy extra_buffer_lazy",
+				"--mamba-ssm-dtype bfloat16",
+				"--kv-cache-dtype fp8_e4m3",
+				"--attention-backend flashinfer",
+				"--chunked-prefill-size 2048",
+				"--reasoning-parser qwen3",
+				"--tool-call-parser qwen3_coder",
+				`--default-chat-template-kwargs {"enable_thinking":false}`,
+				"--speculative-algorithm DFLASH",
+				"--speculative-draft-model-path incoai/Qwen3.8-27B-DFlash2",
+				"--speculative-draft-model-revision dedf8df68adfb1afeaf7b7480c0a0243108177b4",
+				"--speculative-num-draft-tokens 8",
+				"--enable-metrics",
+			}, " "),
+			Volumes: hfMountDefault,
+			Runtime: config.RuntimeOptions{
+				IPCMode: "host",
+				ShmSize: "32g",
+			},
+			Description: "Qwen3.8 27B NVFP4 with a dense BF16 output head and DFlash2 speculative decoding on one RTX PRO 6000 Blackwell.",
+			Source:      "MiaAI Lab RTX PRO 6000 recipe (2026-08-25) + RadixArk BF16 lm_head checkpoint",
+			Notes: []string{
+				"The dense BF16 lm_head export is the target used for the SGLang cookbook measurements; the transformer body remains NVFP4.",
+				"The pinned checkpoint contains 23.76 GB of Hub blobs, about 1.83 GB more than the packed-head rollback.",
+				"The image, DFlash2 drafter, 262,144-token context, and eight-request policy match the Finn-validated packed-head profile.",
+				"Keep the packed-head DFlash2 or DSpark BKC available until this profile passes production quality and throughput checks.",
+			},
+			TargetDevices:   []string{DeviceRTXPRO6000},
+			MinVRAMGBPerGPU: 90,
+			MinGPUCount:     1,
+			Quantization:    QuantNVFP4,
+			Arch:            ArchBlackwell,
+		},
+
 		// Default production profile validated on Finn's single RTX PRO 6000
-		// Blackwell 96 GB against the preserved Qwen FP8 + DSpark deployment.
+		// Blackwell 96 GB. Retained as the packed-head rollback after the
+		// BF16 lm_head checkpoint became the preferred upstream target.
 		Config{
 			ID:       "qwen3-8-27b-nvfp4-sglang-dflash2",
-			Name:     "Qwen3.8 27B NVFP4 + DFlash2 (SGLang)",
+			Name:     "Qwen3.8 27B NVFP4 packed lm_head + DFlash2 (SGLang rollback)",
 			Workload: WorkloadSGLang,
 			ModelID:  "RadixArk/Qwen3.8-27B-NVFP4",
 			Image:    imageSGLangQwen38DFlash2,
@@ -46,7 +101,7 @@ func init() {
 				IPCMode: "host",
 				ShmSize: "32g",
 			},
-			Description: "Qwen3.8 27B NVFP4 with DFlash2 block-diffusion speculative decoding on one RTX PRO 6000 Blackwell, validated for low-latency and eight-request aggregate throughput.",
+			Description: "Qwen3.8 27B packed-head NVFP4 with DFlash2 block-diffusion speculative decoding on one RTX PRO 6000 Blackwell, retained as the validated Finn rollback.",
 			Source:      "SGLang Qwen3.8 RTX PRO 6000 recipe + production validation on Finn (2026-08-22)",
 			Notes: []string{
 				"Pinned target, DFlash2 drafter, and container revisions reproduce the validated Finn canary.",
