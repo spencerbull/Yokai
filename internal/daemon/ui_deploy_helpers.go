@@ -14,7 +14,8 @@ import (
 )
 
 type deployBKCResponse struct {
-	Config *deployBKCRecord `json:"config,omitempty"`
+	Config  *deployBKCRecord  `json:"config,omitempty"`
+	Configs []deployBKCRecord `json:"configs,omitempty"`
 }
 
 type deployBKCRecord struct {
@@ -89,6 +90,8 @@ func (d *Daemon) handleDeployBKC(w http.ResponseWriter, r *http.Request) {
 	switch workload {
 	case string(bkc.WorkloadVLLM):
 		target = bkc.WorkloadVLLM
+	case string(bkc.WorkloadSGLang):
+		target = bkc.WorkloadSGLang
 	case string(bkc.WorkloadLlamaCpp):
 		target = bkc.WorkloadLlamaCpp
 	default:
@@ -104,8 +107,8 @@ func (d *Daemon) handleDeployBKC(w http.ResponseWriter, r *http.Request) {
 
 	// When the UI supplied a device, prefer a device-aware variant so GB10 and
 	// RTX PRO 6000 users get the right container image / flag set.
+	vramGB, gpuCount := 0.0, 0
 	if matchType == bkc.MatchExact {
-		vramGB, gpuCount := 0.0, 0
 		if deviceID != "" {
 			if gpus, err := d.fetchDeployGPUs(deviceID); err == nil && len(gpus) > 0 {
 				vramGB = smallestVRAMGB(gpus)
@@ -122,7 +125,57 @@ func (d *Daemon) handleDeployBKC(w http.ResponseWriter, r *http.Request) {
 		warning = fmt.Sprintf("Suggested BKC for a similar model. Applying it will use %s and its image, port, and flags.", cfg.ModelID)
 	}
 
-	writeJSON(w, http.StatusOK, deployBKCResponse{Config: &deployBKCRecord{
+	configs := []bkc.Config{cfg}
+	if matchType == bkc.MatchExact {
+		for _, candidate := range bkc.LookupAll(target, model) {
+			if candidate.ID == cfg.ID || !deployBKCSiblingFits(candidate, cfg, vramGB, gpuCount) {
+				continue
+			}
+			configs = append(configs, candidate)
+		}
+	}
+	records := make([]deployBKCRecord, 0, len(configs))
+	for _, candidate := range configs {
+		records = append(records, deployBKCRecordFromConfig(candidate, matchType, warning))
+	}
+	selected := records[0]
+	writeJSON(w, http.StatusOK, deployBKCResponse{Config: &selected, Configs: records})
+}
+
+func deployBKCSiblingFits(candidate, selected bkc.Config, vramGBPerGPU float64, gpuCount int) bool {
+	if !sameDeviceTargets(candidate.TargetDevices, selected.TargetDevices) || !strings.EqualFold(candidate.Arch, selected.Arch) {
+		return false
+	}
+	minGPUs := candidate.MinGPUCount
+	if minGPUs <= 0 {
+		minGPUs = 1
+	}
+	if gpuCount > 0 && gpuCount < minGPUs {
+		return false
+	}
+	return candidate.MinVRAMGBPerGPU <= 0 || vramGBPerGPU <= 0 || vramGBPerGPU >= candidate.MinVRAMGBPerGPU
+}
+
+func sameDeviceTargets(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	targets := make(map[string]int, len(left))
+	for _, target := range left {
+		targets[strings.ToLower(strings.TrimSpace(target))]++
+	}
+	for _, target := range right {
+		key := strings.ToLower(strings.TrimSpace(target))
+		if targets[key] == 0 {
+			return false
+		}
+		targets[key]--
+	}
+	return true
+}
+
+func deployBKCRecordFromConfig(cfg bkc.Config, matchType bkc.MatchType, warning string) deployBKCRecord {
+	return deployBKCRecord{
 		ID:        cfg.ID,
 		Name:      cfg.Name,
 		Workload:  string(cfg.Workload),
@@ -148,7 +201,7 @@ func (d *Daemon) handleDeployBKC(w http.ResponseWriter, r *http.Request) {
 		MinGPUCount:     cfg.MinGPUCount,
 		Quantization:    cfg.Quantization,
 		Arch:            cfg.Arch,
-	}})
+	}
 }
 
 func (d *Daemon) handleVLLMMemoryEstimate(w http.ResponseWriter, r *http.Request) {

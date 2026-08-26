@@ -93,7 +93,7 @@ func renderPrometheusMetrics(metrics *SystemMetrics, containers []Container) str
 		infoLabels["image"] = container.Image
 		writePrometheusSample(&b, "yokai_service_info", infoLabels, "1")
 
-		if backend != "vllm" || container.VLLMMetrics == nil {
+		if (backend != "vllm" && backend != "sglang") || container.VLLMMetrics == nil {
 			continue
 		}
 
@@ -193,6 +193,8 @@ func inferenceBackend(container Container) string {
 	switch {
 	case isVLLMImage(container.Image):
 		return "vllm"
+	case isSGLangImage(container.Image):
+		return "sglang"
 	case isLlamaCppImage(container.Image):
 		return "llamacpp"
 	case isComfyUIImage(container.Image):

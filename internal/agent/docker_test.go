@@ -242,6 +242,8 @@ func TestDefaultArgsRespectUserOverrides(t *testing.T) {
 		wants []string
 	}{
 		{name: "vllm model equals form", got: withVLLMModelArg("--model=custom/repo", "default/repo"), wants: []string{"--model=custom/repo"}},
+		{name: "sglang injects serve and model", got: withSGLangServeArgs("--tp-size 1", "Qwen/model"), wants: []string{"sglang serve --model-path Qwen/model", "--tp-size 1"}},
+		{name: "sglang respects model override", got: withSGLangServeArgs("sglang serve --model-path custom/repo --tp-size 1", "default/repo"), wants: []string{"--model-path custom/repo", "--tp-size 1"}},
 		{name: "llama model equals form", got: withLlamaModelArg("--model=/tmp/model.gguf", "foo/bar.gguf"), wants: []string{"--model=/tmp/model.gguf"}},
 		{name: "host equals form", got: withHostArg("--host=127.0.0.1", "--host", "0.0.0.0"), wants: []string{"--host=127.0.0.1"}},
 		{name: "tool parser equals form", got: withVLLMToolCallArgs("--tool-call-parser=hermes", "meta-llama/Llama-3.1-8B-Instruct"), wants: []string{"--enable-auto-tool-choice", "--tool-call-parser=hermes"}},
@@ -253,6 +255,39 @@ func TestDefaultArgsRespectUserOverrides(t *testing.T) {
 				t.Fatalf("%s: expected %q in %q", tt.name, want, tt.got)
 			}
 		}
+	}
+}
+
+func TestScrapeSGLangMetrics(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`sglang:gen_throughput{model_name="Qwen3.8-27B"} 298.4
+sglang:num_running_reqs{model_name="Qwen3.8-27B"} 2
+sglang:num_queue_reqs{model_name="Qwen3.8-27B"} 1
+sglang:prompt_tokens_total{model_name="Qwen3.8-27B",is_streaming="true"} 1200
+sglang:generation_tokens_total{model_name="Qwen3.8-27B",is_streaming="true"} 900
+sglang:cached_tokens_total{model_name="Qwen3.8-27B"} 300
+sglang:time_to_first_token_seconds_bucket{model_name="Qwen3.8-27B",le="0.5"} 10
+sglang:time_to_first_token_seconds_sum{model_name="Qwen3.8-27B"} 2.5
+sglang:time_to_first_token_seconds_count{model_name="Qwen3.8-27B"} 10
+`))
+	}))
+	defer server.Close()
+
+	port := strings.TrimPrefix(server.URL, "http://127.0.0.1:")
+	metrics, err := scrapeVLLMMetrics(port)
+	if err != nil {
+		t.Fatalf("scrape SGLang metrics: %v", err)
+	}
+	if metrics.Model != "Qwen3.8-27B" || metrics.GenerationTokPerSec != 298.4 {
+		t.Fatalf("unexpected SGLang metrics: %#v", metrics)
+	}
+	if metrics.RequestsRunning != 2 || metrics.RequestsWaiting != 1 {
+		t.Fatalf("unexpected request gauges: %#v", metrics)
+	}
+	if !metrics.HasTTFT || metrics.TTFTBuckets["0.5"] != 10 || metrics.TTFTCount != 10 {
+		t.Fatalf("unexpected TTFT histogram: %#v", metrics)
 	}
 }
 

@@ -5,10 +5,11 @@ import { configureIntegrations, getOpenAIEndpoints, getSettings, patchSettings, 
 import type { ThemeState } from "../../theme/types"
 
 type DefaultsEditor = {
-  field: "vllm" | "llama" | "comfy"
+  field: "vllm" | "sglang" | "llama" | "comfy"
   values: {
     comfy: string
     llama: string
+    sglang: string
     vllm: string
   }
 }
@@ -32,6 +33,7 @@ const DEFAULT_SETTINGS: SettingsDocument = {
   preferences: {
     theme: "auto",
     default_vllm_image: "",
+    default_sglang_image: "",
     default_llama_image: "",
     default_comfyui_image: "",
   },
@@ -107,6 +109,7 @@ export function useSettingsController(active: boolean, theme: ThemeState) {
         values: {
           comfy: settings.preferences.default_comfyui_image,
           llama: settings.preferences.default_llama_image,
+          sglang: settings.preferences.default_sglang_image,
           vllm: settings.preferences.default_vllm_image,
         },
       })
@@ -167,6 +170,7 @@ export function useSettingsController(active: boolean, theme: ThemeState) {
             values: {
               comfy: settings.preferences.default_comfyui_image,
               llama: settings.preferences.default_llama_image,
+              sglang: settings.preferences.default_sglang_image,
               vllm: settings.preferences.default_vllm_image,
             },
           })
@@ -276,6 +280,7 @@ export function useSettingsController(active: boolean, theme: ThemeState) {
         preferences: {
           default_comfyui_image: defaultsEditor.values.comfy.trim(),
           default_llama_image: defaultsEditor.values.llama.trim(),
+          default_sglang_image: defaultsEditor.values.sglang.trim(),
           default_vllm_image: defaultsEditor.values.vllm.trim(),
         },
       })
@@ -320,7 +325,7 @@ export function useSettingsController(active: boolean, theme: ThemeState) {
 }
 
 function nextDefaultsField(field: DefaultsEditor["field"], delta: number) {
-  const fields: DefaultsEditor["field"][] = ["vllm", "llama", "comfy"]
+  const fields: DefaultsEditor["field"][] = ["vllm", "sglang", "llama", "comfy"]
   const index = fields.findIndex((entry) => entry === field)
   return fields[(index + delta + fields.length) % fields.length]
 }

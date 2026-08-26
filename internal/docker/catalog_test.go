@@ -40,7 +40,7 @@ func TestKnownImages(t *testing.T) {
 
 	known := KnownImages()
 
-	expectedServices := []string{"vllm", "llamacpp", "comfyui"}
+	expectedServices := []string{"vllm", "sglang", "llamacpp", "comfyui"}
 	for _, service := range expectedServices {
 		if images, exists := known[service]; !exists {
 			t.Errorf("expected known images for service '%s'", service)

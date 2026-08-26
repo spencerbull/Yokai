@@ -73,3 +73,11 @@ func TestContainerBaseURLRequiresPort(t *testing.T) {
 		t.Fatal("expected error when container has no ports")
 	}
 }
+
+func TestInferServiceKindDetectsSGLang(t *testing.T) {
+	t.Parallel()
+
+	if got := inferServiceKindFromImage("lmsysorg/sglang:latest"); got != "sglang" {
+		t.Fatalf("expected sglang, got %q", got)
+	}
+}

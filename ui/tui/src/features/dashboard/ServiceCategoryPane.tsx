@@ -1,7 +1,7 @@
 import type { FleetService } from "../../contracts/fleet"
 import { MarqueeText } from "../shared/MarqueeText"
 import { useTheme } from "../../theme/context"
-import { isAlertService } from "./normalizeFleet"
+import { isAlertService, isStoppedService } from "./normalizeFleet"
 
 type ServiceCategoryPaneProps = {
   onSelect?: (containerId: string) => void
@@ -43,7 +43,11 @@ export function ServiceCategoryPane(props: ServiceCategoryPaneProps) {
       ) : (
         rows.map((service) => {
           const selected = service.containerId === props.selectedContainerId
-          const color = isAlertService(service) ? theme.colors.danger : theme.colors.success
+          const color = isAlertService(service)
+            ? theme.colors.danger
+            : service.deviceOnline && !isStoppedService(service)
+              ? theme.colors.success
+              : theme.colors.textSubtle
 
           return (
             <box

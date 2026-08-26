@@ -92,7 +92,7 @@ func runServicesList(args []string) {
 func runServicesDeploy(args []string) {
 	fs := flag.NewFlagSet("yokai services deploy", flag.ExitOnError)
 	deviceID := fs.String("device", "", "Device ID (required)")
-	serviceType := fs.String("type", "", "Service type: vllm, llamacpp, comfyui")
+	serviceType := fs.String("type", "", "Service type: vllm, sglang, llamacpp, comfyui")
 	model := fs.String("model", "", "Model name/path")
 	port := fs.String("port", "", "Port mapping (e.g. 8000:8000)")
 	image := fs.String("image", "", "Docker image (auto-selected if omitted)")
@@ -116,6 +116,8 @@ func runServicesDeploy(args []string) {
 		switch *serviceType {
 		case "vllm":
 			*image = cfg.Preferences.DefaultVLLMImage
+		case "sglang":
+			*image = cfg.Preferences.DefaultSGLangImage
 		case "llamacpp":
 			*image = cfg.Preferences.DefaultLlamaImage
 		case "comfyui":
@@ -137,6 +139,8 @@ func runServicesDeploy(args []string) {
 		switch *serviceType {
 		case "vllm":
 			ports["8000"] = "8000"
+		case "sglang":
+			ports["30000"] = "30000"
 		case "llamacpp":
 			ports["8080"] = "8080"
 		case "comfyui":

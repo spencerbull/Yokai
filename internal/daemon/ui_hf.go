@@ -55,7 +55,7 @@ func (d *Daemon) handleHFModels(w http.ResponseWriter, r *http.Request) {
 
 	workload := strings.TrimSpace(r.URL.Query().Get("workload"))
 	filter := ""
-	if workload == "vllm" {
+	if workload == "vllm" || workload == "sglang" {
 		filter = "text-generation"
 	}
 

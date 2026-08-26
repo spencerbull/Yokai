@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 
 import type { DeviceRecord, MetricsResponse } from "../../contracts/fleet"
-import { normalizeFleetSnapshot } from "./normalizeFleet"
+import { inferServiceType, isAlertService, isStoppedService, normalizeFleetSnapshot } from "./normalizeFleet"
 
 describe("normalizeFleetSnapshot", () => {
   test("sorts alerting services first and enriches device labels", () => {
@@ -45,6 +45,11 @@ describe("normalizeFleetSnapshot", () => {
             generation_tokens_total: 900,
             cached_prompt_tokens_total: 300,
           },
+          {
+            id: "container-stopped",
+            name: "yokai-stopped",
+            status: "stopped",
+          },
         ],
       },
       "dev-b": {
@@ -68,7 +73,7 @@ describe("normalizeFleetSnapshot", () => {
 
     expect(snapshot.totals.devices).toBe(2)
     expect(snapshot.totals.onlineDevices).toBe(2)
-    expect(snapshot.totals.services).toBe(2)
+    expect(snapshot.totals.services).toBe(3)
     expect(snapshot.totals.alertServices).toBe(1)
     expect(snapshot.totals.avgCpuPercent).toBe(16)
     expect(snapshot.totals.avgRamPercent).toBe(18.75)
@@ -79,6 +84,7 @@ describe("normalizeFleetSnapshot", () => {
     expect(snapshot.services[1].promptTokensTotal).toBe(1200)
     expect(snapshot.services[1].generationTokensTotal).toBe(900)
     expect(snapshot.services[1].cachedPromptTokensTotal).toBe(300)
+    expect(snapshot.services.find((service) => service.serviceId === "stopped")?.status).toBe("stopped")
   })
 
   test("computes gpu totals and per-device gpu summary", () => {
@@ -127,5 +133,20 @@ describe("normalizeFleetSnapshot", () => {
     expect(snapshot.totals.avgGpuUtilPercent).toBe(50)
     expect(snapshot.devices[0].gpuName).toBe("NVIDIA RTX 4090")
     expect(snapshot.devices[0].gpuUtilPercent).toBe(50)
+  })
+})
+
+describe("inferServiceType", () => {
+  test("classifies SGLang containers by name or image", () => {
+    expect(inferServiceType("yokai-sglang-qwen3-8", "lmsysorg/sglang:latest")).toBe("sglang")
+    expect(inferServiceType("custom-runtime", "lmsysorg/sglang@sha256:abc123")).toBe("sglang")
+  })
+})
+
+describe("isAlertService", () => {
+  test("keeps stopped services visible without treating them as errors", () => {
+    expect(isAlertService({ health: "", status: "stopped" })).toBe(false)
+    expect(isStoppedService({ status: "stopped" })).toBe(true)
+    expect(isAlertService({ health: "unhealthy", status: "running" })).toBe(true)
   })
 })

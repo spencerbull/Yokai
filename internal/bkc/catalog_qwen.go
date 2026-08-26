@@ -1,9 +1,178 @@
 package bkc
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/spencerbull/yokai/internal/config"
+)
 
 func init() {
 	register(
+		// MiaAI Lab commit a0743929 switched the RTX PRO 6000 recipe to the
+		// dense BF16 lm_head export on 2026-08-24. The packed-head profile
+		// below remains available as a rollback so cached weights stay usable.
+		Config{
+			ID:       "qwen3-8-27b-nvfp4-bf16-lmhead-sglang-dflash2",
+			Name:     "Qwen3.8 27B NVFP4 BF16 lm_head + DFlash2 (SGLang)",
+			Workload: WorkloadSGLang,
+			ModelID:  "RadixArk/Qwen3.8-27B-NVFP4-BF16-LMHead",
+			Image:    imageSGLangQwen38DFlash2,
+			Port:     "30000",
+			ExtraArgs: strings.Join([]string{
+				"sglang serve",
+				"--trust-remote-code",
+				"--revision 009632fef96dd349150baa780c984e62e70e91fe",
+				"--served-model-name Qwen3.8-27B",
+				"--tp-size 1",
+				"--context-length 262144",
+				"--mem-fraction-static 0.85",
+				"--max-running-requests 8",
+				"--cuda-graph-max-bs-decode 8",
+				"--mamba-radix-cache-strategy extra_buffer_lazy",
+				"--mamba-ssm-dtype bfloat16",
+				"--kv-cache-dtype fp8_e4m3",
+				"--attention-backend flashinfer",
+				"--chunked-prefill-size 2048",
+				"--reasoning-parser qwen3",
+				"--tool-call-parser qwen3_coder",
+				`--default-chat-template-kwargs {"enable_thinking":false}`,
+				"--speculative-algorithm DFLASH",
+				"--speculative-draft-model-path incoai/Qwen3.8-27B-DFlash2",
+				"--speculative-draft-model-revision dedf8df68adfb1afeaf7b7480c0a0243108177b4",
+				"--speculative-num-draft-tokens 8",
+				"--enable-metrics",
+			}, " "),
+			Volumes: hfMountDefault,
+			Runtime: config.RuntimeOptions{
+				IPCMode: "host",
+				ShmSize: "32g",
+			},
+			Description: "Qwen3.8 27B NVFP4 with a dense BF16 output head and DFlash2 speculative decoding on one RTX PRO 6000 Blackwell.",
+			Source:      "MiaAI Lab RTX PRO 6000 recipe a0743929 + SGLang Qwen3.8 cookbook + RadixArk BF16 lm_head checkpoint",
+			Notes: []string{
+				"The dense BF16 lm_head export is the target used for the SGLang cookbook measurements; the transformer body remains NVFP4.",
+				"The pinned checkpoint contains 23.76 GB of Hub blobs, about 1.83 GB more than the packed-head rollback.",
+				"The image, DFlash2 drafter, 262,144-token context, and eight-request policy match the Finn-validated packed-head profile.",
+				"extra_buffer_lazy is the intentional high-throughput Mamba cache tier; the extra_buffer alternative spends an additional state slot per request to favor latency.",
+				"BF16 Mamba state passed the live smoke and throughput checks; workload-specific accuracy evaluation remains an open quality gate.",
+				"Keep the packed-head DFlash2 or DSpark BKC available until this profile passes production quality and throughput checks.",
+			},
+			TargetDevices:   []string{DeviceRTXPRO6000},
+			MinVRAMGBPerGPU: 90,
+			MinGPUCount:     1,
+			Quantization:    QuantNVFP4,
+			Arch:            ArchBlackwell,
+		},
+
+		// Default production profile validated on Finn's single RTX PRO 6000
+		// Blackwell 96 GB. Retained as the packed-head rollback after the
+		// BF16 lm_head checkpoint became the preferred upstream target.
+		Config{
+			ID:       "qwen3-8-27b-nvfp4-sglang-dflash2",
+			Name:     "Qwen3.8 27B NVFP4 packed lm_head + DFlash2 (SGLang rollback)",
+			Workload: WorkloadSGLang,
+			ModelID:  "RadixArk/Qwen3.8-27B-NVFP4",
+			Image:    imageSGLangQwen38DFlash2,
+			Port:     "30000",
+			ExtraArgs: strings.Join([]string{
+				"sglang serve",
+				"--trust-remote-code",
+				"--revision 319f741cce68d7914884900c138a1fbb70a42f30",
+				"--served-model-name Qwen3.8-27B",
+				"--tp-size 1",
+				"--context-length 262144",
+				"--mem-fraction-static 0.85",
+				"--max-running-requests 8",
+				"--cuda-graph-max-bs-decode 8",
+				"--mamba-radix-cache-strategy extra_buffer_lazy",
+				"--mamba-ssm-dtype bfloat16",
+				"--kv-cache-dtype fp8_e4m3",
+				"--attention-backend flashinfer",
+				"--chunked-prefill-size 2048",
+				"--reasoning-parser qwen3",
+				"--tool-call-parser qwen3_coder",
+				`--default-chat-template-kwargs {"enable_thinking":false}`,
+				"--speculative-algorithm DFLASH",
+				"--speculative-draft-model-path incoai/Qwen3.8-27B-DFlash2",
+				"--speculative-draft-model-revision dedf8df68adfb1afeaf7b7480c0a0243108177b4",
+				"--speculative-num-draft-tokens 8",
+				"--enable-metrics",
+			}, " "),
+			Volumes: hfMountDefault,
+			Runtime: config.RuntimeOptions{
+				IPCMode: "host",
+				ShmSize: "32g",
+			},
+			Description: "Qwen3.8 27B packed-head NVFP4 with DFlash2 block-diffusion speculative decoding on one RTX PRO 6000 Blackwell, retained as the validated Finn rollback.",
+			Source:      "SGLang Qwen3.8 RTX PRO 6000 recipe + production validation on Finn (2026-08-22)",
+			Notes: []string{
+				"Pinned target, DFlash2 drafter, and container revisions reproduce the validated Finn canary.",
+				"Matched Finn results: 306.4 output tok/s for short code, 198.5 tok/s at exactly 32,768 prompt tokens, 961.7 tok/s aggregate at four-way, and 1,634.4 tok/s aggregate at eight-way concurrency.",
+				"Validated 262,144-token context, OpenAI chat and Responses APIs, two-step tool calls, OpenCode2, native metrics, and long-context retrieval.",
+				"The validated runtime allocated 117 target Mamba slots and a 1,048,431-token FP8 KV pool; concurrent requests share that pool.",
+			},
+			TargetDevices:   []string{DeviceRTXPRO6000},
+			MinVRAMGBPerGPU: 90,
+			MinGPUCount:     1,
+			Quantization:    QuantNVFP4,
+			Arch:            ArchBlackwell,
+		},
+
+		// Previous Finn production profile retained as a selectable rollback.
+		// These revisions reproduce the NVFP4 deployment, not the earlier FP8
+		// target used for the historical 298.4 tok/s microbenchmark.
+		Config{
+			ID:       "qwen3-8-27b-nvfp4-sglang-dspark",
+			Name:     "Qwen3.8 27B NVFP4 + DSpark (SGLang rollback)",
+			Workload: WorkloadSGLang,
+			ModelID:  "RadixArk/Qwen3.8-27B-NVFP4",
+			Image:    imageSGLangQwen38,
+			Port:     "30000",
+			ExtraArgs: strings.Join([]string{
+				"sglang serve",
+				"--trust-remote-code",
+				"--revision 554ebba9b5f1b79dc11246341960360e6ef05ef4",
+				"--served-model-name Qwen3.8-27B",
+				"--tp-size 1",
+				"--context-length 262144",
+				"--mem-fraction-static 0.85",
+				"--max-running-requests 3",
+				"--max-mamba-cache-size 12",
+				"--mamba-radix-cache-strategy extra_buffer_lazy",
+				"--mamba-ssm-dtype bfloat16",
+				"--kv-cache-dtype fp8_e4m3",
+				"--attention-backend flashinfer",
+				"--chunked-prefill-size 2048",
+				"--cuda-graph-max-bs 3",
+				"--reasoning-parser qwen3",
+				"--tool-call-parser qwen3_coder",
+				`--default-chat-template-kwargs {"enable_thinking":false}`,
+				"--speculative-algorithm DSPARK",
+				"--speculative-draft-model-path RadixArk/Qwen3.8-27B-DSpark",
+				"--speculative-draft-model-revision 85ef153be924f17ce4bf62726954eeaa4a73e854",
+				"--speculative-draft-attention-backend flashinfer",
+				"--speculative-dspark-block-size 7",
+				"--enable-metrics",
+			}, " "),
+			Volumes: hfMountDefault,
+			Runtime: config.RuntimeOptions{
+				IPCMode: "host",
+				ShmSize: "32g",
+			},
+			Description: "Qwen3.8 27B NVFP4 with DSpark speculative decoding on one RTX PRO 6000 Blackwell, retained as Finn's 262K/3-request rollback BKC.",
+			Source:      "SGLang Qwen3.8 recipe + production validation on Finn (2026-08-21)",
+			Notes: []string{
+				"Pinned target, draft-model, and container revisions reproduce the former live Finn NVFP4 deployment.",
+				"Validated OpenAI chat/tool calls, native SGLang metrics, and 262,144-token context with at most three active requests.",
+				"The historical 298.4 tok/s solo and 899.6 tok/s aggregate measurements used a Qwen/Qwen3.8-27B-FP8 target and do not characterize this NVFP4 rollback BKC.",
+			},
+			TargetDevices:   []string{DeviceRTXPRO6000},
+			MinVRAMGBPerGPU: 90,
+			MinGPUCount:     1,
+			Quantization:    QuantNVFP4,
+			Arch:            ArchBlackwell,
+		},
+
 		// Qwen3 dense small checkpoints — fit almost any consumer/workstation GPU.
 		qwenSmallDense("qwen3-0-6b", "Qwen3 0.6B", "Qwen/Qwen3-0.6B", 6),
 		qwenSmallDense("qwen3-1-7b", "Qwen3 1.7B", "Qwen/Qwen3-1.7B", 8),

@@ -55,6 +55,107 @@ func TestLookupFindsQwen36NVFP4(t *testing.T) {
 	}
 }
 
+func TestLookupFindsQwen38BF16LMHeadSGLangDFlash2Default(t *testing.T) {
+	t.Parallel()
+
+	cfg, ok := Lookup(WorkloadSGLang, "RadixArk/Qwen3.8-27B-NVFP4-BF16-LMHead")
+	if !ok {
+		t.Fatal("expected matching SGLang BKC")
+	}
+	if cfg.ID != "qwen3-8-27b-nvfp4-bf16-lmhead-sglang-dflash2" {
+		t.Fatalf("unexpected BKC %q", cfg.ID)
+	}
+	if cfg.Port != "30000" || cfg.MinGPUCount != 1 || cfg.MinVRAMGBPerGPU != 90 {
+		t.Fatalf("unexpected capacity metadata: %#v", cfg)
+	}
+	if cfg.Image != imageSGLangQwen38DFlash2 {
+		t.Fatalf("expected pinned DFlash2 image, got %q", cfg.Image)
+	}
+	for _, want := range []string{
+		"sglang serve",
+		"--revision 009632fef96dd349150baa780c984e62e70e91fe",
+		"--context-length 262144",
+		"--mem-fraction-static 0.85",
+		"--max-running-requests 8",
+		"--cuda-graph-max-bs-decode 8",
+		"--chunked-prefill-size 2048",
+		"--mamba-radix-cache-strategy extra_buffer_lazy",
+		"--mamba-ssm-dtype bfloat16",
+		"--kv-cache-dtype fp8_e4m3",
+		"--speculative-algorithm DFLASH",
+		"--speculative-draft-model-path incoai/Qwen3.8-27B-DFlash2",
+		"--speculative-draft-model-revision dedf8df68adfb1afeaf7b7480c0a0243108177b4",
+		"--speculative-num-draft-tokens 8",
+		"--enable-metrics",
+	} {
+		if !strings.Contains(cfg.ExtraArgs, want) {
+			t.Fatalf("expected %q in extra args, got %q", want, cfg.ExtraArgs)
+		}
+	}
+	for _, unwanted := range []string{
+		"--revision 91cea059647696fd83964e43d57db122ff745993",
+		"--mem-fraction-static 0.90",
+		"--chunked-prefill-size 4096",
+		"--max-prefill-tokens 4096",
+		"--speculative-draft-model-quantization",
+		"--min-free-slots-delay",
+	} {
+		if strings.Contains(cfg.ExtraArgs, unwanted) {
+			t.Fatalf("did not expect superseded flag %q in %q", unwanted, cfg.ExtraArgs)
+		}
+	}
+	if _, ok := Lookup(WorkloadVLLM, cfg.ModelID); ok {
+		t.Fatal("did not expect SGLang BKC to match the vLLM workload")
+	}
+}
+
+func TestLookupFindsQwen38PackedLMHeadSGLangDFlash2Rollback(t *testing.T) {
+	t.Parallel()
+
+	cfg, ok := Lookup(WorkloadSGLang, "RadixArk/Qwen3.8-27B-NVFP4")
+	if !ok {
+		t.Fatal("expected matching packed-head SGLang BKC")
+	}
+	if cfg.ID != "qwen3-8-27b-nvfp4-sglang-dflash2" {
+		t.Fatalf("unexpected packed-head default BKC %q", cfg.ID)
+	}
+	if !strings.Contains(cfg.ExtraArgs, "--revision 319f741cce68d7914884900c138a1fbb70a42f30") {
+		t.Fatalf("expected pinned packed-head revision, got %q", cfg.ExtraArgs)
+	}
+}
+
+func TestLookupAllFindsQwen38SGLangSpeculativeVariants(t *testing.T) {
+	t.Parallel()
+
+	configs := LookupAll(WorkloadSGLang, "RadixArk/Qwen3.8-27B-NVFP4")
+	if len(configs) != 2 {
+		t.Fatalf("expected DFlash2 and DSpark BKCs, got %#v", configs)
+	}
+	if configs[0].ID != "qwen3-8-27b-nvfp4-sglang-dflash2" || configs[1].ID != "qwen3-8-27b-nvfp4-sglang-dspark" {
+		t.Fatalf("unexpected BKC order: %#v", configs)
+	}
+
+	cfg := configs[1]
+	if cfg.Image != imageSGLangQwen38 {
+		t.Fatalf("expected pinned DSpark image, got %q", cfg.Image)
+	}
+	for _, want := range []string{
+		"--revision 554ebba9b5f1b79dc11246341960360e6ef05ef4",
+		"--context-length 262144",
+		"--max-running-requests 3",
+		"--max-mamba-cache-size 12",
+		"--speculative-algorithm DSPARK",
+		"--speculative-draft-model-path RadixArk/Qwen3.8-27B-DSpark",
+		"--speculative-draft-model-revision 85ef153be924f17ce4bf62726954eeaa4a73e854",
+		"--speculative-draft-attention-backend flashinfer",
+		"--speculative-dspark-block-size 7",
+	} {
+		if !strings.Contains(cfg.ExtraArgs, want) {
+			t.Fatalf("expected %q in extra args, got %q", want, cfg.ExtraArgs)
+		}
+	}
+}
+
 func TestLookupFindsQwen36TextNVFP4MTP(t *testing.T) {
 	t.Parallel()
 

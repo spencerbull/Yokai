@@ -198,7 +198,7 @@ func liveOpenAIEndpointCandidates(devices []config.Device, claimedPorts map[stri
 		}
 		for _, container := range containers {
 			serviceType := inferServiceType(container.Image, container.Name)
-			if serviceType != "vllm" && serviceType != "llamacpp" {
+			if serviceType != "vllm" && serviceType != "sglang" && serviceType != "llamacpp" {
 				continue
 			}
 			if !strings.EqualFold(strings.TrimSpace(container.Status), "running") {

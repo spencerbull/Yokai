@@ -26,7 +26,7 @@ func testContainerService(container Container) (*ServiceTestResult, error) {
 	}
 
 	switch {
-	case isVLLMImage(container.Image), isLlamaCppImage(container.Image):
+	case isVLLMImage(container.Image), isSGLangImage(container.Image), isLlamaCppImage(container.Image):
 		return testOpenAICompatibleService(baseURL, inferServiceKindFromImage(container.Image))
 	case isComfyUIImage(container.Image):
 		return testComfyUIService(baseURL)
@@ -48,6 +48,8 @@ func inferServiceKindFromImage(image string) string {
 	switch {
 	case isVLLMImage(image):
 		return "vllm"
+	case isSGLangImage(image):
+		return "sglang"
 	case isLlamaCppImage(image):
 		return "llamacpp"
 	case isComfyUIImage(image):

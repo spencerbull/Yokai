@@ -1,4 +1,4 @@
-export type WorkloadType = "vllm" | "llamacpp" | "comfyui"
+export type WorkloadType = "vllm" | "sglang" | "llamacpp" | "comfyui"
 
 export type HFModel = {
   id: string

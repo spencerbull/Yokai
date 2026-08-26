@@ -2,15 +2,18 @@ package ssh
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
 const defaultGoVersion = "1.25"
 
-// BuildLocalBinaryForTarget builds a temporary yokai binary for the target platform.
+// BuildLocalBinaryForTarget stages the running Yokai binary for the current
+// platform or builds a temporary binary for a different target platform.
 func BuildLocalBinaryForTarget(kernelOS, arch string) (string, error) {
 	goos, err := normalizeTargetOS(kernelOS)
 	if err != nil {
@@ -27,6 +30,14 @@ func BuildLocalBinaryForTarget(kernelOS, arch string) (string, error) {
 	}
 
 	binaryPath := filepath.Join(tmpDir, "yokai")
+	if goos == runtime.GOOS && goarch == runtime.GOARCH {
+		if err := copyCurrentExecutable(binaryPath); err != nil {
+			_ = os.RemoveAll(tmpDir)
+			return "", err
+		}
+		return binaryPath, nil
+	}
+
 	cmd, err := localGoBuildCommand(binaryPath)
 	if err != nil {
 		_ = os.RemoveAll(tmpDir)
@@ -42,13 +53,40 @@ func BuildLocalBinaryForTarget(kernelOS, arch string) (string, error) {
 	return binaryPath, nil
 }
 
-func localGoBuildCommand(binaryPath string) (*exec.Cmd, error) {
-	if goPath, err := exec.LookPath("go"); err == nil {
-		return exec.Command(goPath, "build", "-o", binaryPath, "./cmd/yokai"), nil
+func copyCurrentExecutable(binaryPath string) error {
+	executablePath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("locating current yokai executable: %w", err)
 	}
 
+	source, err := os.Open(executablePath)
+	if err != nil {
+		return fmt.Errorf("opening current yokai executable: %w", err)
+	}
+	defer func() { _ = source.Close() }()
+
+	destination, err := os.OpenFile(binaryPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+	if err != nil {
+		return fmt.Errorf("creating staged yokai executable: %w", err)
+	}
+	if _, err := io.Copy(destination, source); err != nil {
+		_ = destination.Close()
+		return fmt.Errorf("copying current yokai executable: %w", err)
+	}
+	if err := destination.Close(); err != nil {
+		return fmt.Errorf("closing staged yokai executable: %w", err)
+	}
+
+	return nil
+}
+
+func localGoBuildCommand(binaryPath string) (*exec.Cmd, error) {
 	if misePath, err := exec.LookPath("mise"); err == nil {
 		return exec.Command(misePath, "exec", "go@"+defaultGoVersion, "--", "go", "build", "-o", binaryPath, "./cmd/yokai"), nil
+	}
+
+	if goPath, err := exec.LookPath("go"); err == nil {
+		return exec.Command(goPath, "build", "-o", binaryPath, "./cmd/yokai"), nil
 	}
 
 	return nil, fmt.Errorf("go toolchain not found locally (expected either `go` on PATH or `mise exec go@%s`)", defaultGoVersion)

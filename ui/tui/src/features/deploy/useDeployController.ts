@@ -3,7 +3,7 @@ import { startTransition, useEffect, useMemo, useState } from "react"
 import type { DeployBKC, DeployForm, GGUFVariant, HFModel, VLLMMemoryEstimate, WorkloadType } from "../../contracts/deploy"
 import type { DeviceRecord } from "../../contracts/fleet"
 import type { SettingsDocument } from "../../contracts/settings"
-import { deployService, getDeployBKC, getDevices, getGGUFVariants, getHFModels, getSettings, getVLLMMemoryEstimate, putDeployHistory } from "../../services/daemon-client"
+import { deployService, getDeployBKCs, getDevices, getGGUFVariants, getHFModels, getSettings, getVLLMMemoryEstimate, putDeployHistory } from "../../services/daemon-client"
 
 type DeployStep = "workload" | "device" | "image" | "model" | "variant" | "config" | "review"
 type ConfigField = "port" | "extraArgs" | "bkcAction" | "contextLength" | "overheadGB" | "hfmemCalculate" | "hfmemApply"
@@ -28,13 +28,14 @@ type KeyLike = {
 }
 
 const STEPS: DeployStep[] = ["workload", "device", "image", "model", "variant", "config", "review"]
-const WORKLOADS: WorkloadType[] = ["vllm", "llamacpp", "comfyui"]
+const WORKLOADS: WorkloadType[] = ["vllm", "sglang", "llamacpp", "comfyui"]
 
 const EMPTY_SETTINGS: SettingsDocument = {
   hf: { configured: false, source: "none" },
   preferences: {
     theme: "auto",
     default_vllm_image: "",
+    default_sglang_image: "",
     default_llama_image: "",
     default_comfyui_image: "",
   },
@@ -60,7 +61,8 @@ export function useDeployController(active: boolean, onComplete: () => void) {
   const [pendingAction, setPendingAction] = useState<string | null>(null)
   const [modelResults, setModelResults] = useState<HFModel[]>([])
   const [searchError, setSearchError] = useState<string>()
-  const [bkc, setBkc] = useState<DeployBKC | null>(null)
+  const [bkcs, setBkcs] = useState<DeployBKC[]>([])
+  const [bkcIndex, setBkcIndex] = useState(0)
   const [appliedBKCId, setAppliedBKCId] = useState("")
   const [ggufVariants, setGGUFVariants] = useState<GGUFVariant[]>([])
   const [ggufLoading, setGGUFLoading] = useState(false)
@@ -71,6 +73,7 @@ export function useDeployController(active: boolean, onComplete: () => void) {
     loading: false,
     overheadGB: "1.5",
   })
+  const bkc = bkcs[bkcIndex] ?? null
 
   useEffect(() => {
     if (!active) {
@@ -149,26 +152,30 @@ export function useDeployController(active: boolean, onComplete: () => void) {
     if (!active) {
       return
     }
-    if (form.workload !== "vllm" && form.workload !== "llamacpp") {
-      setBkc(null)
+    if (form.workload !== "vllm" && form.workload !== "sglang" && form.workload !== "llamacpp") {
+      setBkcs([])
+      setBkcIndex(0)
       return
     }
     const model = form.model.trim()
     if (model === "") {
-      setBkc(null)
+      setBkcs([])
+      setBkcIndex(0)
       return
     }
 
     let cancelled = false
-    void getDeployBKC(form.workload, model, form.deviceId || undefined)
-      .then((config) => {
+    void getDeployBKCs(form.workload, model, form.deviceId || undefined)
+      .then((configs) => {
         if (!cancelled) {
-          setBkc(config)
+          setBkcs(configs)
+          setBkcIndex(0)
         }
       })
       .catch(() => {
         if (!cancelled) {
-          setBkc(null)
+          setBkcs([])
+          setBkcIndex(0)
         }
       })
 
@@ -181,7 +188,7 @@ export function useDeployController(active: boolean, onComplete: () => void) {
     if (!active) {
       return
     }
-    if (form.workload === "comfyui") {
+    if (form.workload === "comfyui" || form.workload === "sglang") {
       setGGUFVariants([])
       setGGUFError(undefined)
       setGGUFLoading(false)
@@ -250,7 +257,7 @@ export function useDeployController(active: boolean, onComplete: () => void) {
   }
 
   function advanceFromModel() {
-    if (form.workload === "comfyui") {
+    if (form.workload === "comfyui" || form.workload === "sglang") {
       setStep("config")
       setCursor(0)
       return
@@ -281,8 +288,13 @@ export function useDeployController(active: boolean, onComplete: () => void) {
   return {
     activeBKC: bkc && appliedBKCId === bkc.id ? bkc : null,
     availableBKC: bkc,
+    availableBKCCount: bkcs.length,
+    availableBKCIndex: bkcIndex,
     applyBKC() {
       applyBKCToForm()
+    },
+    selectBKC(direction: -1 | 1) {
+      selectBKCByOffset(direction)
     },
     ggufVariants,
     ggufLoading,
@@ -348,7 +360,7 @@ export function useDeployController(active: boolean, onComplete: () => void) {
       setForm((current) => ({ ...current, model: modelId, ggufVariant: "", ggufFiles: [] }))
       setSearchError(undefined)
       setModelResults([])
-      if (form.workload === "comfyui") {
+      if (form.workload === "comfyui" || form.workload === "sglang") {
         setStep("config")
         setCursor(0)
         return
@@ -395,6 +407,7 @@ export function useDeployController(active: boolean, onComplete: () => void) {
       case "1":
       case "2":
       case "3":
+      case "4":
         selectWorkloadByIndex(Number(key.name) - 1)
         return true
       case "return":
@@ -546,6 +559,20 @@ export function useDeployController(active: boolean, onComplete: () => void) {
       case "f":
         if (form.workload === "vllm" && vllmHelper.estimate) {
           applyVLLMEstimate(vllmHelper.estimate)
+          return true
+        }
+        return false
+      case "left":
+      case "h":
+        if (configField === "bkcAction" && bkcs.length > 1) {
+          selectBKCByOffset(-1)
+          return true
+        }
+        return false
+      case "right":
+      case "l":
+        if (configField === "bkcAction" && bkcs.length > 1) {
+          selectBKCByOffset(1)
           return true
         }
         return false
@@ -701,6 +728,13 @@ export function useDeployController(active: boolean, onComplete: () => void) {
       estimate: null,
     }))
   }
+
+  function selectBKCByOffset(direction: -1 | 1) {
+    if (bkcs.length < 2) {
+      return
+    }
+    setBkcIndex((current) => (current + direction + bkcs.length) % bkcs.length)
+  }
 }
 
 function emptyForm(): DeployForm {
@@ -742,6 +776,17 @@ function applyWorkloadDefaults(form: DeployForm, settings: SettingsDocument, wor
         model: "",
         name: defaultName(workload, "comfyui"),
         port: "8188",
+        extraArgs: workload === form.workload ? form.extraArgs : "",
+        ggufVariant: "",
+        ggufFiles: [],
+        workload,
+      }
+    case "sglang":
+      return {
+        ...form,
+        image: form.workload === workload && form.image ? form.image : settings.preferences.default_sglang_image,
+        name: defaultName(workload, form.model),
+        port: "30000",
         extraArgs: workload === form.workload ? form.extraArgs : "",
         ggufVariant: "",
         ggufFiles: [],

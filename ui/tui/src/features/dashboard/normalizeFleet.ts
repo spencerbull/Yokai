@@ -125,10 +125,15 @@ export function isAlertService(service: Pick<FleetService, "health" | "status">)
     case "starting":
     case "created":
     case "restarting":
+    case "stopped":
       return false
     default:
       return true
   }
+}
+
+export function isStoppedService(service: Pick<FleetService, "status">) {
+  return service.status.trim().toLowerCase() === "stopped"
 }
 
 export function isMonitoringService(service: Pick<FleetService, "name" | "type" | "image">) {
@@ -166,6 +171,9 @@ export function inferServiceType(name: string, image?: string) {
   const haystack = `${name} ${image ?? ""}`.toLowerCase()
   if (haystack.includes("vllm")) {
     return "vllm"
+  }
+  if (haystack.includes("sglang")) {
+    return "sglang"
   }
   if (haystack.includes("llama")) {
     return "llamacpp"

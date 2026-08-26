@@ -49,6 +49,7 @@ export function SettingsRoute(props: SettingsRouteProps) {
           <box flexDirection="row" gap={1}>
             <Card title="Deploy Defaults">
               <Line label="VLLM" value={settings.preferences.default_vllm_image} marquee />
+              <Line label="SGLang" value={settings.preferences.default_sglang_image} marquee />
               <Line label="Llama" value={settings.preferences.default_llama_image} marquee />
               <Line label="Comfy" value={settings.preferences.default_comfyui_image} marquee />
               <ActionText keys="P" onSelect={props.controller.openDefaultsEditor}>Edit defaults</ActionText>
@@ -179,6 +180,9 @@ function DefaultsModal(props: { controller: SettingsController }) {
 
         <Field label="Default VLLM image" active={editor.field === "vllm"}>
           <input value={editor.values.vllm} onInput={(value) => props.controller.saveDefaultsValue("vllm", value)} focused={editor.field === "vllm"} width={52} backgroundColor={theme.colors.panelMuted} textColor={theme.colors.text} focusedBackgroundColor={theme.colors.panelMuted} cursorColor={theme.colors.accent} placeholder="vllm/vllm-openai:latest" />
+        </Field>
+        <Field label="Default SGLang image" active={editor.field === "sglang"}>
+          <input value={editor.values.sglang} onInput={(value) => props.controller.saveDefaultsValue("sglang", value)} focused={editor.field === "sglang"} width={52} backgroundColor={theme.colors.panelMuted} textColor={theme.colors.text} focusedBackgroundColor={theme.colors.panelMuted} cursorColor={theme.colors.accent} placeholder="lmsysorg/sglang:latest" />
         </Field>
         <Field label="Default llama.cpp image" active={editor.field === "llama"}>
           <input value={editor.values.llama} onInput={(value) => props.controller.saveDefaultsValue("llama", value)} focused={editor.field === "llama"} width={52} backgroundColor={theme.colors.panelMuted} textColor={theme.colors.text} focusedBackgroundColor={theme.colors.panelMuted} cursorColor={theme.colors.accent} placeholder="ghcr.io/ggml-org/llama.cpp:server-cuda" />
