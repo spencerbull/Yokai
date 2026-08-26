@@ -1,6 +1,6 @@
 import type { FleetService } from "../../contracts/fleet"
 import { useTheme } from "../../theme/context"
-import { isAlertService } from "./normalizeFleet"
+import { isAlertService, isStoppedService } from "./normalizeFleet"
 
 type ServiceListPaneProps = {
   services: FleetService[]
@@ -39,9 +39,11 @@ export function ServiceListPane(props: ServiceListPaneProps) {
           const selected = absoluteIndex === props.selectedIndex
           const statusColor = isAlertService(service)
             ? theme.colors.danger
-            : service.deviceOnline
-              ? theme.colors.success
-              : theme.colors.textSubtle
+            : isStoppedService(service)
+              ? theme.colors.textSubtle
+              : service.deviceOnline
+                ? theme.colors.success
+                : theme.colors.textSubtle
 
           return (
             <text key={service.containerId} fg={selected ? theme.colors.text : theme.colors.textMuted}>
@@ -79,6 +81,9 @@ function healthGlyph(service: Pick<FleetService, "health" | "status" | "deviceOn
   }
   if (isAlertService({ health: service.health, status: service.status } as Pick<FleetService, "health" | "status">)) {
     return "!"
+  }
+  if (isStoppedService(service)) {
+    return "○"
   }
   return "●"
 }

@@ -60,3 +60,28 @@ func TestHandleDeployBKCReturnsBF16LMHeadDefault(t *testing.T) {
 		t.Fatalf("expected one BF16 lm_head BKC, got %#v", response.Configs)
 	}
 }
+
+func TestHandleDeployBKCFiltersSiblingsWithDifferentHardwareAffinity(t *testing.T) {
+	t.Parallel()
+
+	d := &Daemon{}
+	model := url.QueryEscape("nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16")
+	req := httptest.NewRequest(http.MethodGet, "/deploy/bkc?workload=vllm&model="+model, nil)
+	recorder := httptest.NewRecorder()
+
+	d.handleDeployBKC(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var response deployBKCResponse
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.Config == nil || response.Config.ID != "nemotron-3-nano-30b-a3b-bf16" {
+		t.Fatalf("expected generic amd64 BKC, got %#v", response.Config)
+	}
+	if len(response.Configs) != 1 {
+		t.Fatalf("expected incompatible GB10 and Jetson Thor siblings to be filtered, got %#v", response.Configs)
+	}
+}

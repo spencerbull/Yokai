@@ -8,9 +8,9 @@ import (
 
 func init() {
 	register(
-		// MiaAI Lab switched the RTX PRO 6000 recipe to the dense BF16
-		// lm_head export on 2026-08-25. The packed-head profile below remains
-		// available as a rollback so existing cached weights stay usable.
+		// MiaAI Lab commit a0743929 switched the RTX PRO 6000 recipe to the
+		// dense BF16 lm_head export on 2026-08-24. The packed-head profile
+		// below remains available as a rollback so cached weights stay usable.
 		Config{
 			ID:       "qwen3-8-27b-nvfp4-bf16-lmhead-sglang-dflash2",
 			Name:     "Qwen3.8 27B NVFP4 BF16 lm_head + DFlash2 (SGLang)",
@@ -48,11 +48,13 @@ func init() {
 				ShmSize: "32g",
 			},
 			Description: "Qwen3.8 27B NVFP4 with a dense BF16 output head and DFlash2 speculative decoding on one RTX PRO 6000 Blackwell.",
-			Source:      "MiaAI Lab RTX PRO 6000 recipe (2026-08-25) + RadixArk BF16 lm_head checkpoint",
+			Source:      "MiaAI Lab RTX PRO 6000 recipe a0743929 + SGLang Qwen3.8 cookbook + RadixArk BF16 lm_head checkpoint",
 			Notes: []string{
 				"The dense BF16 lm_head export is the target used for the SGLang cookbook measurements; the transformer body remains NVFP4.",
 				"The pinned checkpoint contains 23.76 GB of Hub blobs, about 1.83 GB more than the packed-head rollback.",
 				"The image, DFlash2 drafter, 262,144-token context, and eight-request policy match the Finn-validated packed-head profile.",
+				"extra_buffer_lazy is the intentional high-throughput Mamba cache tier; the extra_buffer alternative spends an additional state slot per request to favor latency.",
+				"BF16 Mamba state passed the live smoke and throughput checks; workload-specific accuracy evaluation remains an open quality gate.",
 				"Keep the packed-head DFlash2 or DSpark BKC available until this profile passes production quality and throughput checks.",
 			},
 			TargetDevices:   []string{DeviceRTXPRO6000},
