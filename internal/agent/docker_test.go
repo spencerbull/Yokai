@@ -167,15 +167,17 @@ func TestFailedRunCleanupRemovesOnlyOwnedAmbiguousCandidate(t *testing.T) {
 
 func TestFailedRunCleanupRemovesOwnedLegacyContainer(t *testing.T) {
 	request := ContainerRequest{Labels: map[string]string{
-		LabelManaged:   "true",
-		LabelOwnership: OwnershipManaged,
+		LabelManaged:     "true",
+		LabelOwnership:   OwnershipManaged,
+		LabelLaunchNonce: "launch-a",
 	}}
 	removed := ""
 	deps := failedRunCleanupDeps{
 		inspect: func(name string) (string, string, map[string]string, error) {
 			return strings.Repeat("f", 64), name, map[string]string{
-				LabelManaged:   "true",
-				LabelOwnership: OwnershipManaged,
+				LabelManaged:     "true",
+				LabelOwnership:   OwnershipManaged,
+				LabelLaunchNonce: "launch-a",
 			}, nil
 		},
 		remove: func(id string) error {
@@ -188,26 +190,87 @@ func TestFailedRunCleanupRemovesOwnedLegacyContainer(t *testing.T) {
 	}
 }
 
+func TestPrepareLegacyLaunchNonceOverridesCallerValueAndReachesDockerArgs(t *testing.T) {
+	request := ContainerRequest{Image: "example/image", Labels: map[string]string{
+		LabelManaged:     "true",
+		LabelOwnership:   OwnershipManaged,
+		LabelLaunchNonce: "caller-controlled",
+	}}
+	if err := prepareLegacyLaunchNonce(&request); err != nil {
+		t.Fatal(err)
+	}
+	nonce := request.Labels[LabelLaunchNonce]
+	if nonce == "caller-controlled" || len(nonce) != 32 || strings.Trim(nonce, "0123456789abcdef") != "" {
+		t.Fatalf("unexpected generated launch nonce %q", nonce)
+	}
+	args := buildDockerRunArgs(request, "yokai-legacy")
+	found := false
+	for index := 0; index+1 < len(args); index++ {
+		if args[index] == "--label" && args[index+1] == LabelLaunchNonce+"="+nonce {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("launch nonce did not reach docker argv: %v", args)
+	}
+}
+
+func TestPrepareLegacyLaunchNonceLeavesGroupedProvenanceUnchanged(t *testing.T) {
+	request := ContainerRequest{Labels: map[string]string{
+		LabelManaged:      "true",
+		LabelOwnership:    OwnershipManaged,
+		LabelDeploymentID: "dep-test",
+		LabelGeneration:   "3",
+		LabelRole:         "head",
+	}}
+	if err := prepareLegacyLaunchNonce(&request); err != nil {
+		t.Fatal(err)
+	}
+	if nonce := request.Labels[LabelLaunchNonce]; nonce != "" {
+		t.Fatalf("grouped request received legacy launch nonce %q", nonce)
+	}
+}
+
 func TestFailedRunCleanupPreservesLegacyNameCollisionAndPartialProvenance(t *testing.T) {
+	requestBase := map[string]string{LabelManaged: "true", LabelOwnership: OwnershipManaged, LabelLaunchNonce: "launch-a"}
+	observedBase := map[string]string{LabelManaged: "true", LabelOwnership: OwnershipManaged, LabelLaunchNonce: "launch-a"}
+	cloneLabels := func(source map[string]string) map[string]string {
+		cloned := make(map[string]string, len(source))
+		for key, value := range source {
+			cloned[key] = value
+		}
+		return cloned
+	}
 	tests := map[string]struct {
 		requestLabels  map[string]string
 		observedName   string
 		observedLabels map[string]string
 	}{
 		"unmanaged": {
-			requestLabels:  map[string]string{LabelManaged: "true", LabelOwnership: OwnershipManaged},
+			requestLabels:  cloneLabels(requestBase),
 			observedName:   "yokai-legacy",
-			observedLabels: map[string]string{LabelManaged: "false", LabelOwnership: OwnershipManaged},
+			observedLabels: map[string]string{LabelManaged: "false", LabelOwnership: OwnershipManaged, LabelLaunchNonce: "launch-a"},
 		},
 		"observed ownership": {
-			requestLabels:  map[string]string{LabelManaged: "true", LabelOwnership: OwnershipManaged},
+			requestLabels:  cloneLabels(requestBase),
 			observedName:   "yokai-legacy",
-			observedLabels: map[string]string{LabelManaged: "true", LabelOwnership: OwnershipObserved},
+			observedLabels: map[string]string{LabelManaged: "true", LabelOwnership: OwnershipObserved, LabelLaunchNonce: "launch-a"},
 		},
 		"different name": {
-			requestLabels:  map[string]string{LabelManaged: "true", LabelOwnership: OwnershipManaged},
+			requestLabels:  cloneLabels(requestBase),
 			observedName:   "unowned-collision",
-			observedLabels: map[string]string{LabelManaged: "true", LabelOwnership: OwnershipManaged},
+			observedLabels: cloneLabels(observedBase),
+		},
+		"different launch": {
+			requestLabels:  cloneLabels(requestBase),
+			observedName:   "yokai-legacy",
+			observedLabels: map[string]string{LabelManaged: "true", LabelOwnership: OwnershipManaged, LabelLaunchNonce: "launch-old"},
+		},
+		"request ownership": {
+			requestLabels:  map[string]string{LabelManaged: "true", LabelOwnership: OwnershipAdopted, LabelLaunchNonce: "launch-a"},
+			observedName:   "yokai-legacy",
+			observedLabels: cloneLabels(observedBase),
 		},
 		"partial grouped provenance": {
 			requestLabels:  map[string]string{LabelManaged: "true", LabelOwnership: OwnershipManaged, LabelDeploymentID: "dep-test"},

@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -83,6 +85,7 @@ const (
 	LabelModelRevision  = "io.yokai.model.revision"
 	LabelImageDigest    = "io.yokai.image.digest"
 	LabelRuntimePatch   = "io.yokai.runtime.patch"
+	LabelLaunchNonce    = "io.yokai.launch.nonce"
 )
 
 var AgentCapabilities = []string{
@@ -398,6 +401,9 @@ func runContainerWithContext(ctx context.Context, req ContainerRequest, cleanupD
 	if isComfyUIImage(req.Image) {
 		req.Ports = normalizeServicePorts(req.Ports, "8188")
 	}
+	if err := prepareLegacyLaunchNonce(&req); err != nil {
+		return nil, err
+	}
 
 	args := buildDockerRunArgs(req, containerName)
 
@@ -438,6 +444,23 @@ func hasCompleteManagedCandidateProvenance(req ContainerRequest) bool {
 		}
 	}
 	return req.Labels[LabelManaged] == "true" && req.Labels[LabelOwnership] == OwnershipManaged
+}
+
+func prepareLegacyLaunchNonce(req *ContainerRequest) error {
+	if req == nil || req.Labels[LabelManaged] != "true" || req.Labels[LabelOwnership] != OwnershipManaged {
+		return nil
+	}
+	for _, key := range []string{LabelDeploymentID, LabelGeneration, LabelRole} {
+		if strings.TrimSpace(req.Labels[key]) != "" {
+			return nil
+		}
+	}
+	random := make([]byte, 16)
+	if _, err := rand.Read(random); err != nil {
+		return fmt.Errorf("generate legacy launch identity: %w", err)
+	}
+	req.Labels[LabelLaunchNonce] = hex.EncodeToString(random)
+	return nil
 }
 
 func cleanupFailedManagedRunEventually(req ContainerRequest, containerName string, deps failedRunCleanupDeps, timeout, interval time.Duration) bool {
@@ -498,6 +521,8 @@ func cleanupFailedManagedRun(req ContainerRequest, containerName string, deps fa
 		for _, key := range provenanceKeys {
 			expected[key] = req.Labels[key]
 		}
+	} else {
+		expected[LabelLaunchNonce] = req.Labels[LabelLaunchNonce]
 	}
 	for _, value := range expected {
 		if strings.TrimSpace(value) == "" {
