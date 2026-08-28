@@ -3,6 +3,7 @@ import type { DashboardController } from "./useDashboardController"
 import { DashboardActionBanner } from "./DashboardActionBanner"
 import { DashboardStatusBanner } from "./DashboardStatusBanner"
 import { DeviceOverviewPane } from "./DeviceOverviewPane"
+import { DeploymentStatusPanel } from "./DeploymentStatusPanel"
 import { FleetOverviewPanels } from "./FleetOverviewPanels"
 import { isAIService, isMonitoringService } from "./normalizeFleet"
 import { ServiceCategoryPane } from "./ServiceCategoryPane"
@@ -52,6 +53,7 @@ export function DashboardRoute(props: DashboardRouteProps) {
           <DashboardActionBanner confirm={props.controller.confirm} notice={props.controller.notice} pendingAction={props.controller.pendingAction} />
           <DashboardStatusBanner error={props.controller.error} snapshot={props.controller.snapshot} />
           <FleetOverviewPanels contentWidth={props.contentWidth} history={props.controller.history} snapshot={props.controller.snapshot} />
+          <DeploymentStatusPanel deployments={props.controller.deployments} />
           <box flexDirection="row" gap={1}>
             <box width={leftColumnWidth} minWidth={36} flexDirection="column" gap={1}>
               <ServiceCategoryPane
@@ -92,6 +94,7 @@ export function DashboardRoute(props: DashboardRouteProps) {
         <DashboardActionBanner confirm={props.controller.confirm} notice={props.controller.notice} pendingAction={props.controller.pendingAction} />
         <DashboardStatusBanner error={props.controller.error} snapshot={props.controller.snapshot} />
         <FleetOverviewPanels contentWidth={props.contentWidth} history={props.controller.history} snapshot={props.controller.snapshot} />
+        <DeploymentStatusPanel deployments={props.controller.deployments} />
         <DeviceOverviewPane panelWidth={Math.max(24, props.contentWidth - 8)} devices={props.controller.snapshot.devices} history={props.controller.history} selectedService={props.controller.selectedService} />
         <ServiceCategoryPane
           title="AI Services"

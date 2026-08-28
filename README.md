@@ -197,6 +197,18 @@ yokai
 | `yokai services restart <device-id> <cid>` | Restart a container |
 | `yokai services logs [--follow] <did> <cid>` | Stream container logs |
 
+**Coordinated deployments**
+
+| Command | Description |
+|---|---|
+| `yokai deployments create [flags]` | Create an atomic multi-device deployment |
+| `yokai deployments list` | List deployment groups, including stopped groups |
+| `yokai deployments status <deployment-id>` | Show one deployment group |
+| `yokai deployments test --api-key-env NAME <deployment-id>` | Test the rank-0 API/model/metrics with a request-time key |
+| `yokai deployments start --api-key-env NAME <deployment-id>` | Start a stopped group head-first using its original launch key and repeat readiness |
+| `yokai deployments stop <deployment-id>` | Stop every managed member in the group |
+| `yokai deployments rollback <deployment-id>` | Remove candidates and restart explicitly selected prior containers |
+
 **Fleet status & config**
 
 | Command | Description |
@@ -277,7 +289,7 @@ Your Machine                              GPU Device(s)
 
 ## Configuration
 
-All state lives in `~/.config/yokai/config.json`. Copy this file to another machine to reconnect to your fleet instantly.
+Legacy device and service state lives in `~/.config/yokai/config.json`. Coordinated deployment state is stored separately in the versioned `~/.config/yokai/deployments.json`; older config writers therefore cannot silently discard deployment groups.
 
 ```json
 {
@@ -330,7 +342,7 @@ All state lives in `~/.config/yokai/config.json`. Copy this file to another mach
 
 The BKC catalog is a library of pre-validated deploy recipes. Each entry pins the Docker image, tensor-parallel size, quantization flags, GPU memory utilization, chat template, tool-call parser, and any runtime options (`--ipc=host`, `--shm-size`, `ulimit`s) needed for a given model on a given GPU. The deploy wizard matches your model against the catalog, filters recipes by the target device's VRAM and GPU count, lets you cycle through sibling recipes, and offers one-click apply.
 
-**94 serving configs (91 vLLM plus three SGLang) across 88 models from 25 publishers** (as of this commit). Entries are grouped by publisher and live in `internal/bkc/catalog_*.go`:
+**95 serving configs (91 vLLM plus four SGLang) across 89 models from 26 publishers** (as of this commit). Entries are grouped by publisher and live in `internal/bkc/catalog_*.go`:
 
 | Publisher | Unique models | Serving configs | Catalog file |
 |---|---:|---:|---|
@@ -338,6 +350,7 @@ The BKC catalog is a library of pre-validated deploy recipes. Each entry pins th
 | `RadixArk` | 2 | 3 SGLang | [`catalog_qwen.go`](internal/bkc/catalog_qwen.go) |
 | `nvidia` | 14 | 17 | [`catalog_nvidia.go`](internal/bkc/catalog_nvidia.go), [`catalog_google.go`](internal/bkc/catalog_google.go), [`catalog_llama.go`](internal/bkc/catalog_llama.go), [`catalog_moonshotai.go`](internal/bkc/catalog_moonshotai.go), [`catalog_qwen.go`](internal/bkc/catalog_qwen.go) |
 | `zai-org` (GLM) | 7 | 7 | [`catalog_glm.go`](internal/bkc/catalog_glm.go) |
+| `LibertAIDAI` | 1 | 1 SGLang | [`catalog_glm.go`](internal/bkc/catalog_glm.go) |
 | `deepseek-ai` | 6 | 6 | [`catalog_deepseek.go`](internal/bkc/catalog_deepseek.go) |
 | `google` | 5 | 5 | [`catalog_google.go`](internal/bkc/catalog_google.go) |
 | `mistralai` | 5 | 5 | [`catalog_mistral.go`](internal/bkc/catalog_mistral.go) |
@@ -359,7 +372,7 @@ The BKC catalog is a library of pre-validated deploy recipes. Each entry pins th
 | `jinaai` | 1 | 1 | [`catalog_others.go`](internal/bkc/catalog_others.go) |
 | `sakamakismile` | 2 | 2 | [`catalog_others.go`](internal/bkc/catalog_others.go) |
 | `stepfun-ai` | 1 | 1 | [`catalog_others.go`](internal/bkc/catalog_others.go) |
-| **Total** | **88** | **94** | |
+| **Total** | **89** | **95** | |
 
 ### Notable recipes
 
@@ -369,6 +382,7 @@ The BKC catalog is a library of pre-validated deploy recipes. Each entry pins th
 - **Small / edge-friendly** — Qwen3-0.6B / 1.7B / 4B / 8B, Qwen3Guard-Gen-0.6B, Phi-4, Gemma 3 2B/4B/12B, validated for RTX 4090, RTX 5090, L40S, GB10, and Jetson Thor.
 - **AMD CDNA4** — `amd/gpt-oss-120b-w-mxfp4-a-fp8` tuned for MI355X with the ROCm vLLM image.
 - **SGLang speculative decoding** — sibling Qwen3.8 27B NVFP4 recipes for DFlash2 and DSpark on RTX PRO 6000, with pinned target/drafter/image revisions, 262K context, FlashInfer, FP8 KV cache, and native metrics. Finn's validated DFlash2 profile is the default and supports up to eight requests sharing its KV pool; DSpark remains available as the three-request rollback recipe.
+- **Dual DGX Spark** — `glm-5-3-flash-nvfp4-dual-gb10` pins GLM-5.3-Flash NVFP4, its model revision, and its SGLang image digest for torch-distributed TP=2 across two one-GPU GB10 nodes. Rank 0 is the API/head on an explicitly supplied client/monitor address at port 8000, rank 1 is the worker, metrics are enabled, and both the SGLang watchdog and torch-distributed timeout are pinned to one hour. The pinned image does not contain the required CUDA GB10 tile override, so Yokai carries two ordered, exact-hash runtime patches: the 480-to-3600-second loader guard (`f0193bfaab96053919e3a260f9ccb10e2137ad108cfae03816c867628f611e1f` to `fc3ae35cce5f712fd3681dc4bcef05157df6d232ac991ce60b78dae492784ff5`) and `sglang-dsa-gb10-tile-tp2-v1` (`526988aa5fd8fa61529f2d3cf245d1061e30982d2bd0d6e64ea2e51e31f30f7f` to `3150ec691843c84bb5db9ed5bf763c4da03842fde4666489e107bf7a9fcddd7b`). The latter selects the 32/1/128 TileLang tile only for the no-tail DSA path and is correctness-bound to TP=2: its unaliased shared-memory request is 100352 bytes before pipeline overhead. The bootstrap preflights both complete files and line counts before writing either, verifies both final files, and requires the GPU's opt-in per-block shared-memory limit to be at least 100352 bytes. A live two-GB10 canary validated this exact combination: both ranks reported the 101376-byte GB10 limit, crossed the old 480-second barrier, compiled and warmed without the stock tile's 169984-byte failure, and passed chat, Responses, tool, image, 59.8K retrieval, two-request concurrency, metrics, log, OOM/restart, and thermal gates. The SGLang log level is warning to keep request-time API keys out of the affected info-level server-argument projection, and no MTP is enabled. No host-specific IP is stored in the catalog.
 
 ### Device-aware selection
 
@@ -382,6 +396,30 @@ When multiple BKCs target the same model (for example, Qwen3.8 27B has DFlash2 a
 ### Adding a BKC
 
 Drop a new entry into the appropriate `catalog_<vendor>.go` file (create one if your vendor doesn't have one yet) and register it in the `catalog` slice in `catalog_data.go`. Every entry needs a stable `ID`, a human-readable `Name`, the Docker image, port, exact runtime flags, and the hardware gates (`TargetDevices`, `MinVRAMGBPerGPU`, `MinGPUCount`, `Quantization`, `Arch`). See `catalog_llama.go` for a multi-variant example.
+
+### Coordinated two-device deployments
+
+Multi-device recipes carry typed cluster metadata and cannot be submitted to the legacy `POST /deploy` API. Submit explicit `head` and `worker` bindings to `POST /deployments` instead. Both device IDs must be distinct, both fabric addresses must be valid non-loopback IPs, and the head binding must include a separate explicit client/monitor IP (Tailnet or another routable IP) and recipe port 8000; rendezvous remains on the private head fabric IP at port 25000. Unspecified and loopback service binds are rejected. Both online agents must advertise the required capabilities and expose exactly one GB10 GPU before Yokai writes a journal or mutates Docker.
+
+For `glm-5-3-flash-nvfp4-dual-gb10`, Yokai stages both pinned images, stops only explicitly selected observed old container IDs, launches head then worker, waits for both members, and promotes only after the rank-0 API/model test passes. Before removing candidates after a failure, rollback best-effort captures and persists each rank's sanitized final 2,000 lines, bounded to 256 KiB; drained partial output is retained as truncated, while API keys, credential-shaped arguments, unsafe control bytes, and a potentially partial raw-boundary line are removed. It then removes candidates in reverse order, restarts selected old IDs, and persists the rollback result. Yokai never auto-adopts external containers; unselected external containers remain visible and testable but immutable. Existing managed-only container and metrics views are unchanged, and stopped services and deployment groups remain visible.
+
+The API key is required and request-scoped in Yokai. With the CLI, pass the name of an environment variable via `--api-key-env` on `create`, `test`, and `start`; OpenTUI uses a masked transient field. Starting a stopped group restarts its existing containers, so the operator must supply the original launch key; start cannot rotate it, and a new key requires a new deployment. Yokai sends a single structured `--api-key=<value>` token only to rank 0 and omits it from the BKC, `deployments.json`, deployment responses, inventory, and Yokai logs. SGLang has no documented secret-fd input, so Docker `Config.Cmd` and rank 0's process argv necessarily retain the key while that container exists. An optional `--local-model-path` must be an explicit clean absolute path that is an existing readable directory at the same location on both devices. Yokai mounts it read-only at `/models/yokai-deployment` and never changes legacy host-path behavior.
+
+Example (the private fabric must permit TCP rendezvous on port 25000; clients and monitors keep using the configured head Tailnet address on port 8000):
+
+```bash
+export YOKAI_CANARY_API_KEY='replace-me'
+yokai deployments create \
+  --bkc glm-5-3-flash-nvfp4-dual-gb10 \
+  --idempotency-key glm53-canary-001 \
+  --head-device spark-a --head-fabric 10.20.0.10 \
+  --head-service-address 100.100.100.100 --head-service-port 8000 \
+  --worker-device spark-b --worker-fabric 10.20.0.11 \
+  --api-key-env YOKAI_CANARY_API_KEY \
+  --local-model-path /srv/models/glm-5.3-flash-nvfp4
+```
+
+The addresses above are illustrative, not catalog defaults. The local snapshot must be pre-staged and readable by Docker on both hosts. Yokai does not bootstrap the fabric or copy model data. Its rollback log tails are bounded and sanitized as described above, but the live canary should still independently confirm that the key is absent from complete server logs.
 
 ---
 
@@ -439,6 +477,7 @@ yokai/
 │   ├── codex/             # Codex (~/.codex/config.toml) endpoint registration
 │   ├── config/            # Config load/save/migrate, deploy history (~/.config/yokai/)
 │   ├── daemon/            # Local daemon: REST API (:7473), SSH tunnels, metrics aggregation
+│   ├── deployments/       # Versioned atomic multi-device state and transaction engine
 │   ├── docker/            # Docker Hub/GHCR tag catalog and image helpers
 │   ├── hf/                # HuggingFace API: model search, GGUF listing
 │   ├── hfmem/             # `hf-mem` wrapper for vLLM weight + KV-cache memory estimation

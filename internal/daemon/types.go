@@ -4,6 +4,7 @@ import "github.com/spencerbull/yokai/internal/config"
 
 // DeployRequest represents a request to deploy a container to a device
 type DeployRequest struct {
+	BKCID       string                `json:"bkc_id,omitempty"`
 	DeviceID    string                `json:"device_id"`
 	ServiceType string                `json:"service_type,omitempty"`
 	Image       string                `json:"image"`
@@ -29,8 +30,11 @@ type DeployResult struct {
 
 // ServiceTestResult represents the result of a service smoke test.
 type ServiceTestResult struct {
-	ServiceType string `json:"service_type"`
-	Message     string `json:"message"`
-	Model       string `json:"model,omitempty"`
-	PromptID    string `json:"prompt_id,omitempty"`
+	OK           bool   `json:"ok"`
+	ServiceType  string `json:"service_type"`
+	Message      string `json:"message"`
+	Response     string `json:"response,omitempty"`
+	Model        string `json:"model,omitempty"`
+	PromptID     string `json:"prompt_id,omitempty"`
+	MetricsReady bool   `json:"metrics_ready,omitempty"`
 }

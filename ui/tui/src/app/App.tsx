@@ -44,7 +44,12 @@ function AppShell() {
   const surface = resolveAppSurface(appMode, devices.status, devices.devices.length)
   const onboardingVisible = surface === "onboarding"
   const homeVisible = surface === "home"
-  const deploy = useDeployController(activeRoute === "deploy" && !onboardingVisible, () => setActiveRoute("dashboard"))
+  const deploy = useDeployController(activeRoute === "deploy" && !onboardingVisible, (notice) => {
+    if (notice) {
+      dashboard.showNotice(notice)
+    }
+    setActiveRoute("dashboard")
+  })
   const settings = useSettingsController(activeRoute === "settings" && !onboardingVisible, theme)
 
   useEffect(() => {

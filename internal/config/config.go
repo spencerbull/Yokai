@@ -70,10 +70,21 @@ type Service struct {
 }
 
 type RuntimeOptions struct {
-	IPCMode string            `json:"ipc_mode,omitempty"`
-	ShmSize string            `json:"shm_size,omitempty"`
-	Ulimits map[string]string `json:"ulimits,omitempty"`
+	IPCMode       string            `json:"ipc_mode,omitempty"`
+	ShmSize       string            `json:"shm_size,omitempty"`
+	Ulimits       map[string]string `json:"ulimits,omitempty"`
+	RestartPolicy RestartPolicy     `json:"restart_policy,omitempty"`
 }
+
+// RestartPolicy controls Docker's automatic restart behavior. The empty value
+// preserves the legacy unless-stopped default.
+type RestartPolicy string
+
+const (
+	RestartPolicyDefault       RestartPolicy = ""
+	RestartPolicyNo            RestartPolicy = "no"
+	RestartPolicyUnlessStopped RestartPolicy = "unless-stopped"
+)
 
 type Preferences struct {
 	Theme              string `json:"theme"`

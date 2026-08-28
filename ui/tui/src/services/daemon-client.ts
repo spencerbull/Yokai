@@ -1,6 +1,6 @@
 import { DAEMON_URL } from "../config"
 import type { BootstrapDeviceRequest, BootstrapDeviceResponse, BulkDeviceTestResponse, BulkDeviceUpgradeResponse, DeviceDeleteResult, DeviceRequest, DeviceTestResult, DeviceUpgradeResult, SSHConfigHostsResponse, TailscalePeersResponse, TailscaleStatus } from "../contracts/devices"
-import type { DeployBKC, DeployRequest, DeployResult, GGUFVariantsResponse, HFModel, VLLMMemoryEstimate, WorkloadType } from "../contracts/deploy"
+import type { DeploymentCreateRequest, DeploymentRecord, DeployBKC, DeployRequest, DeployResult, GGUFVariantsResponse, HFModel, VLLMMemoryEstimate, WorkloadType } from "../contracts/deploy"
 import type { DevicesResponse, LogTarget, MetricsResponse } from "../contracts/fleet"
 import type { DeployHistory, HFSettings, HFTokenValidation, IntegrationsConfigureRequest, IntegrationsConfigureResponse, OpenAIEndpoint, SettingsDocument, SettingsPatch } from "../contracts/settings"
 import { readSSEStream } from "./sse"
@@ -30,6 +30,21 @@ type ErrorEnvelope = {
         details?: unknown
       }
   message?: string
+  deployment?: DeploymentRecord
+}
+
+export class DaemonRequestError extends Error {
+  readonly status: number
+  readonly code?: string
+  readonly deployment?: DeploymentRecord
+
+  constructor(message: string, status: number, code?: string, deployment?: DeploymentRecord) {
+    super(message)
+    this.name = "DaemonRequestError"
+    this.status = status
+    this.code = code
+    this.deployment = deployment
+  }
 }
 
 export async function getSettings() {
@@ -154,7 +169,7 @@ export async function streamLogs(
   )
 
   if (!response.ok) {
-    throw new Error(await readErrorMessage(response))
+    throw await readDaemonError(response)
   }
 
   if (!response.body) {
@@ -247,6 +262,45 @@ export async function deployService(request: DeployRequest) {
   })
 }
 
+export async function createDeployment(request: DeploymentCreateRequest) {
+  return daemonRequest<DeploymentRecord>("/deployments", { method: "POST", body: JSON.stringify(request) })
+}
+
+export async function getDeployments() {
+  const response = await daemonRequest<{ deployments?: DeploymentRecord[] } | DeploymentRecord[]>("/deployments")
+  return Array.isArray(response) ? response : response.deployments ?? []
+}
+
+export async function getDeployment(id: string) {
+  return daemonRequest<DeploymentRecord>(`/deployments/${encodeURIComponent(id)}`)
+}
+
+export async function testDeployment(id: string, apiKey = "") {
+  return daemonRequest<DeploymentRecord>(`/deployments/${encodeURIComponent(id)}/test`, {
+    method: "POST",
+    body: JSON.stringify(apiKey ? { api_key: apiKey } : {}),
+  })
+}
+
+export async function stopDeployment(id: string) {
+  return deploymentAction(id, "stop")
+}
+
+export async function startDeployment(id: string, apiKey: string) {
+  return daemonRequest<DeploymentRecord>(`/deployments/${encodeURIComponent(id)}/start`, {
+	method: "POST",
+	body: JSON.stringify({ api_key: apiKey }),
+  })
+}
+
+export async function rollbackDeployment(id: string) {
+  return deploymentAction(id, "rollback")
+}
+
+function deploymentAction(id: string, action: "stop" | "rollback") {
+  return daemonRequest<DeploymentRecord>(`/deployments/${encodeURIComponent(id)}/${action}`, { method: "POST", body: "{}" })
+}
+
 async function daemonRequest<T>(path: string, init: RequestInit = {}) {
   const headers = new Headers(init.headers)
   if (init.body !== undefined && !headers.has("Content-Type")) {
@@ -259,31 +313,31 @@ async function daemonRequest<T>(path: string, init: RequestInit = {}) {
   })
 
   if (!response.ok) {
-    throw new Error(await readErrorMessage(response))
+    throw await readDaemonError(response)
   }
 
   return (await response.json()) as T
 }
 
-async function readErrorMessage(response: Response) {
+export async function readDaemonError(response: Response) {
   const fallback = `daemon request failed: ${response.status} ${response.statusText}`
 
   try {
     const payload = (await response.json()) as ErrorEnvelope
+    let message = fallback
     if (payload.message) {
-      return payload.message
+      message = payload.message
+    } else if (typeof payload.error === "string" && payload.error) {
+      message = payload.error
+    } else if (payload.error && typeof payload.error === "object" && payload.error.message) {
+      message = payload.error.message
     }
-    if (typeof payload.error === "string" && payload.error) {
-      return payload.error
-    }
-    if (payload.error && typeof payload.error === "object" && payload.error.message) {
-      return payload.error.message
-    }
-  } catch {
-    return fallback
-  }
 
-  return fallback
+    const code = typeof payload.error === "string" ? payload.error : payload.error?.code
+    return new DaemonRequestError(message, response.status, code, payload.deployment?.id ? payload.deployment : undefined)
+  } catch {
+    return new DaemonRequestError(fallback, response.status)
+  }
 }
 
 function ensureTrailingSlash(url: string) {

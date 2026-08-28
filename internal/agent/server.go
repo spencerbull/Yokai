@@ -2,6 +2,7 @@ package agent
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,7 +16,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
+	"github.com/spencerbull/yokai/internal/deployments"
 	"github.com/spencerbull/yokai/internal/docker"
 )
 
@@ -52,9 +55,14 @@ func Run(port string, version string) error {
 	mux.HandleFunc("POST /containers/{id}/stop", requireAuth(handleContainerStop))
 	mux.HandleFunc("DELETE /containers/{id}", requireAuth(handleContainerDelete))
 	mux.HandleFunc("POST /containers/{id}/restart", requireAuth(handleContainerRestart))
+	mux.HandleFunc("POST /deployments/{deploymentID}/members/{id}/stop", requireAuth(handleDeploymentMemberStop))
+	mux.HandleFunc("DELETE /deployments/{deploymentID}/members/{id}", requireAuth(handleDeploymentMemberDelete))
+	mux.HandleFunc("POST /deployments/{deploymentID}/members/{id}/restart", requireAuth(handleDeploymentMemberRestart))
+	mux.HandleFunc("POST /deployments/{deploymentID}/members/{id}/logs/tail", requireAuth(handleDeploymentMemberLogTail))
 	mux.HandleFunc("POST /containers/{id}/test", requireAuth(handleContainerTest))
 	mux.HandleFunc("GET /containers/{id}/logs", requireAuth(handleContainerLogs))
 	mux.HandleFunc("POST /images/pull", requireAuth(handleImagePull))
+	mux.HandleFunc("POST /deployments/preflight", requireAuth(handleDeploymentPreflight))
 	mux.HandleFunc("GET /images/tags/{image...}", requireAuth(handleImageTags))
 
 	addr := ":" + port
@@ -134,6 +142,7 @@ func handleHealth(version string) http.HandlerFunc {
 			"version":        version,
 			"uptime_seconds": int(time.Since(startTime).Seconds()),
 			"hostname":       hostname,
+			"capabilities":   append([]string(nil), AgentCapabilities...),
 		}
 		writeJSON(w, http.StatusOK, resp)
 	}
@@ -225,6 +234,7 @@ func mergeContainerMetrics(metricContainers []ContainerMetrics, dockerContainers
 			metricContainers[idx].Image = container.Image
 			metricContainers[idx].Uptime = container.Uptime
 			metricContainers[idx].Ports = container.Ports
+			metricContainers[idx].ServiceAddress = managedServiceAddress(container)
 			if container.VLLMMetrics != nil {
 				metricContainers[idx].GenerationTokPerSec = container.VLLMMetrics.GenerationTokPerSec
 				metricContainers[idx].PromptTokPerSec = container.VLLMMetrics.PromptTokPerSec
@@ -236,12 +246,13 @@ func mergeContainerMetrics(metricContainers []ContainerMetrics, dockerContainers
 		}
 
 		cm := ContainerMetrics{
-			ID:     id,
-			Name:   container.Name,
-			Image:  container.Image,
-			Status: container.Status,
-			Uptime: container.Uptime,
-			Ports:  container.Ports,
+			ID:             id,
+			Name:           container.Name,
+			Image:          container.Image,
+			Status:         container.Status,
+			Uptime:         container.Uptime,
+			Ports:          container.Ports,
+			ServiceAddress: managedServiceAddress(container),
 		}
 		if container.VLLMMetrics != nil {
 			cm.GenerationTokPerSec = container.VLLMMetrics.GenerationTokPerSec
@@ -263,7 +274,7 @@ func mergeContainerMetrics(metricContainers []ContainerMetrics, dockerContainers
 	// Probe health for running containers with exposed ports
 	for i := range metricContainers {
 		if metricContainers[i].Status == "running" && len(metricContainers[i].Ports) > 0 {
-			metricContainers[i].Health = probeContainerHealth(metricContainers[i].Ports, metricContainers[i].Image)
+			metricContainers[i].Health = probeContainerHealth(metricContainers[i].Ports, metricContainers[i].Image, metricContainers[i].ServiceAddress)
 		}
 	}
 
@@ -279,7 +290,15 @@ func shortContainerID(id string) string {
 }
 
 func handleContainers(w http.ResponseWriter, r *http.Request) {
-	containers, err := listContainers()
+	scope := strings.TrimSpace(r.URL.Query().Get("scope"))
+	if scope == "" {
+		scope = InventoryScopeManaged
+	}
+	if scope != InventoryScopeManaged && scope != InventoryScopeAll {
+		writeError(w, http.StatusBadRequest, "invalid_scope", "scope must be managed or all")
+		return
+	}
+	containers, err := listContainersScope(scope)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "docker_error", err.Error())
 		return
@@ -292,6 +311,10 @@ func handleContainers(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleContainerDeploy(w http.ResponseWriter, r *http.Request) {
+	handleContainerDeployWithLaunchTimeout(w, r, deployments.DefaultCandidateLaunchCommandTimeout)
+}
+
+func handleContainerDeployWithLaunchTimeout(w http.ResponseWriter, r *http.Request, launchTimeout time.Duration) {
 	var req ContainerRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_json", "Invalid JSON body")
@@ -307,30 +330,62 @@ func handleContainerDeploy(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "missing_name", "Name is required")
 		return
 	}
+	if err := validateContainerRuntime(req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_runtime", err.Error())
+		return
+	}
+	if req.Labels == nil {
+		req.Labels = make(map[string]string)
+	}
+	if req.Labels[LabelManaged] == "" {
+		req.Labels[LabelManaged] = "true"
+	}
+	if req.Labels[LabelOwnership] == "" {
+		req.Labels[LabelOwnership] = OwnershipManaged
+	}
+
+	// Register coordinated ownership before any Docker/image command. Those
+	// validation commands are deliberately not trusted to finish before the
+	// coordinator's request deadline, so rollback deletion must already see the
+	// deterministic-name barrier while they run. The detached command deadline
+	// also starts here, preventing a handler that resumes after slow validation
+	// from later issuing docker run.
+	launchCtx := r.Context()
+	if hasCompleteManagedCandidateProvenance(req) {
+		finishLaunch, beginErr := coordinatedCandidateLaunches.begin(normalizedContainerName(req.Name))
+		if beginErr != nil {
+			writeError(w, http.StatusConflict, "launch_in_progress", beginErr.Error())
+			return
+		}
+		defer finishLaunch()
+		var cancel context.CancelFunc
+		launchCtx, cancel = detachedCandidateLaunchContext(r.Context(), launchTimeout)
+		defer cancel()
+	}
 
 	if req.SkipPull {
 		log.Printf("Skipping image pull (--skip-pull): %s", req.Image)
 	} else {
-		if err := validateImagePlatform(req.Image); err != nil {
+		if err := validateImagePlatform(launchCtx, req.Image); err != nil {
 			writeError(w, http.StatusBadRequest, "unsupported_platform", err.Error())
 			return
 		}
 
 		log.Printf("Pulling image: %s", req.Image)
-		if err := pullImage(req.Image); err != nil {
+		if err := pullImageWithContext(launchCtx, req.Image); err != nil {
 			writeError(w, http.StatusInternalServerError, "pull_failed", err.Error())
 			return
 		}
 	}
 
-	if err := validatePulledImageArchitecture(req.Image); err != nil {
+	if err := validatePulledImageArchitecture(launchCtx, req.Image); err != nil {
 		writeError(w, http.StatusBadRequest, "unsupported_platform", err.Error())
 		return
 	}
 
 	// Deploy container
 	log.Printf("Deploying container: %s", req.Name)
-	resp, err := runContainer(req)
+	resp, err := runContainerWithContext(launchCtx, req, liveFailedRunCleanupDeps)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "deploy_failed", err.Error())
 		return
@@ -345,6 +400,15 @@ func handleContainerStop(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "missing_id", "Container ID is required")
 		return
 	}
+	if rejectLegacyGroupedMutation(w, id) {
+		return
+	}
+	finishStop, beginErr := containerStops.begin(strings.TrimSpace(id))
+	if beginErr != nil {
+		writeError(w, http.StatusConflict, "container_stop_in_progress", "container stop is already in progress")
+		return
+	}
+	defer finishStop()
 
 	if err := stopContainer(id); err != nil {
 		writeError(w, http.StatusInternalServerError, "stop_failed", err.Error())
@@ -360,6 +424,13 @@ func handleContainerDelete(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if id == "" {
 		writeError(w, http.StatusBadRequest, "missing_id", "Container ID is required")
+		return
+	}
+	if rejectLegacyGroupedMutation(w, id) {
+		return
+	}
+	if err := containerStops.wait(r.Context(), strings.TrimSpace(id)); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "container_stop_in_progress", "container stop has not settled")
 		return
 	}
 
@@ -390,6 +461,13 @@ func handleContainerRestart(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "missing_id", "Container ID is required")
 		return
 	}
+	if rejectLegacyGroupedMutation(w, id) {
+		return
+	}
+	if err := containerStops.wait(r.Context(), strings.TrimSpace(id)); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "container_stop_in_progress", "container stop has not settled")
+		return
+	}
 
 	if !containerExists(id) {
 		writeError(w, http.StatusNotFound, "container_not_found", fmt.Sprintf("Container %s not found", id))
@@ -406,6 +484,153 @@ func handleContainerRestart(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func rejectLegacyGroupedMutation(w http.ResponseWriter, id string) bool {
+	_, _, labels, err := inspectContainerIdentity(id)
+	if err != nil {
+		if errors.Is(err, errContainerIdentityNotFound) {
+			return false
+		}
+		writeError(w, http.StatusServiceUnavailable, "container_identity_unavailable", "container identity could not be verified safely")
+		return true
+	}
+	if labels[LabelDeploymentID] == "" {
+		return false
+	}
+	writeError(w, http.StatusConflict, "grouped_deployment_required", "deployment-managed containers require the deployment-member lifecycle API")
+	return true
+}
+
+func deploymentMemberProvenance(r *http.Request) (map[string]string, error) {
+	_, name, labels, err := inspectContainerIdentityWithContext(r.Context(), r.PathValue("id"))
+	if err != nil {
+		return nil, err
+	}
+	if err := validateDeploymentMemberProvenance(name, labels, r.PathValue("deploymentID"), r.URL.Query().Get("generation"), r.URL.Query().Get("role"), r.URL.Query().Get("name")); err != nil {
+		return nil, err
+	}
+	return labels, nil
+}
+
+func validateDeploymentMemberProvenance(name string, labels map[string]string, deploymentID, generation, role, expectedName string) error {
+	expected := map[string]string{
+		LabelManaged:      "true",
+		LabelOwnership:    OwnershipManaged,
+		LabelDeploymentID: deploymentID,
+		LabelGeneration:   generation,
+		LabelRole:         role,
+	}
+	for key, value := range expected {
+		if value == "" || labels[key] != value {
+			return fmt.Errorf("container provenance does not match expected deployment member")
+		}
+	}
+	if expectedName == "" || name != expectedName {
+		return fmt.Errorf("container name does not match expected deployment member")
+	}
+	return nil
+}
+
+func authorizeDeploymentMember(w http.ResponseWriter, r *http.Request) bool {
+	if _, err := deploymentMemberProvenance(r); err != nil {
+		writeError(w, http.StatusConflict, "deployment_member_mismatch", err.Error())
+		return false
+	}
+	return true
+}
+
+func handleDeploymentMemberStop(w http.ResponseWriter, r *http.Request) {
+	if !authorizeDeploymentMember(w, r) {
+		return
+	}
+	finishStop, beginErr := containerStops.begin(strings.TrimSpace(r.PathValue("id")))
+	if beginErr != nil {
+		writeError(w, http.StatusConflict, "container_stop_in_progress", "container stop is already in progress")
+		return
+	}
+	defer finishStop()
+	if err := stopContainerWithContext(r.Context(), r.PathValue("id")); err != nil {
+		writeError(w, http.StatusInternalServerError, "stop_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
+}
+
+func handleDeploymentMemberDelete(w http.ResponseWriter, r *http.Request) {
+	// If an ambiguous launch request is still executing, deletion is the
+	// rollback barrier: do not inspect an as-yet unmaterialized name and certify
+	// it absent before the launch's owned cleanup has completed.
+	if err := coordinatedCandidateLaunches.wait(r.Context(), r.URL.Query().Get("name")); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "deployment_launch_in_progress", "candidate launch cleanup is still in progress")
+		return
+	}
+	if err := containerStops.wait(r.Context(), strings.TrimSpace(r.PathValue("id"))); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "container_stop_in_progress", "container stop has not settled")
+		return
+	}
+	if _, err := deploymentMemberProvenance(r); err != nil {
+		if errors.Is(err, errContainerIdentityNotFound) {
+			writeError(w, http.StatusNotFound, "container_not_found", "deployment member is already absent")
+			return
+		}
+		writeError(w, http.StatusConflict, "deployment_member_mismatch", err.Error())
+		return
+	}
+	if err := removeContainerWithContext(r.Context(), r.PathValue("id")); err != nil {
+		writeError(w, http.StatusInternalServerError, "remove_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "removed"})
+}
+
+func handleDeploymentMemberRestart(w http.ResponseWriter, r *http.Request) {
+	if !authorizeDeploymentMember(w, r) {
+		return
+	}
+	if err := containerStops.wait(r.Context(), strings.TrimSpace(r.PathValue("id"))); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "container_stop_in_progress", "container stop has not settled")
+		return
+	}
+	if err := restartContainerWithContext(r.Context(), r.PathValue("id")); err != nil {
+		writeError(w, http.StatusInternalServerError, "restart_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "restarted"})
+}
+
+func handleDeploymentMemberLogTail(w http.ResponseWriter, r *http.Request) {
+	if err := coordinatedCandidateLaunches.wait(r.Context(), r.URL.Query().Get("name")); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "deployment_launch_in_progress", "candidate launch has not settled")
+		return
+	}
+	if _, err := deploymentMemberProvenance(r); err != nil {
+		if errors.Is(err, errContainerIdentityNotFound) {
+			writeError(w, http.StatusNotFound, "container_not_found", "deployment member is absent")
+			return
+		}
+		writeError(w, http.StatusConflict, "deployment_member_mismatch", err.Error())
+		return
+	}
+	var request struct {
+		Redact string `json:"redact,omitempty"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2048))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid_json", "Invalid JSON body")
+		return
+	}
+	if request.Redact != "" && (len(request.Redact) > 512 || strings.IndexFunc(request.Redact, unicode.IsSpace) >= 0 || strings.IndexFunc(request.Redact, unicode.IsControl) >= 0) {
+		writeError(w, http.StatusBadRequest, "invalid_redaction", "Redaction value must be a single non-control token of at most 512 characters")
+		return
+	}
+	capture, err := captureContainerLogTail(r.Context(), r.PathValue("id"), request.Redact, runDockerLogTail)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "logs_failed", "bounded container log capture failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"tail": capture.Tail, "truncated": capture.Truncated})
+}
+
 func handleContainerTest(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if id == "" {
@@ -413,7 +638,7 @@ func handleContainerTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	containers, err := listContainers()
+	containers, err := listContainersScope(InventoryScopeAll)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "docker_error", err.Error())
 		return
@@ -431,8 +656,25 @@ func handleContainerTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := testContainerService(*target)
+	var request struct {
+		APIKey string `json:"api_key,omitempty"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid_json", "Invalid JSON body")
+		return
+	}
+	if request.APIKey != "" && (len(request.APIKey) > 512 || strings.IndexFunc(request.APIKey, unicode.IsSpace) >= 0 || strings.IndexFunc(request.APIKey, unicode.IsControl) >= 0) {
+		writeError(w, http.StatusBadRequest, "invalid_api_key", "API key must be a single non-control token of at most 512 characters")
+		return
+	}
+	result, err := testContainerServiceWithOptions(*target, r.URL.Query().Get("require_metrics") == "true", request.APIKey)
 	if err != nil {
+		if isServiceAuthorizationError(err) {
+			writeError(w, http.StatusBadGateway, "service_unauthorized", "model service rejected the API key")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "service_test_failed", err.Error())
 		return
 	}
@@ -574,7 +816,7 @@ func handleImagePull(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := pullImage(req.Image); err != nil {
+	if err := pullImageWithContext(r.Context(), req.Image); err != nil {
 		writeError(w, http.StatusInternalServerError, "pull_failed", err.Error())
 		return
 	}

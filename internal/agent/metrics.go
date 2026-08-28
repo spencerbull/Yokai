@@ -72,6 +72,7 @@ type ContainerMetrics struct {
 	GPUMemoryMB             int64             `json:"gpu_memory_mb,omitempty"`
 	Uptime                  int64             `json:"uptime_seconds"`
 	Ports                   map[string]string `json:"ports,omitempty"`
+	ServiceAddress          string            `json:"-"`
 	Health                  string            `json:"health,omitempty"` // "healthy", "unhealthy", "starting", ""
 	GenerationTokPerSec     float64           `json:"generation_tok_per_s,omitempty"`
 	PromptTokPerSec         float64           `json:"prompt_tok_per_s,omitempty"`

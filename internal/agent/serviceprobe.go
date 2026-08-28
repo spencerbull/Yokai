@@ -3,45 +3,104 @@ package agent
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
 )
 
 type ServiceTestResult struct {
-	ServiceType string `json:"service_type"`
-	Message     string `json:"message"`
-	Model       string `json:"model,omitempty"`
-	PromptID    string `json:"prompt_id,omitempty"`
+	OK           bool   `json:"ok"`
+	ServiceType  string `json:"service_type"`
+	Message      string `json:"message"`
+	Response     string `json:"response,omitempty"`
+	Model        string `json:"model,omitempty"`
+	PromptID     string `json:"prompt_id,omitempty"`
+	MetricsReady bool   `json:"metrics_ready,omitempty"`
 }
 
 var serviceTestHTTPClient = &http.Client{Timeout: 45 * time.Second}
+var requiredMetricsHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
-func testContainerService(container Container) (*ServiceTestResult, error) {
+type serviceHTTPStatusError struct {
+	status  int
+	message string
+}
+
+func (e *serviceHTTPStatusError) Error() string { return e.message }
+
+func isServiceAuthorizationError(err error) bool {
+	var statusErr *serviceHTTPStatusError
+	return errors.As(err, &statusErr) && (statusErr.status == http.StatusUnauthorized || statusErr.status == http.StatusForbidden)
+}
+
+func testContainerServiceWithOptions(container Container, requireMetrics bool, apiKey string) (*ServiceTestResult, error) {
 	baseURL, err := containerBaseURL(container)
 	if err != nil {
 		return nil, err
 	}
 
+	var result *ServiceTestResult
 	switch {
 	case isVLLMImage(container.Image), isSGLangImage(container.Image), isLlamaCppImage(container.Image):
-		return testOpenAICompatibleService(baseURL, inferServiceKindFromImage(container.Image))
+		result, err = testOpenAICompatibleServiceWithAPIKey(baseURL, inferServiceKindFromImage(container.Image), apiKey)
 	case isComfyUIImage(container.Image):
-		return testComfyUIService(baseURL)
+		result, err = testComfyUIService(baseURL)
 	default:
 		return nil, fmt.Errorf("service test is not supported for image %s", container.Image)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if requireMetrics {
+		metrics, err := scrapeVLLMMetricsURLWithClient(requiredMetricsHTTPClient, baseURL+"/metrics", apiKey)
+		if err != nil {
+			return nil, fmt.Errorf("required inference metrics gate failed: %w", err)
+		}
+		if !metrics.hasNativeFamily(result.ServiceType) {
+			return nil, fmt.Errorf("required inference metrics gate failed: no recognized %s native metric family", result.ServiceType)
+		}
+		result.MetricsReady = true
+	}
+	return result, nil
+}
+
+func (m *VLLMMetrics) hasNativeFamily(serviceType string) bool {
+	switch serviceType {
+	case "sglang":
+		return m.HasSGLangNativeMetric
+	case "vllm":
+		return m.HasVLLMNativeMetric
+	default:
+		return m.HasSGLangNativeMetric || m.HasVLLMNativeMetric
 	}
 }
 
 func containerBaseURL(container Container) (string, error) {
 	for _, externalPort := range container.Ports {
 		if strings.TrimSpace(externalPort) != "" {
-			return "http://127.0.0.1:" + externalPort, nil
+			host := managedServiceAddress(container)
+			if host == "" {
+				host = "127.0.0.1"
+			}
+			return "http://" + net.JoinHostPort(host, strings.TrimSpace(externalPort)), nil
 		}
 	}
 	return "", fmt.Errorf("container %s has no exposed ports", container.Name)
+}
+
+func managedServiceAddress(container Container) string {
+	if container.Ownership != OwnershipManaged && container.Ownership != OwnershipAdopted {
+		return ""
+	}
+	host := strings.TrimSpace(container.Labels[LabelServiceAddress])
+	if net.ParseIP(host) == nil {
+		return ""
+	}
+	return host
 }
 
 func inferServiceKindFromImage(image string) string {
@@ -60,7 +119,11 @@ func inferServiceKindFromImage(image string) string {
 }
 
 func testOpenAICompatibleService(baseURL, serviceType string) (*ServiceTestResult, error) {
-	modelID, err := fetchServedModelID(baseURL)
+	return testOpenAICompatibleServiceWithAPIKey(baseURL, serviceType, "")
+}
+
+func testOpenAICompatibleServiceWithAPIKey(baseURL, serviceType, apiKey string) (*ServiceTestResult, error) {
+	modelID, err := fetchServedModelID(baseURL, apiKey)
 	if err != nil {
 		return nil, err
 	}
@@ -70,8 +133,14 @@ func testOpenAICompatibleService(baseURL, serviceType string) (*ServiceTestResul
 		"messages": []map[string]string{
 			{"role": "user", "content": "Reply with exactly: ok"},
 		},
-		"max_tokens":  8,
+		"max_tokens":  128,
 		"temperature": 0,
+	}
+	if serviceType == "sglang" {
+		// GLM's pinned chat template always emits a reasoning block and defaults
+		// reasoning effort to max. Keep its reasoning bounded while the shared
+		// 128-token allowance leaves room for reasoning plus the final response.
+		body["reasoning_effort"] = "low"
 	}
 
 	var response struct {
@@ -81,7 +150,7 @@ func testOpenAICompatibleService(baseURL, serviceType string) (*ServiceTestResul
 			} `json:"message"`
 		} `json:"choices"`
 	}
-	if err := postJSON(baseURL+"/v1/chat/completions", body, &response); err != nil {
+	if err := postJSONWithAPIKey(baseURL+"/v1/chat/completions", body, &response, apiKey); err != nil {
 		return nil, err
 	}
 
@@ -89,11 +158,16 @@ func testOpenAICompatibleService(baseURL, serviceType string) (*ServiceTestResul
 	if content == "" {
 		return nil, fmt.Errorf("%s test returned no response text", serviceType)
 	}
+	if !strings.EqualFold(content, "ok") {
+		return nil, fmt.Errorf("%s test response must be exactly ok, got %q", serviceType, trimForDisplay(content, 80))
+	}
 
 	return &ServiceTestResult{
+		OK:          true,
 		ServiceType: serviceType,
 		Model:       modelID,
-		Message:     fmt.Sprintf("%s chat test passed with model %s: %s", serviceType, modelID, trimForDisplay(content, 80)),
+		Message:     fmt.Sprintf("%s chat test passed with model %s", serviceType, modelID),
+		Response:    content,
 	}, nil
 }
 
@@ -108,13 +182,13 @@ func responseChoiceContent(choices []struct {
 	return choices[0].Message.Content
 }
 
-func fetchServedModelID(baseURL string) (string, error) {
+func fetchServedModelID(baseURL, apiKey string) (string, error) {
 	var response struct {
 		Data []struct {
 			ID string `json:"id"`
 		} `json:"data"`
 	}
-	if err := getJSON(baseURL+"/v1/models", &response); err != nil {
+	if err := getJSONWithAPIKey(baseURL+"/v1/models", &response, apiKey); err != nil {
 		return "", fmt.Errorf("fetching served models: %w", err)
 	}
 	if len(response.Data) == 0 || strings.TrimSpace(response.Data[0].ID) == "" {
@@ -187,6 +261,7 @@ func testComfyUIService(baseURL string) (*ServiceTestResult, error) {
 	}
 
 	return &ServiceTestResult{
+		OK:          true,
 		ServiceType: "comfyui",
 		PromptID:    response.PromptID,
 		Message:     fmt.Sprintf("ComfyUI workflow test queued with checkpoint %s (prompt %s)", ckptName, response.PromptID),
@@ -222,42 +297,83 @@ func fetchComfyCheckpoint(baseURL string) (string, error) {
 }
 
 func getJSON(url string, out interface{}) error {
-	resp, err := serviceTestHTTPClient.Get(url)
+	return getJSONWithAPIKey(url, out, "")
+}
+
+func getJSONWithAPIKey(url string, out interface{}, apiKey string) error {
+	request, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return err
+	}
+	if apiKey != "" {
+		request.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	resp, err := serviceTestHTTPClient.Do(request)
+	if err != nil {
+		return redactSecretError(err, apiKey)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return decodeHTTPError(resp)
+		return redactSecretError(decodeHTTPError(resp), apiKey)
 	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	return redactSecretError(json.NewDecoder(resp.Body).Decode(out), apiKey)
 }
 
 func postJSON(url string, body, out interface{}) error {
+	return postJSONWithAPIKey(url, body, out, "")
+}
+
+func postJSONWithAPIKey(url string, body, out interface{}, apiKey string) error {
 	payload, err := json.Marshal(body)
 	if err != nil {
 		return err
 	}
-	resp, err := serviceTestHTTPClient.Post(url, "application/json", bytes.NewReader(payload))
+	request, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(payload))
 	if err != nil {
 		return err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	if apiKey != "" {
+		request.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	resp, err := serviceTestHTTPClient.Do(request)
+	if err != nil {
+		return redactSecretError(err, apiKey)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return decodeHTTPError(resp)
+		return redactSecretError(decodeHTTPError(resp), apiKey)
 	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	return redactSecretError(json.NewDecoder(resp.Body).Decode(out), apiKey)
+}
+
+func redactSecretError(err error, secret string) error {
+	if err == nil {
+		return err
+	}
+	message := err.Error()
+	if secret != "" {
+		message = strings.ReplaceAll(message, secret, "[REDACTED]")
+	}
+	var statusErr *serviceHTTPStatusError
+	if errors.As(err, &statusErr) {
+		return &serviceHTTPStatusError{status: statusErr.status, message: message}
+	}
+	if secret == "" {
+		return err
+	}
+	return errors.New(message)
 }
 
 func decodeHTTPError(resp *http.Response) error {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 	trimmed := strings.TrimSpace(string(body))
 	if trimmed == "" {
-		return fmt.Errorf("service returned status %d", resp.StatusCode)
+		return &serviceHTTPStatusError{status: resp.StatusCode, message: fmt.Sprintf("service returned status %d", resp.StatusCode)}
 	}
-	return fmt.Errorf("service returned status %d: %s", resp.StatusCode, trimmed)
+	return &serviceHTTPStatusError{status: resp.StatusCode, message: fmt.Sprintf("service returned status %d: %s", resp.StatusCode, trimmed)}
 }
 
 func trimForDisplay(s string, max int) string {

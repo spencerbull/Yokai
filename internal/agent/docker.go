@@ -1,7 +1,11 @@
 package agent
 
 import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -12,11 +16,13 @@ import (
 	"path"
 	"regexp"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/spencerbull/yokai/internal/config"
+	"github.com/spencerbull/yokai/internal/deployments"
 	"github.com/spencerbull/yokai/internal/plugins"
 )
 
@@ -43,6 +49,8 @@ type VLLMMetrics struct {
 	HasGenerationTokensTotal bool               `json:"-"`
 	HasCachedPromptTokens    bool               `json:"-"`
 	HasTTFT                  bool               `json:"-"`
+	HasSGLangNativeMetric    bool               `json:"-"`
+	HasVLLMNativeMetric      bool               `json:"-"`
 }
 
 // Container represents a running container.
@@ -55,6 +63,41 @@ type Container struct {
 	Created     time.Time         `json:"created"`
 	Uptime      int64             `json:"uptime_seconds"`
 	VLLMMetrics *VLLMMetrics      `json:"vllm_metrics,omitempty"`
+	Labels      map[string]string `json:"labels,omitempty"`
+	Ownership   string            `json:"ownership"`
+}
+
+const (
+	InventoryScopeManaged = "managed"
+	InventoryScopeAll     = "all"
+	OwnershipManaged      = "managed"
+	OwnershipAdopted      = "adopted"
+	OwnershipObserved     = "observed"
+
+	LabelManaged        = "io.yokai.managed"
+	LabelOwnership      = "io.yokai.ownership"
+	LabelServiceAddress = "io.yokai.service.address"
+	LabelServicePort    = "io.yokai.service.port"
+	LabelDeploymentID   = "io.yokai.deployment.id"
+	LabelGeneration     = "io.yokai.deployment.generation"
+	LabelRole           = "io.yokai.deployment.role"
+	LabelBKCID          = "io.yokai.bkc.id"
+	LabelModelRevision  = "io.yokai.model.revision"
+	LabelImageDigest    = "io.yokai.image.digest"
+	LabelRuntimePatch   = "io.yokai.runtime.patch"
+	LabelLaunchNonce    = "io.yokai.launch.nonce"
+)
+
+var AgentCapabilities = []string{
+	"deployments.v1",
+	"deployments.preflight.v1",
+	"deployments.members.v1",
+	"deployments.logs.tail.v1",
+	"container.inventory.all",
+	"container.labels",
+	"container.network.host",
+	"container.device_mounts",
+	"container.cap_add",
 }
 
 // ContainerRequest represents a container deployment request.
@@ -69,10 +112,15 @@ type ContainerRequest struct {
 	Env         map[string]string     `json:"env"`
 	GPUIDs      string                `json:"gpu_ids"`
 	ExtraArgs   string                `json:"extra_args"`
+	Args        []string              `json:"args,omitempty"`
 	Volumes     map[string]string     `json:"volumes"`
 	Plugins     []string              `json:"plugins"`
 	Runtime     config.RuntimeOptions `json:"runtime"`
 	SkipPull    bool                  `json:"skip_pull,omitempty"`
+	Labels      map[string]string     `json:"labels,omitempty"`
+	NetworkMode string                `json:"network_mode,omitempty"`
+	Devices     []string              `json:"devices,omitempty"`
+	CapAdd      []string              `json:"cap_add,omitempty"`
 }
 
 // ContainerResponse represents a container deployment response.
@@ -86,9 +134,24 @@ type ImagePullRequest struct {
 	Image string `json:"image"`
 }
 
-// listContainers returns all yokai-* containers.
+// listContainers retains the existing managed-only behavior used by metrics
+// and GET /containers without an explicit scope.
 func listContainers() ([]Container, error) {
-	cmd := exec.Command("docker", "ps", "-a", "--filter", "name=yokai-", "--format", "json")
+	return listContainersScope(InventoryScopeManaged)
+}
+
+// listContainersScope returns a sanitized inventory. Docker environment data
+// is never requested or represented by Container.
+func listContainersScope(scope string) ([]Container, error) {
+	if scope != InventoryScopeManaged && scope != InventoryScopeAll {
+		return nil, fmt.Errorf("invalid inventory scope %q", scope)
+	}
+	args := []string{"ps", "-a", "--no-trunc"}
+	if scope == InventoryScopeManaged {
+		args = append(args, "--filter", "name=yokai-")
+	}
+	args = append(args, "--format", "json")
+	cmd := exec.Command("docker", args...)
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("docker ps failed: %w", err)
@@ -108,6 +171,7 @@ func listContainers() ([]Container, error) {
 			Ports      string `json:"Ports"`
 			CreatedAt  string `json:"CreatedAt"`
 			RunningFor string `json:"RunningFor"`
+			Labels     string `json:"Labels"`
 		}
 
 		if err := json.Unmarshal([]byte(line), &dockerContainer); err != nil {
@@ -136,24 +200,32 @@ func listContainers() ([]Container, error) {
 			uptime = int64(time.Since(created).Seconds())
 		}
 
+		labels := sanitizeInventoryLabels(parseDockerLabels(dockerContainer.Labels))
+		ownership := inventoryOwnership(dockerContainer.Names, labels)
+		if scope == InventoryScopeManaged && ownership == OwnershipObserved {
+			continue
+		}
 		container := Container{
-			ID:      dockerContainer.ID,
-			Name:    strings.TrimPrefix(dockerContainer.Names, "/"),
-			Image:   dockerContainer.Image,
-			Status:  parseStatus(dockerContainer.Status),
-			Ports:   ports,
-			Created: created,
-			Uptime:  uptime,
+			ID:        dockerContainer.ID,
+			Name:      strings.TrimPrefix(dockerContainer.Names, "/"),
+			Image:     dockerContainer.Image,
+			Status:    parseStatus(dockerContainer.Status),
+			Ports:     ports,
+			Created:   created,
+			Uptime:    uptime,
+			Labels:    labels,
+			Ownership: ownership,
+		}
+		if port := labels[LabelServicePort]; port != "" && container.Ports[port] == "" {
+			container.Ports[port] = port
 		}
 
-		// Scrape native metrics for supported inference containers.
-		if (isVLLMImage(container.Image) || isSGLangImage(container.Image)) && container.Status == "running" {
-			for _, ext := range container.Ports {
-				if ext != "" {
-					if vm, err := scrapeVLLMMetrics(ext); err == nil {
-						container.VLLMMetrics = vm
-					}
-					break
+		// The all-scope inventory is an identity path used by deployment
+		// operations. Keep inference scrapes on the managed metrics/UI path.
+		if scope == InventoryScopeManaged && (isVLLMImage(container.Image) || isSGLangImage(container.Image)) && container.Status == "running" {
+			if baseURL, err := containerBaseURL(container); err == nil {
+				if vm, err := scrapeVLLMMetricsURL(baseURL+"/metrics", ""); err == nil {
+					container.VLLMMetrics = vm
 				}
 			}
 		}
@@ -162,6 +234,58 @@ func listContainers() ([]Container, error) {
 	}
 
 	return containers, nil
+}
+
+var safeInventoryLabelKeys = map[string]struct{}{
+	LabelManaged:        {},
+	LabelOwnership:      {},
+	LabelServiceAddress: {},
+	LabelServicePort:    {},
+	LabelDeploymentID:   {},
+	LabelGeneration:     {},
+	LabelRole:           {},
+	LabelBKCID:          {},
+	LabelModelRevision:  {},
+	LabelImageDigest:    {},
+	LabelRuntimePatch:   {},
+}
+
+func parseDockerLabels(raw string) map[string]string {
+	labels := make(map[string]string)
+	for _, item := range strings.Split(raw, ",") {
+		key, value, ok := strings.Cut(item, "=")
+		if !ok {
+			continue
+		}
+		labels[strings.TrimSpace(key)] = strings.TrimSpace(value)
+	}
+	return labels
+}
+
+func sanitizeInventoryLabels(labels map[string]string) map[string]string {
+	clean := make(map[string]string)
+	for key, value := range labels {
+		if _, ok := safeInventoryLabelKeys[key]; ok {
+			clean[key] = value
+		}
+	}
+	if len(clean) == 0 {
+		return nil
+	}
+	return clean
+}
+
+func inventoryOwnership(name string, labels map[string]string) string {
+	switch labels[LabelOwnership] {
+	case OwnershipAdopted:
+		return OwnershipAdopted
+	case OwnershipManaged:
+		return OwnershipManaged
+	}
+	if labels[LabelManaged] == "true" || strings.HasPrefix(strings.TrimPrefix(name, "/"), "yokai-") {
+		return OwnershipManaged
+	}
+	return OwnershipObserved
 }
 
 // parseStatus converts Docker status to simplified format.
@@ -178,12 +302,22 @@ func parseStatus(dockerStatus string) string {
 	if strings.Contains(dockerStatus, "Restarting") {
 		return "restarting"
 	}
+	if strings.Contains(dockerStatus, "Dead") {
+		return "dead"
+	}
 	return "unknown"
 }
 
 // runContainer deploys a new container.
 func runContainer(req ContainerRequest) (*ContainerResponse, error) {
-	if err := validateImagePlatform(req.Image); err != nil {
+	return runContainerWithContext(context.Background(), req, liveFailedRunCleanupDeps)
+}
+
+func runContainerWithContext(ctx context.Context, req ContainerRequest, cleanupDeps failedRunCleanupDeps) (*ContainerResponse, error) {
+	if err := validateContainerRuntime(req); err != nil {
+		return nil, err
+	}
+	if err := validateImagePlatform(ctx, req.Image); err != nil {
 		return nil, err
 	}
 	if err := applyPlugins(&req); err != nil {
@@ -191,7 +325,7 @@ func runContainer(req ContainerRequest) (*ContainerResponse, error) {
 	}
 
 	// Sanitize container name
-	containerName := fmt.Sprintf("yokai-%s", sanitizeName(req.Name))
+	containerName := normalizedContainerName(req.Name)
 
 	// If the deploy targets a specific GGUF variant, pre-download every shard
 	// to the agent's shared models directory so the container can mmap the
@@ -244,7 +378,8 @@ func runContainer(req ContainerRequest) (*ContainerResponse, error) {
 		req.ExtraArgs = withVLLMToolCallArgs(req.ExtraArgs, req.Model)
 	}
 
-	if isSGLangImage(req.Image) {
+	sglangImage := isSGLangImage(req.Image)
+	if sglangImage {
 		if req.Model != "" {
 			if req.Volumes == nil {
 				req.Volumes = make(map[string]string)
@@ -255,66 +390,38 @@ func runContainer(req ContainerRequest) (*ContainerResponse, error) {
 		req.Ports = normalizeServicePorts(req.Ports, "30000")
 		req.ExtraArgs = withHostArg(req.ExtraArgs, "--host", "0.0.0.0")
 	}
+	if err := applyPinnedSGLangRuntimePatch(&req); err != nil {
+		return nil, err
+	}
+	if sglangImage {
+		if err := validateContainerRuntime(req); err != nil {
+			return nil, err
+		}
+	}
 
 	if isComfyUIImage(req.Image) {
 		req.Ports = normalizeServicePorts(req.Ports, "8188")
 	}
-
-	// Build docker run command
-	args := []string{"run", "-d", "--name", containerName}
-
-	// Add ports — bind to 0.0.0.0 explicitly for external access
-	for internal, external := range req.Ports {
-		args = append(args, "-p", fmt.Sprintf("0.0.0.0:%s:%s", external, internal))
+	if err := prepareLegacyLaunchNonce(&req); err != nil {
+		return nil, err
 	}
 
-	// Add environment variables
-	for key, value := range req.Env {
-		args = append(args, "-e", fmt.Sprintf("%s=%s", key, value))
-	}
-
-	// Add GPU support
-	if req.GPUIDs != "" {
-		if req.GPUIDs == "all" {
-			args = append(args, "--gpus", "all")
-		} else {
-			args = append(args, "--gpus", fmt.Sprintf(`"device=%s"`, req.GPUIDs))
-		}
-	}
-
-	// Add volumes
-	for host, container := range req.Volumes {
-		args = append(args, "-v", fmt.Sprintf("%s:%s", host, container))
-	}
-
-	if req.Runtime.IPCMode != "" {
-		args = append(args, "--ipc", req.Runtime.IPCMode)
-	}
-	if req.Runtime.ShmSize != "" {
-		args = append(args, "--shm-size", req.Runtime.ShmSize)
-	}
-	for name, value := range req.Runtime.Ulimits {
-		args = append(args, "--ulimit", fmt.Sprintf("%s=%s", name, value))
-	}
-
-	// Add restart policy
-	args = append(args, "--restart", "unless-stopped")
-
-	// Add image
-	args = append(args, req.Image)
-
-	// Add extra args
-	if req.ExtraArgs != "" {
-		extraArgs := strings.Fields(req.ExtraArgs)
-		args = append(args, extraArgs...)
-	}
+	args := buildDockerRunArgs(req, containerName)
 
 	// Run the container
-	cmd := exec.Command("docker", args...)
+	cmd := exec.CommandContext(ctx, "docker", args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		_ = exec.Command("docker", "rm", "-f", containerName).Run()
-		return nil, fmt.Errorf("docker run failed: %w — output: %s", err, strings.TrimSpace(string(out)))
+		if hasCompleteManagedCandidateProvenance(req) {
+			cleanupFailedManagedRunEventually(ctx, req, containerName, cleanupDeps, deployments.DefaultCandidateLaunchSettleTimeout, 250*time.Millisecond)
+		} else {
+			cleanupCtx, cancelCleanup := context.WithTimeout(context.WithoutCancel(ctx), deployments.DefaultCandidateLaunchSettleTimeout)
+			cleanupFailedManagedRun(cleanupCtx, req, containerName, cleanupDeps)
+			cancelCleanup()
+		}
+		// Docker output is not safe to return here: launch arguments can include
+		// request-time credentials such as SGLang's rank-0 API key.
+		return nil, fmt.Errorf("docker run failed: %w", err)
 	}
 
 	containerID := strings.TrimSpace(string(out))
@@ -325,6 +432,254 @@ func runContainer(req ContainerRequest) (*ContainerResponse, error) {
 	}, nil
 }
 
+func normalizedContainerName(name string) string {
+	name = sanitizeName(name)
+	if !strings.HasPrefix(name, "yokai-") {
+		name = "yokai-" + name
+	}
+	return name
+}
+
+func hasCompleteManagedCandidateProvenance(req ContainerRequest) bool {
+	for _, key := range []string{LabelDeploymentID, LabelGeneration, LabelRole} {
+		if strings.TrimSpace(req.Labels[key]) == "" {
+			return false
+		}
+	}
+	return req.Labels[LabelManaged] == "true" && req.Labels[LabelOwnership] == OwnershipManaged
+}
+
+func prepareLegacyLaunchNonce(req *ContainerRequest) error {
+	if req == nil || req.Labels[LabelManaged] != "true" || req.Labels[LabelOwnership] != OwnershipManaged {
+		return nil
+	}
+	for _, key := range []string{LabelDeploymentID, LabelGeneration, LabelRole} {
+		if strings.TrimSpace(req.Labels[key]) != "" {
+			return nil
+		}
+	}
+	random := make([]byte, 16)
+	if _, err := rand.Read(random); err != nil {
+		return fmt.Errorf("generate legacy launch identity: %w", err)
+	}
+	req.Labels[LabelLaunchNonce] = hex.EncodeToString(random)
+	return nil
+}
+
+func cleanupFailedManagedRunEventually(ctx context.Context, req ContainerRequest, containerName string, deps failedRunCleanupDeps, timeout, interval time.Duration) bool {
+	if timeout <= 0 || interval <= 0 {
+		return cleanupFailedManagedRun(ctx, req, containerName, deps)
+	}
+	settleCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+	defer cancel()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		if cleanupFailedManagedRun(settleCtx, req, containerName, deps) {
+			return true
+		}
+		select {
+		case <-settleCtx.Done():
+			return false
+		case <-ticker.C:
+		}
+	}
+}
+
+type failedRunCleanupDeps struct {
+	inspect func(context.Context, string) (string, string, map[string]string, error)
+	remove  func(context.Context, string) error
+}
+
+var liveFailedRunCleanupDeps = failedRunCleanupDeps{
+	inspect: inspectContainerIdentityWithContext,
+	remove:  removeContainerWithContext,
+}
+
+// cleanupFailedManagedRun handles Docker's ambiguous run failure: the daemon
+// may have created the requested container even though the client returned an
+// error. It removes only the exact Yokai-managed container whose ownership
+// labels match the request, never an unrelated same-name container. Grouped
+// requests additionally require their complete deployment provenance; partial
+// grouped provenance cannot fall back to the legacy cleanup path.
+func cleanupFailedManagedRun(ctx context.Context, req ContainerRequest, containerName string, deps failedRunCleanupDeps) bool {
+	expected := map[string]string{
+		LabelManaged:   "true",
+		LabelOwnership: OwnershipManaged,
+	}
+	if req.Labels[LabelManaged] != expected[LabelManaged] || req.Labels[LabelOwnership] != expected[LabelOwnership] {
+		return false
+	}
+	provenanceKeys := []string{LabelDeploymentID, LabelGeneration, LabelRole}
+	provenanceCount := 0
+	for _, key := range provenanceKeys {
+		if strings.TrimSpace(req.Labels[key]) != "" {
+			provenanceCount++
+		}
+	}
+	if provenanceCount != 0 && provenanceCount != len(provenanceKeys) {
+		return false
+	}
+	if provenanceCount == len(provenanceKeys) {
+		for _, key := range provenanceKeys {
+			expected[key] = req.Labels[key]
+		}
+	} else {
+		expected[LabelLaunchNonce] = req.Labels[LabelLaunchNonce]
+	}
+	for _, value := range expected {
+		if strings.TrimSpace(value) == "" {
+			return false
+		}
+	}
+	id, name, labels, err := deps.inspect(ctx, containerName)
+	if err != nil || name != containerName {
+		return false
+	}
+	for key, value := range expected {
+		if labels[key] != value {
+			return false
+		}
+	}
+	return deps.remove(ctx, id) == nil
+}
+
+var errContainerIdentityNotFound = errors.New("container identity not found")
+
+func inspectContainerIdentity(containerName string) (string, string, map[string]string, error) {
+	return inspectContainerIdentityWithContext(context.Background(), containerName)
+}
+
+func inspectContainerIdentityWithContext(ctx context.Context, containerName string) (string, string, map[string]string, error) {
+	output, err := exec.CommandContext(ctx, "docker", "inspect", "--format={{json .Id}}\n{{json .Name}}\n{{json .Config.Labels}}", containerName).CombinedOutput()
+	if err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return "", "", nil, fmt.Errorf("docker inspect canceled: %w", contextErr)
+		}
+		message := strings.ToLower(string(output))
+		if strings.Contains(message, "no such object") || strings.Contains(message, "no such container") {
+			return "", "", nil, fmt.Errorf("%w: %s", errContainerIdentityNotFound, containerName)
+		}
+		// Docker output is intentionally omitted because this identity check may
+		// run beside secret-bearing coordinated containers.
+		return "", "", nil, fmt.Errorf("docker inspect failed: %w", err)
+	}
+	parts := strings.SplitN(strings.TrimSpace(string(output)), "\n", 3)
+	if len(parts) != 3 {
+		return "", "", nil, fmt.Errorf("docker inspect returned incomplete identity")
+	}
+	var id string
+	if err := json.Unmarshal([]byte(parts[0]), &id); err != nil || !dockerContainerIDPattern.MatchString(id) {
+		return "", "", nil, fmt.Errorf("decode docker container ID")
+	}
+	var name string
+	if err := json.Unmarshal([]byte(parts[1]), &name); err != nil {
+		return "", "", nil, fmt.Errorf("decode docker container name: %w", err)
+	}
+	labels := make(map[string]string)
+	if err := json.Unmarshal([]byte(parts[2]), &labels); err != nil {
+		return "", "", nil, fmt.Errorf("decode docker container labels: %w", err)
+	}
+	return id, strings.TrimPrefix(name, "/"), labels, nil
+}
+
+func buildDockerRunArgs(req ContainerRequest, containerName string) []string {
+	args := []string{"run", "-d", "--name", containerName}
+	if req.NetworkMode != "" {
+		args = append(args, "--network", req.NetworkMode)
+	}
+	if req.NetworkMode != "host" {
+		for _, internal := range sortedMapKeys(req.Ports) {
+			args = append(args, "-p", fmt.Sprintf("0.0.0.0:%s:%s", req.Ports[internal], internal))
+		}
+	}
+	for _, key := range sortedMapKeys(req.Labels) {
+		args = append(args, "--label", fmt.Sprintf("%s=%s", key, req.Labels[key]))
+	}
+	for _, key := range sortedMapKeys(req.Env) {
+		args = append(args, "-e", fmt.Sprintf("%s=%s", key, req.Env[key]))
+	}
+	if req.GPUIDs != "" {
+		if req.GPUIDs == "all" {
+			args = append(args, "--gpus", "all")
+		} else {
+			args = append(args, "--gpus", fmt.Sprintf(`"device=%s"`, req.GPUIDs))
+		}
+	}
+	for _, host := range sortedMapKeys(req.Volumes) {
+		args = append(args, "-v", fmt.Sprintf("%s:%s", host, req.Volumes[host]))
+	}
+	for _, device := range req.Devices {
+		args = append(args, "--device", device)
+	}
+	for _, capability := range req.CapAdd {
+		args = append(args, "--cap-add", capability)
+	}
+	if req.Runtime.IPCMode != "" {
+		args = append(args, "--ipc", req.Runtime.IPCMode)
+	}
+	if req.Runtime.ShmSize != "" {
+		args = append(args, "--shm-size", req.Runtime.ShmSize)
+	}
+	for _, name := range sortedMapKeys(req.Runtime.Ulimits) {
+		args = append(args, "--ulimit", fmt.Sprintf("%s=%s", name, req.Runtime.Ulimits[name]))
+	}
+	restartPolicy := req.Runtime.RestartPolicy
+	if restartPolicy == config.RestartPolicyDefault {
+		restartPolicy = config.RestartPolicyUnlessStopped
+	}
+	args = append(args, "--restart", string(restartPolicy), req.Image)
+	if req.ExtraArgs != "" {
+		args = append(args, strings.Fields(req.ExtraArgs)...)
+	}
+	args = append(args, req.Args...)
+	return args
+}
+
+func sortedMapKeys[V any](values map[string]V) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+var capabilityPattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
+
+func validateContainerRuntime(req ContainerRequest) error {
+	if req.NetworkMode != "" && req.NetworkMode != "host" {
+		return fmt.Errorf("unsupported network mode %q", req.NetworkMode)
+	}
+	for _, device := range req.Devices {
+		hostPath := strings.SplitN(device, ":", 2)[0]
+		if !strings.HasPrefix(path.Clean(hostPath), "/dev/") {
+			return fmt.Errorf("device mount must be under /dev: %q", device)
+		}
+	}
+	for _, capability := range req.CapAdd {
+		if !capabilityPattern.MatchString(capability) {
+			return fmt.Errorf("invalid Linux capability %q", capability)
+		}
+	}
+	switch req.Runtime.RestartPolicy {
+	case config.RestartPolicyDefault, config.RestartPolicyNo, config.RestartPolicyUnlessStopped:
+	default:
+		return fmt.Errorf("unsupported restart policy %q", req.Runtime.RestartPolicy)
+	}
+	for _, arg := range req.Args {
+		if arg == "" || strings.ContainsAny(arg, "\x00\r\n") {
+			return fmt.Errorf("invalid structured container argument")
+		}
+	}
+	for key, value := range req.Labels {
+		if strings.TrimSpace(key) == "" || strings.ContainsAny(key+value, "\r\n") {
+			return fmt.Errorf("invalid container label")
+		}
+	}
+	return nil
+}
+
 // containerExists checks whether a container with the given ID or name exists.
 func containerExists(idOrName string) bool {
 	cmd := exec.Command("docker", "inspect", "--format={{.State.Status}}", idOrName)
@@ -333,8 +688,15 @@ func containerExists(idOrName string) bool {
 
 // stopContainer stops a container by ID or name.
 func stopContainer(idOrName string) error {
-	cmd := exec.Command("docker", "stop", idOrName)
+	return stopContainerWithContext(context.Background(), idOrName)
+}
+
+func stopContainerWithContext(ctx context.Context, idOrName string) error {
+	cmd := exec.CommandContext(ctx, "docker", "stop", idOrName)
 	if err := cmd.Run(); err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return fmt.Errorf("docker stop canceled: %w", contextErr)
+		}
 		return fmt.Errorf("docker stop failed: %w", err)
 	}
 	return nil
@@ -342,8 +704,15 @@ func stopContainer(idOrName string) error {
 
 // removeContainer removes a stopped container.
 func removeContainer(idOrName string) error {
-	cmd := exec.Command("docker", "rm", "-f", idOrName)
+	return removeContainerWithContext(context.Background(), idOrName)
+}
+
+func removeContainerWithContext(ctx context.Context, idOrName string) error {
+	cmd := exec.CommandContext(ctx, "docker", "rm", "-f", idOrName)
 	if err := cmd.Run(); err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return fmt.Errorf("docker rm canceled: %w", contextErr)
+		}
 		return fmt.Errorf("docker rm failed: %w", err)
 	}
 	return nil
@@ -351,8 +720,15 @@ func removeContainer(idOrName string) error {
 
 // restartContainer restarts a container.
 func restartContainer(idOrName string) error {
-	cmd := exec.Command("docker", "restart", idOrName)
+	return restartContainerWithContext(context.Background(), idOrName)
+}
+
+func restartContainerWithContext(ctx context.Context, idOrName string) error {
+	cmd := exec.CommandContext(ctx, "docker", "restart", idOrName)
 	if err := cmd.Run(); err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return fmt.Errorf("docker restart canceled: %w", contextErr)
+		}
 		return fmt.Errorf("docker restart failed: %w", err)
 	}
 	return nil
@@ -360,8 +736,15 @@ func restartContainer(idOrName string) error {
 
 // pullImage pulls a Docker image.
 func pullImage(image string) error {
-	cmd := exec.Command("docker", "pull", image)
+	return pullImageWithContext(context.Background(), image)
+}
+
+func pullImageWithContext(ctx context.Context, image string) error {
+	cmd := exec.CommandContext(ctx, "docker", "pull", image)
 	if err := cmd.Run(); err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return fmt.Errorf("docker pull canceled: %w", contextErr)
+		}
 		return fmt.Errorf("docker pull failed: %w", err)
 	}
 	return nil
@@ -582,10 +965,13 @@ func withLlamaModelArg(extraArgs, model string) string {
 	return fmt.Sprintf("-m %s %s", modelPath, extraArgs)
 }
 
-func validateImagePlatform(image string) error {
-	cmd := exec.Command("docker", "manifest", "inspect", image)
+func validateImagePlatform(ctx context.Context, image string) error {
+	cmd := exec.CommandContext(ctx, "docker", "manifest", "inspect", image)
 	out, err := cmd.Output()
 	if err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return fmt.Errorf("docker manifest inspect canceled: %w", contextErr)
+		}
 		log.Printf("warning: unable to inspect image platform for %s: %v", image, err)
 		return nil
 	}
@@ -603,10 +989,13 @@ func validateImagePlatform(image string) error {
 	return nil
 }
 
-func validatePulledImageArchitecture(image string) error {
-	cmd := exec.Command("docker", "inspect", image, "--format", "{{.Architecture}}")
+func validatePulledImageArchitecture(ctx context.Context, image string) error {
+	cmd := exec.CommandContext(ctx, "docker", "inspect", image, "--format", "{{.Architecture}}")
 	out, err := cmd.Output()
 	if err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return fmt.Errorf("docker inspect canceled: %w", contextErr)
+		}
 		return fmt.Errorf("docker inspect failed: %w", err)
 	}
 
@@ -685,7 +1074,7 @@ func imageSupportsPlatform(manifestJSON []byte, hostOS, hostArch string) (bool, 
 // It tries the first external port it finds. For inference servers it hits /health,
 // for other services it does a simple TCP dial.
 // Returns "healthy", "unhealthy", or "starting".
-func probeContainerHealth(ports map[string]string, image string) string {
+func probeContainerHealth(ports map[string]string, image, serviceAddress string) string {
 	if len(ports) == 0 {
 		return ""
 	}
@@ -700,7 +1089,11 @@ func probeContainerHealth(ports map[string]string, image string) string {
 		return ""
 	}
 
-	addr := "127.0.0.1:" + externalPort
+	host := strings.TrimSpace(serviceAddress)
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	addr := net.JoinHostPort(host, externalPort)
 
 	// For known inference servers, try their /health endpoint
 	imageLower := strings.ToLower(image)
@@ -729,17 +1122,36 @@ func probeContainerHealth(ports map[string]string, image string) string {
 // scrapeVLLMMetrics fetches Prometheus metrics from a vLLM container's /metrics
 // endpoint and parses generation and prompt throughput.
 func scrapeVLLMMetrics(port string) (*VLLMMetrics, error) {
-	client := &http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Get("http://127.0.0.1:" + port + "/metrics")
+	return scrapeVLLMMetricsURL("http://127.0.0.1:"+port+"/metrics", "")
+}
+
+var inventoryMetricsHTTPClient = &http.Client{Timeout: 2 * time.Second}
+
+func scrapeVLLMMetricsURL(metricsURL, apiKey string) (*VLLMMetrics, error) {
+	return scrapeVLLMMetricsURLWithClient(inventoryMetricsHTTPClient, metricsURL, apiKey)
+}
+
+func scrapeVLLMMetricsURLWithClient(client *http.Client, metricsURL, apiKey string) (*VLLMMetrics, error) {
+	request, err := http.NewRequest(http.MethodGet, metricsURL, nil)
 	if err != nil {
 		return nil, err
+	}
+	if apiKey != "" {
+		request.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	resp, err := client.Do(request)
+	if err != nil {
+		return nil, redactSecretError(err, apiKey)
 	}
 	defer func() {
 		_ = resp.Body.Close()
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("inference metrics returned %d", resp.StatusCode)
+		return nil, redactSecretError(&serviceHTTPStatusError{
+			status:  resp.StatusCode,
+			message: fmt.Sprintf("inference metrics returned %d", resp.StatusCode),
+		}, apiKey)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
@@ -770,26 +1182,34 @@ func scrapeVLLMMetrics(port string) (*VLLMMetrics, error) {
 		case "vllm:avg_generation_throughput_toks_per_s", "sglang:gen_throughput":
 			m.GenerationTokPerSec += value
 			m.HasGenerationTokPerSec = true
+			m.markNativeMetric(name)
 		case "vllm:avg_prompt_throughput_toks_per_s":
 			m.PromptTokPerSec += value
 			m.HasPromptTokPerSec = true
+			m.markNativeMetric(name)
 		case "vllm:num_requests_running", "sglang:num_running_reqs":
 			m.RequestsRunning += value
 			m.HasRequestsRunning = true
+			m.markNativeMetric(name)
 		case "vllm:num_requests_waiting", "sglang:num_queue_reqs":
 			m.RequestsWaiting += value
 			m.HasRequestsWaiting = true
+			m.markNativeMetric(name)
 		case "vllm:prompt_tokens_total", "vllm:prompt_tokens", "sglang:prompt_tokens_total":
 			m.PromptTokensTotal += value
 			m.HasPromptTokensTotal = true
+			m.markNativeMetric(name)
 		case "vllm:generation_tokens_total", "vllm:generation_tokens", "sglang:generation_tokens_total":
 			m.GenerationTokensTotal += value
 			m.HasGenerationTokensTotal = true
+			m.markNativeMetric(name)
 		case "vllm:prompt_tokens_cached_total", "vllm:prompt_tokens_cached", "sglang:cached_tokens_total":
 			m.CachedPromptTokensTotal += value
 			m.HasCachedPromptTokens = true
+			m.markNativeMetric(name)
 		case "vllm:prefix_cache_hits_total", "vllm:prefix_cache_hits", "vllm:external_prefix_cache_hits_total", "vllm:external_prefix_cache_hits":
 			cachedPromptTokensFallback += value
+			m.markNativeMetric(name)
 		case "vllm:time_to_first_token_seconds_bucket", "sglang:time_to_first_token_seconds_bucket":
 			le := labels["le"]
 			if le == "" {
@@ -800,12 +1220,15 @@ func scrapeVLLMMetrics(port string) (*VLLMMetrics, error) {
 			}
 			m.TTFTBuckets[le] += value
 			m.HasTTFT = true
+			m.markNativeMetric(name)
 		case "vllm:time_to_first_token_seconds_sum", "sglang:time_to_first_token_seconds_sum":
 			m.TTFTSum += value
 			m.HasTTFT = true
+			m.markNativeMetric(name)
 		case "vllm:time_to_first_token_seconds_count", "sglang:time_to_first_token_seconds_count":
 			m.TTFTCount += value
 			m.HasTTFT = true
+			m.markNativeMetric(name)
 		}
 	}
 	if !m.HasCachedPromptTokens && cachedPromptTokensFallback > 0 {
@@ -813,6 +1236,15 @@ func scrapeVLLMMetrics(port string) (*VLLMMetrics, error) {
 		m.HasCachedPromptTokens = true
 	}
 	return m, nil
+}
+
+func (m *VLLMMetrics) markNativeMetric(name string) {
+	switch {
+	case strings.HasPrefix(name, "sglang:"):
+		m.HasSGLangNativeMetric = true
+	case strings.HasPrefix(name, "vllm:"):
+		m.HasVLLMNativeMetric = true
+	}
 }
 
 var prometheusMetricLinePattern = regexp.MustCompile(`^([^\s{]+)(?:\{([^}]*)\})?\s+([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)$`)

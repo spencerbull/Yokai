@@ -1,12 +1,12 @@
 import { startTransition, useEffect, useMemo, useState } from "react"
 
-import type { DeployBKC, DeployForm, GGUFVariant, HFModel, VLLMMemoryEstimate, WorkloadType } from "../../contracts/deploy"
+import type { DeploymentCreateRequest, DeploymentRecord, DeployBKC, DeployForm, GGUFVariant, HFModel, VLLMMemoryEstimate, WorkloadType } from "../../contracts/deploy"
 import type { DeviceRecord } from "../../contracts/fleet"
 import type { SettingsDocument } from "../../contracts/settings"
-import { deployService, getDeployBKCs, getDevices, getGGUFVariants, getHFModels, getSettings, getVLLMMemoryEstimate, putDeployHistory } from "../../services/daemon-client"
+import { createDeployment, DaemonRequestError, deployService, getDeployBKCs, getDevices, getGGUFVariants, getHFModels, getSettings, getVLLMMemoryEstimate, putDeployHistory } from "../../services/daemon-client"
 
 type DeployStep = "workload" | "device" | "image" | "model" | "variant" | "config" | "review"
-type ConfigField = "port" | "extraArgs" | "bkcAction" | "contextLength" | "overheadGB" | "hfmemCalculate" | "hfmemApply"
+type ConfigField = "port" | "extraArgs" | "bkcAction" | "contextLength" | "overheadGB" | "hfmemCalculate" | "hfmemApply" | "headDevice" | "headFabric" | "headService" | "headObserved" | "workerDevice" | "workerFabric" | "workerObserved" | "idempotencyKey" | "localModelPath" | "apiKey"
 type ReviewAction = "back" | "deploy"
 
 type DeployNotice = {
@@ -47,7 +47,7 @@ const EMPTY_SETTINGS: SettingsDocument = {
   },
 }
 
-export function useDeployController(active: boolean, onComplete: () => void) {
+export function useDeployController(active: boolean, onComplete: (notice?: DeployNotice) => void) {
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading")
   const [devices, setDevices] = useState<DeviceRecord[]>([])
   const [settings, setSettings] = useState<SettingsDocument>(EMPTY_SETTINGS)
@@ -59,6 +59,7 @@ export function useDeployController(active: boolean, onComplete: () => void) {
   const [reviewAction, setReviewAction] = useState<ReviewAction>("back")
   const [notice, setNotice] = useState<DeployNotice | null>(null)
   const [pendingAction, setPendingAction] = useState<string | null>(null)
+  const [recoveryDeployment, setRecoveryDeployment] = useState<DeploymentRecord | null>(null)
   const [modelResults, setModelResults] = useState<HFModel[]>([])
   const [searchError, setSearchError] = useState<string>()
   const [bkcs, setBkcs] = useState<DeployBKC[]>([])
@@ -74,6 +75,7 @@ export function useDeployController(active: boolean, onComplete: () => void) {
     overheadGB: "1.5",
   })
   const bkc = bkcs[bkcIndex] ?? null
+  const activeBKC = bkc && appliedBKCId === bkc.id ? bkc : null
 
   useEffect(() => {
     if (!active) {
@@ -286,7 +288,7 @@ export function useDeployController(active: boolean, onComplete: () => void) {
   }
 
   return {
-    activeBKC: bkc && appliedBKCId === bkc.id ? bkc : null,
+    activeBKC,
     availableBKC: bkc,
     availableBKCCount: bkcs.length,
     availableBKCIndex: bkcIndex,
@@ -306,10 +308,15 @@ export function useDeployController(active: boolean, onComplete: () => void) {
     form,
     extraArgsEditing,
     hasAppliedBKC: Boolean(bkc && appliedBKCId === bkc.id),
+    isClusterBKC: Boolean(activeBKC?.multi_device),
     locksGlobalNav: step === "image" || step === "model" || step === "variant" || step === "config",
     modelResults,
     notice,
     pendingAction,
+    recoveryDeployment,
+    openRecoveryDeployment() {
+      onComplete()
+    },
     reviewAction,
     searchError,
     settings,
@@ -542,7 +549,7 @@ export function useDeployController(active: boolean, onComplete: () => void) {
         }
         return true
       case "tab":
-        setConfigField((current) => nextConfigField(current, form.workload, key.shift ? -1 : 1))
+        setConfigField((current) => nextConfigField(current, form.workload, Boolean(activeBKC?.multi_device), key.shift ? -1 : 1))
         return true
       case "b":
         if (bkc) {
@@ -594,7 +601,13 @@ export function useDeployController(active: boolean, onComplete: () => void) {
           applyVLLMEstimate(vllmHelper.estimate)
           return true
         }
-        if (!Number.isFinite(Number.parseInt(form.port.trim(), 10))) {
+        if (activeBKC?.multi_device) {
+          const clusterValidation = validateClusterDeploymentForm(form, activeBKC)
+          if (clusterValidation) {
+            setNotice({ level: "error", message: clusterValidation })
+            return true
+          }
+        } else if (!Number.isFinite(Number.parseInt(form.port.trim(), 10))) {
           setNotice({ level: "error", message: "Port must be a number" })
           return true
         }
@@ -644,21 +657,54 @@ export function useDeployController(active: boolean, onComplete: () => void) {
   }
 
   async function submitDeploy() {
-    const validation = validateDeployForm(form)
+    const validation = activeBKC?.multi_device ? validateClusterDeploymentForm(form, activeBKC) : validateDeployForm(form)
     if (validation) {
       setNotice({ level: "error", message: validation })
       return
     }
 
     setPendingAction("deploying service")
+    setRecoveryDeployment(null)
     try {
-      await deployService(buildDeployRequest(form, bkc && appliedBKCId === bkc.id ? bkc : null))
-      await putDeployHistory(updateHistory(settings, form))
-      setNotice({ level: "success", message: `Deployed ${form.name}` })
+      let completionNotice: DeployNotice
+      let successfulDeployment: DeploymentRecord | null = null
+      if (activeBKC?.multi_device) {
+        const deployment = await createDeployment(buildClusterDeploymentRequest(form, activeBKC))
+        successfulDeployment = deployment
+        setForm((current) => ({ ...current, apiKey: "" }))
+        completionNotice = {
+          level: deployment.state === "running" ? "success" : deployment.state === "stopped" ? "info" : "warning",
+          message: `Deployment ${deployment.id} is ${deployment.state}`,
+        }
+      } else {
+        await deployService(buildDeployRequest(form, activeBKC))
+        completionNotice = { level: "success", message: `Deployed ${form.name}` }
+      }
+      try {
+        await putDeployHistory(updateHistory(settings, form))
+      } catch (historyCause) {
+        if (!successfulDeployment) {
+          throw historyCause
+        }
+        setRecoveryDeployment(successfulDeployment)
+        const warning = { level: "warning" as const, message: deploymentHistoryWarning(successfulDeployment, historyCause) }
+        setNotice(warning)
+        onComplete(warning)
+        return
+      }
+      setNotice(completionNotice)
       onComplete()
     } catch (cause) {
-      setNotice({ level: "error", message: cause instanceof Error ? cause.message : "deploy failed" })
+      if (cause instanceof DaemonRequestError && cause.deployment) {
+        setRecoveryDeployment(cause.deployment)
+        setNotice({ level: "error", message: `${cause.message}. ${deploymentRecoveryNotice(cause.deployment)}` })
+      } else {
+        setNotice({ level: "error", message: cause instanceof Error ? cause.message : "deploy failed" })
+      }
     } finally {
+      if (activeBKC?.multi_device) {
+        setForm((current) => ({ ...current, apiKey: "" }))
+      }
       setPendingAction(null)
     }
   }
@@ -718,9 +764,10 @@ export function useDeployController(active: boolean, onComplete: () => void) {
       image: bkc.image,
       port: bkc.port,
       extraArgs: formatArgsForEditor(bkc.extra_args),
+      headDeviceId: bkc.multi_device ? current.deviceId : current.headDeviceId,
     }))
     const maxModelLen = argValue(bkc.extra_args, "--max-model-len")
-    setConfigField("extraArgs")
+    setConfigField(bkc.multi_device ? "headDevice" : "extraArgs")
     setVLLMHelper((current) => ({
       ...current,
       contextLength: maxModelLen || current.contextLength,
@@ -737,6 +784,11 @@ export function useDeployController(active: boolean, onComplete: () => void) {
   }
 }
 
+export function deploymentHistoryWarning(deployment: DeploymentRecord, cause: unknown): string {
+  const detail = cause instanceof Error ? cause.message : "history persistence failed"
+  return `Deployment ${deployment.id} is ${deployment.state}; deploy history was not saved: ${detail}`
+}
+
 function emptyForm(): DeployForm {
   return {
     deviceId: "",
@@ -748,6 +800,16 @@ function emptyForm(): DeployForm {
     name: "",
     port: "8000",
     workload: "vllm",
+    headDeviceId: "",
+    headFabricAddress: "",
+    headServiceAddress: "",
+    workerDeviceId: "",
+    workerFabricAddress: "",
+    idempotencyKey: "",
+    localModelPath: "",
+    apiKey: "",
+    headObservedContainerId: "",
+    workerObservedContainerId: "",
   }
 }
 
@@ -820,9 +882,13 @@ function validateDeployForm(form: DeployForm) {
   return null
 }
 
-function buildDeployRequest(form: DeployForm, bkc: DeployBKC | null) {
+export function buildDeployRequest(form: DeployForm, bkc: DeployBKC | null) {
+  if (bkc?.multi_device) {
+    throw new Error("multi-device BKCs must use the grouped deployments API")
+  }
   const port = form.port.trim()
   return {
+    bkc_id: bkc?.id,
     device_id: form.deviceId,
     service_type: form.workload,
     image: form.image.trim(),
@@ -838,6 +904,52 @@ function buildDeployRequest(form: DeployForm, bkc: DeployBKC | null) {
     plugins: bkc?.plugins ? [...bkc.plugins] : [],
     runtime: cloneRuntime(bkc?.runtime),
   }
+}
+
+export function buildClusterDeploymentRequest(form: DeployForm, bkc: DeployBKC): DeploymentCreateRequest {
+  if (!bkc.multi_device) {
+    throw new Error("BKC is not a multi-device deployment")
+  }
+  return {
+    bkc_id: bkc.id,
+    idempotency_key: form.idempotencyKey.trim(),
+    bindings: [
+	  { role: "head", device_id: form.headDeviceId.trim(), fabric_address: form.headFabricAddress.trim(), service_address: form.headServiceAddress.trim(), service_port: bkc.multi_device.service_port, observed_container_id: form.headObservedContainerId.trim() || undefined },
+	  { role: "worker", device_id: form.workerDeviceId.trim(), fabric_address: form.workerFabricAddress.trim(), observed_container_id: form.workerObservedContainerId.trim() || undefined },
+    ],
+    local_model_path: form.localModelPath.trim() || undefined,
+    api_key: form.apiKey,
+  }
+}
+
+export function validateClusterDeploymentForm(form: DeployForm, bkc: DeployBKC) {
+  if (!bkc.multi_device) return "Select and apply a multi-device BKC"
+  if (!form.headDeviceId.trim() || !form.workerDeviceId.trim()) return "Both head and worker device IDs are required"
+  if (form.headDeviceId.trim() === form.workerDeviceId.trim()) return "Head and worker devices must be distinct"
+  if (!isIPAddress(form.headFabricAddress) || !isIPAddress(form.workerFabricAddress)) return "Both fabric addresses must be valid explicit IPs"
+  if (form.headFabricAddress.trim() === form.workerFabricAddress.trim()) return "Head and worker fabric addresses must be distinct"
+  if (!isExplicitServiceIPAddress(form.headServiceAddress)) return "Head service address must be an explicit non-loopback IP"
+  if (form.headServiceAddress.trim() === form.headFabricAddress.trim() || form.headServiceAddress.trim() === form.workerFabricAddress.trim()) return "Head service address must be distinct from private fabric addresses"
+  if (bkc.multi_device.service_port < 1 || bkc.multi_device.service_port > 65535 || bkc.port !== String(bkc.multi_device.service_port)) return "BKC head client/monitor port metadata is inconsistent"
+  if (!form.idempotencyKey.trim()) return "Idempotency key is required"
+	if (!form.apiKey) return "API key is required"
+  if (form.localModelPath.trim() && !form.localModelPath.trim().startsWith("/")) return "Local model path must be absolute"
+  return null
+}
+
+function isIPAddress(value: string) {
+  const input = value.trim()
+  if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(input)) {
+    return input.split(".").every((part) => Number(part) >= 0 && Number(part) <= 255)
+  }
+  return input.includes(":") && /^[0-9a-f:]+$/i.test(input)
+}
+
+function isExplicitServiceIPAddress(value: string) {
+  const input = value.trim().toLowerCase()
+  if (!isIPAddress(input)) return false
+  if (input === "0.0.0.0" || input === "::" || input === "::1" || input.startsWith("127.")) return false
+  return !input.startsWith("ff")
 }
 
 function updateHistory(settings: SettingsDocument, form: DeployForm) {
@@ -862,8 +974,16 @@ function dedupe(values: string[]) {
 
 export type DeployController = ReturnType<typeof useDeployController>
 
-function nextConfigField(current: ConfigField, workload: WorkloadType, delta: number) {
-  const fields: ConfigField[] = workload === "vllm"
+export function deploymentRecoveryNotice(deployment: DeploymentRecord) {
+  const rollbackErrors = deployment.rollback?.errors?.filter(Boolean) ?? []
+  const rollback = rollbackErrors.length > 0 ? ` Rollback needs attention: ${rollbackErrors.join("; ")}.` : ""
+  return `Deployment ${deployment.id} is ${deployment.state}.${rollback} Open its dashboard record to inspect or retry recovery.`
+}
+
+function nextConfigField(current: ConfigField, workload: WorkloadType, cluster: boolean, delta: number) {
+  const fields: ConfigField[] = cluster
+    ? ["bkcAction", "headDevice", "headFabric", "headService", "headObserved", "workerDevice", "workerFabric", "workerObserved", "idempotencyKey", "localModelPath", "apiKey"]
+    : workload === "vllm"
     ? ["port", "extraArgs", "bkcAction", "contextLength", "overheadGB", "hfmemCalculate", "hfmemApply"]
     : ["port", "extraArgs", "bkcAction"]
   const index = fields.findIndex((field) => field === current)

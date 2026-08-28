@@ -1,15 +1,28 @@
 import { startTransition, useEffect, useRef, useState } from "react"
 
 import type { FleetHistory, FleetSnapshot } from "../../contracts/fleet"
-import { getDevices, getMetrics } from "../../services/daemon-client"
+import type { DeploymentRecord } from "../../contracts/deploy"
+import { getDeployments, getDevices, getMetrics } from "../../services/daemon-client"
 import { appendFleetHistory, EMPTY_HISTORY } from "./fleet-history"
 import { normalizeFleetSnapshot } from "./normalizeFleet"
 
 type FleetState = {
+  deployments: DeploymentRecord[]
   history: FleetHistory
   status: "loading" | "ready" | "error"
   snapshot: FleetSnapshot
   error?: string
+}
+
+type DeploymentPollResult =
+  | { deployments: DeploymentRecord[]; error?: never }
+  | { deployments?: never; error: string }
+
+export function mergeDeploymentPoll(current: DeploymentRecord[], result: DeploymentPollResult) {
+  if (result.error) {
+    return { deployments: current, error: `deployment status unavailable: ${result.error}` }
+  }
+  return { deployments: result.deployments, error: undefined }
 }
 
 const EMPTY_SNAPSHOT: FleetSnapshot = {
@@ -34,6 +47,7 @@ const EMPTY_SNAPSHOT: FleetSnapshot = {
 
 export function useFleetSnapshot(active: boolean) {
   const [state, setState] = useState<FleetState>({
+    deployments: [],
     history: EMPTY_HISTORY,
     status: "loading",
     snapshot: EMPTY_SNAPSHOT,
@@ -50,7 +64,13 @@ export function useFleetSnapshot(active: boolean) {
 
     const poll = async () => {
       try {
-        const [devicesResponse, metricsResponse] = await Promise.all([getDevices(), getMetrics()])
+        const [devicesResponse, metricsResponse, deploymentResult] = await Promise.all([
+          getDevices(),
+          getMetrics(),
+          getDeployments()
+            .then((deployments): DeploymentPollResult => ({ deployments }))
+            .catch((cause): DeploymentPollResult => ({ error: cause instanceof Error ? cause.message : "failed to load deployments" })),
+        ])
         const snapshot = normalizeFleetSnapshot(devicesResponse.devices, metricsResponse)
 
         if (cancelled) {
@@ -58,12 +78,16 @@ export function useFleetSnapshot(active: boolean) {
         }
 
         startTransition(() => {
-          setState((current) => ({
-            error: undefined,
-            history: appendFleetHistory(current.history, snapshot),
-            status: "ready",
-            snapshot,
-          }))
+          setState((current) => {
+            const deploymentPoll = mergeDeploymentPoll(current.deployments, deploymentResult)
+            return {
+              deployments: deploymentPoll.deployments,
+              error: deploymentPoll.error,
+              history: appendFleetHistory(current.history, snapshot),
+              status: "ready",
+              snapshot,
+            }
+          })
         })
       } catch (cause) {
         if (cancelled) {
@@ -71,6 +95,7 @@ export function useFleetSnapshot(active: boolean) {
         }
 
         setState((current) => ({
+          deployments: current.deployments,
           history: current.history,
           status: current.snapshot.devices.length > 0 || current.snapshot.services.length > 0 ? "ready" : "error",
           snapshot: current.snapshot,

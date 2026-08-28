@@ -19,27 +19,28 @@ type deployBKCResponse struct {
 }
 
 type deployBKCRecord struct {
-	ID              string            `json:"id"`
-	Name            string            `json:"name"`
-	Workload        string            `json:"workload"`
-	ModelID         string            `json:"model_id"`
-	Image           string            `json:"image"`
-	Port            string            `json:"port"`
-	ExtraArgs       string            `json:"extra_args"`
-	Env             map[string]string `json:"env"`
-	Volumes         map[string]string `json:"volumes"`
-	Plugins         []string          `json:"plugins"`
-	Runtime         map[string]any    `json:"runtime"`
-	Description     string            `json:"description"`
-	MatchType       string            `json:"match_type"`
-	Source          string            `json:"source"`
-	Notes           []string          `json:"notes"`
-	Warning         string            `json:"warning,omitempty"`
-	TargetDevices   []string          `json:"target_devices,omitempty"`
-	MinVRAMGBPerGPU float64           `json:"min_vram_gb_per_gpu,omitempty"`
-	MinGPUCount     int               `json:"min_gpu_count,omitempty"`
-	Quantization    string            `json:"quantization,omitempty"`
-	Arch            string            `json:"arch,omitempty"`
+	ID              string                     `json:"id"`
+	Name            string                     `json:"name"`
+	Workload        string                     `json:"workload"`
+	ModelID         string                     `json:"model_id"`
+	Image           string                     `json:"image"`
+	Port            string                     `json:"port"`
+	ExtraArgs       string                     `json:"extra_args"`
+	Env             map[string]string          `json:"env"`
+	Volumes         map[string]string          `json:"volumes"`
+	Plugins         []string                   `json:"plugins"`
+	Runtime         map[string]any             `json:"runtime"`
+	Description     string                     `json:"description"`
+	MatchType       string                     `json:"match_type"`
+	Source          string                     `json:"source"`
+	Notes           []string                   `json:"notes"`
+	Warning         string                     `json:"warning,omitempty"`
+	TargetDevices   []string                   `json:"target_devices,omitempty"`
+	MinVRAMGBPerGPU float64                    `json:"min_vram_gb_per_gpu,omitempty"`
+	MinGPUCount     int                        `json:"min_gpu_count,omitempty"`
+	Quantization    string                     `json:"quantization,omitempty"`
+	Arch            string                     `json:"arch,omitempty"`
+	MultiDevice     *bkc.MultiDeviceDeployment `json:"multi_device,omitempty"`
 }
 
 type vllmMemoryEstimateRequest struct {
@@ -201,6 +202,7 @@ func deployBKCRecordFromConfig(cfg bkc.Config, matchType bkc.MatchType, warning 
 		MinGPUCount:     cfg.MinGPUCount,
 		Quantization:    cfg.Quantization,
 		Arch:            cfg.Arch,
+		MultiDevice:     cfg.MultiDevice,
 	}
 }
 

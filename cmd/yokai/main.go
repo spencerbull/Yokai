@@ -42,6 +42,9 @@ func main() {
 		case "services":
 			cli.RunServices(os.Args[2:])
 			return
+		case "deployments":
+			cli.RunDeployments(os.Args[2:])
+			return
 		case "status":
 			cli.RunStatus(os.Args[2:])
 			return
@@ -106,6 +109,15 @@ Service Management:
   yokai services stop <device-id> <cid>      Stop a container
   yokai services restart <device-id> <cid>   Restart a container
   yokai services logs [--follow] <did> <cid> Stream container logs
+
+Coordinated Deployments:
+  yokai deployments create [flags]           Create an atomic multi-device deployment
+  yokai deployments list                     List deployment groups
+  yokai deployments status <deployment-id>   Show one deployment group
+  yokai deployments test [flags] <deployment-id> Test the rank-0 API/model/metrics
+  yokai deployments start [flags] <deployment-id> Start stopped members head-first and run readiness
+  yokai deployments stop <deployment-id>     Stop all managed members
+  yokai deployments rollback <deployment-id> Remove candidates and restart selected prior IDs
 
 Fleet Status:
   yokai status                               Fleet overview (JSON)
