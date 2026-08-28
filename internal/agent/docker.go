@@ -472,15 +472,32 @@ var liveFailedRunCleanupDeps = failedRunCleanupDeps{
 
 // cleanupFailedManagedRun handles Docker's ambiguous run failure: the daemon
 // may have created the requested container even though the client returned an
-// error. It removes only the exact coordinated candidate whose ownership
-// labels match the request, never an unrelated same-name container.
+// error. It removes only the exact Yokai-managed container whose ownership
+// labels match the request, never an unrelated same-name container. Grouped
+// requests additionally require their complete deployment provenance; partial
+// grouped provenance cannot fall back to the legacy cleanup path.
 func cleanupFailedManagedRun(req ContainerRequest, containerName string, deps failedRunCleanupDeps) bool {
 	expected := map[string]string{
-		LabelManaged:      "true",
-		LabelOwnership:    OwnershipManaged,
-		LabelDeploymentID: req.Labels[LabelDeploymentID],
-		LabelGeneration:   req.Labels[LabelGeneration],
-		LabelRole:         req.Labels[LabelRole],
+		LabelManaged:   "true",
+		LabelOwnership: OwnershipManaged,
+	}
+	if req.Labels[LabelManaged] != expected[LabelManaged] || req.Labels[LabelOwnership] != expected[LabelOwnership] {
+		return false
+	}
+	provenanceKeys := []string{LabelDeploymentID, LabelGeneration, LabelRole}
+	provenanceCount := 0
+	for _, key := range provenanceKeys {
+		if strings.TrimSpace(req.Labels[key]) != "" {
+			provenanceCount++
+		}
+	}
+	if provenanceCount != 0 && provenanceCount != len(provenanceKeys) {
+		return false
+	}
+	if provenanceCount == len(provenanceKeys) {
+		for _, key := range provenanceKeys {
+			expected[key] = req.Labels[key]
+		}
 	}
 	for _, value := range expected {
 		if strings.TrimSpace(value) == "" {

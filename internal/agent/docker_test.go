@@ -165,6 +165,73 @@ func TestFailedRunCleanupRemovesOnlyOwnedAmbiguousCandidate(t *testing.T) {
 	}
 }
 
+func TestFailedRunCleanupRemovesOwnedLegacyContainer(t *testing.T) {
+	request := ContainerRequest{Labels: map[string]string{
+		LabelManaged:   "true",
+		LabelOwnership: OwnershipManaged,
+	}}
+	removed := ""
+	deps := failedRunCleanupDeps{
+		inspect: func(name string) (string, string, map[string]string, error) {
+			return strings.Repeat("f", 64), name, map[string]string{
+				LabelManaged:   "true",
+				LabelOwnership: OwnershipManaged,
+			}, nil
+		},
+		remove: func(id string) error {
+			removed = id
+			return nil
+		},
+	}
+	if !cleanupFailedManagedRun(request, "yokai-legacy", deps) || removed != strings.Repeat("f", 64) {
+		t.Fatalf("owned legacy launch artifact was not cleaned up: removed=%q", removed)
+	}
+}
+
+func TestFailedRunCleanupPreservesLegacyNameCollisionAndPartialProvenance(t *testing.T) {
+	tests := map[string]struct {
+		requestLabels  map[string]string
+		observedName   string
+		observedLabels map[string]string
+	}{
+		"unmanaged": {
+			requestLabels:  map[string]string{LabelManaged: "true", LabelOwnership: OwnershipManaged},
+			observedName:   "yokai-legacy",
+			observedLabels: map[string]string{LabelManaged: "false", LabelOwnership: OwnershipManaged},
+		},
+		"observed ownership": {
+			requestLabels:  map[string]string{LabelManaged: "true", LabelOwnership: OwnershipManaged},
+			observedName:   "yokai-legacy",
+			observedLabels: map[string]string{LabelManaged: "true", LabelOwnership: OwnershipObserved},
+		},
+		"different name": {
+			requestLabels:  map[string]string{LabelManaged: "true", LabelOwnership: OwnershipManaged},
+			observedName:   "unowned-collision",
+			observedLabels: map[string]string{LabelManaged: "true", LabelOwnership: OwnershipManaged},
+		},
+		"partial grouped provenance": {
+			requestLabels:  map[string]string{LabelManaged: "true", LabelOwnership: OwnershipManaged, LabelDeploymentID: "dep-test"},
+			observedName:   "yokai-legacy",
+			observedLabels: map[string]string{LabelManaged: "true", LabelOwnership: OwnershipManaged, LabelDeploymentID: "dep-test"},
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			removed := false
+			deps := failedRunCleanupDeps{
+				inspect: func(string) (string, string, map[string]string, error) {
+					return strings.Repeat("f", 64), test.observedName, test.observedLabels, nil
+				},
+				remove: func(string) error { removed = true; return nil },
+			}
+			request := ContainerRequest{Labels: test.requestLabels}
+			if cleanupFailedManagedRun(request, "yokai-legacy", deps) || removed {
+				t.Fatal("cleanup removed a legacy collision without exact managed identity")
+			}
+		})
+	}
+}
+
 func TestFailedRunCleanupPreservesUnownedNameCollision(t *testing.T) {
 	request := ContainerRequest{Labels: map[string]string{
 		LabelManaged:      "true",
