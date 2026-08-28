@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -162,6 +163,10 @@ func TestOpenAICompatibleServiceErrorsDoNotEchoAPIKey(t *testing.T) {
 	if strings.Contains(err.Error(), secret) {
 		t.Fatalf("request-time API key leaked through error: %v", err)
 	}
+	var statusErr *serviceHTTPStatusError
+	if !errors.As(err, &statusErr) || statusErr.status != http.StatusUnauthorized {
+		t.Fatalf("authorization status was not preserved as a typed error: %T %v", err, err)
+	}
 }
 
 func TestTestComfyUIService(t *testing.T) {
@@ -220,6 +225,15 @@ func TestContainerBaseURLIgnoresObservedServiceAddressLabel(t *testing.T) {
 	}
 }
 
+func TestContainerBaseURLRejectsInvalidManagedServiceAddressLabel(t *testing.T) {
+	baseURL, err := containerBaseURL(Container{
+		Name: "yokai-head", Ownership: OwnershipManaged, Ports: map[string]string{"8000": "8000"}, Labels: map[string]string{LabelServiceAddress: "evil.example.com/x?"},
+	})
+	if err != nil || baseURL != "http://127.0.0.1:8000" {
+		t.Fatalf("invalid managed service label redirected probe to %q: %v", baseURL, err)
+	}
+}
+
 func TestInferServiceKindDetectsSGLang(t *testing.T) {
 	t.Parallel()
 
@@ -256,6 +270,33 @@ func TestContainerServiceRequiredMetricsGate(t *testing.T) {
 	}
 	if !result.MetricsReady {
 		t.Fatalf("metrics gate did not mark result ready: %#v", result)
+	}
+}
+
+func TestContainerServiceRequiredMetricsPreservesAuthorizationFailure(t *testing.T) {
+	const secret = "request-only-secret"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			_, _ = w.Write([]byte(`{"data":[{"id":"glm-test"}]}`))
+		case "/v1/chat/completions":
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+		case "/metrics":
+			http.Error(w, "rejected "+secret, http.StatusForbidden)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	port := strings.TrimPrefix(server.URL, "http://127.0.0.1:")
+	_, err := testContainerServiceWithOptions(Container{
+		Name: "yokai-glm", Image: "lmsysorg/sglang:latest", Ports: map[string]string{"8000": port},
+	}, true, secret)
+	if err == nil || !isServiceAuthorizationError(err) {
+		t.Fatalf("required metrics authorization status was not preserved: %v", err)
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("required metrics authorization error retained the key: %v", err)
 	}
 }
 

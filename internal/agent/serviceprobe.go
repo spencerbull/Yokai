@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -23,6 +24,18 @@ type ServiceTestResult struct {
 
 var serviceTestHTTPClient = &http.Client{Timeout: 45 * time.Second}
 var requiredMetricsHTTPClient = &http.Client{Timeout: 30 * time.Second}
+
+type serviceHTTPStatusError struct {
+	status  int
+	message string
+}
+
+func (e *serviceHTTPStatusError) Error() string { return e.message }
+
+func isServiceAuthorizationError(err error) bool {
+	var statusErr *serviceHTTPStatusError
+	return errors.As(err, &statusErr) && (statusErr.status == http.StatusUnauthorized || statusErr.status == http.StatusForbidden)
+}
 
 func testContainerServiceWithOptions(container Container, requireMetrics bool, apiKey string) (*ServiceTestResult, error) {
 	baseURL, err := containerBaseURL(container)
@@ -69,10 +82,7 @@ func (m *VLLMMetrics) hasNativeFamily(serviceType string) bool {
 func containerBaseURL(container Container) (string, error) {
 	for _, externalPort := range container.Ports {
 		if strings.TrimSpace(externalPort) != "" {
-			host := ""
-			if container.Ownership == OwnershipManaged || container.Ownership == OwnershipAdopted {
-				host = strings.TrimSpace(container.Labels[LabelServiceAddress])
-			}
+			host := managedServiceAddress(container)
 			if host == "" {
 				host = "127.0.0.1"
 			}
@@ -80,6 +90,17 @@ func containerBaseURL(container Container) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("container %s has no exposed ports", container.Name)
+}
+
+func managedServiceAddress(container Container) string {
+	if container.Ownership != OwnershipManaged && container.Ownership != OwnershipAdopted {
+		return ""
+	}
+	host := strings.TrimSpace(container.Labels[LabelServiceAddress])
+	if net.ParseIP(host) == nil {
+		return ""
+	}
+	return host
 }
 
 func inferServiceKindFromImage(image string) string {
@@ -329,19 +350,30 @@ func postJSONWithAPIKey(url string, body, out interface{}, apiKey string) error 
 }
 
 func redactSecretError(err error, secret string) error {
-	if err == nil || secret == "" {
+	if err == nil {
 		return err
 	}
-	return fmt.Errorf("%s", strings.ReplaceAll(err.Error(), secret, "[REDACTED]"))
+	message := err.Error()
+	if secret != "" {
+		message = strings.ReplaceAll(message, secret, "[REDACTED]")
+	}
+	var statusErr *serviceHTTPStatusError
+	if errors.As(err, &statusErr) {
+		return &serviceHTTPStatusError{status: statusErr.status, message: message}
+	}
+	if secret == "" {
+		return err
+	}
+	return errors.New(message)
 }
 
 func decodeHTTPError(resp *http.Response) error {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 	trimmed := strings.TrimSpace(string(body))
 	if trimmed == "" {
-		return fmt.Errorf("service returned status %d", resp.StatusCode)
+		return &serviceHTTPStatusError{status: resp.StatusCode, message: fmt.Sprintf("service returned status %d", resp.StatusCode)}
 	}
-	return fmt.Errorf("service returned status %d: %s", resp.StatusCode, trimmed)
+	return &serviceHTTPStatusError{status: resp.StatusCode, message: fmt.Sprintf("service returned status %d: %s", resp.StatusCode, trimmed)}
 }
 
 func trimForDisplay(s string, max int) string {

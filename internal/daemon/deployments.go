@@ -101,10 +101,23 @@ func (d *Daemon) handleStartDeployment(w http.ResponseWriter, r *http.Request) {
 	}
 	deployment, err := d.deploymentEngine.Start(r.Context(), r.PathValue("deploymentID"), request.APIKey)
 	if err != nil {
-		writeDeploymentActionError(w, "deployment_start_failed", err)
+		writeDeploymentStartError(w, deployment, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, safeDeployment(deployment))
+}
+
+func writeDeploymentStartError(w http.ResponseWriter, deployment deployments.Deployment, err error) {
+	if errors.Is(err, deployments.ErrNotFound) {
+		writeDeploymentLookupError(w, err)
+		return
+	}
+	status, code := deploymentErrorResponse(err, "deployment_start_failed")
+	writeJSON(w, status, map[string]any{
+		"error":      code,
+		"message":    err.Error(),
+		"deployment": safeDeployment(deployment),
+	})
 }
 
 func (d *Daemon) handleRollbackDeployment(w http.ResponseWriter, r *http.Request) {
@@ -434,7 +447,7 @@ func (ops *daemonDeploymentOperations) WaitRunning(ctx context.Context, deviceID
 		if err == nil && container.Status == "running" {
 			return nil
 		}
-		if err == nil && (container.Status == "stopped" || container.Status == "unknown") {
+		if err == nil && (container.Status == "stopped" || container.Status == "exited" || container.Status == "dead" || container.Status == "unknown") {
 			return fmt.Errorf("candidate entered %s state", container.Status)
 		}
 		select {
@@ -609,6 +622,9 @@ func deploymentAgentOperationError(op string, err error, clientErrorsAreConflict
 	}
 	var responseErr *agentHTTPError
 	if errors.As(err, &responseErr) {
+		if responseErr.Code == "service_unauthorized" {
+			return deployments.WrapError(deployments.ErrorDependency, op, deployments.ErrServiceUnauthorized)
+		}
 		if clientErrorsAreConflicts && responseErr.Status >= 400 && responseErr.Status < 500 {
 			return deployments.WrapError(deployments.ErrorConflict, op, err)
 		}

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -582,6 +583,102 @@ exit 1
 	}
 }
 
+func TestCoordinatedLaunchArchitectureTimeoutReleasesRollbackBarrier(t *testing.T) {
+	const launchTimeout = 75 * time.Millisecond
+	binDir := t.TempDir()
+	markerPath := filepath.Join(binDir, "inspect-started")
+	dockerPath := filepath.Join(binDir, "docker")
+	script := fmt.Sprintf(`#!/bin/sh
+if [ "$1" = inspect ] && [ "$2" = test-image ]; then
+  : > %q
+  exec sleep 30
+fi
+exit 1
+`, markerPath)
+	if err := os.WriteFile(dockerPath, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	name := "yokai-deployment-dep-arch-timeout-g1-head"
+	body, err := json.Marshal(ContainerRequest{
+		Image: "test-image", Name: name, SkipPull: true,
+		Labels: map[string]string{
+			LabelManaged: "true", LabelOwnership: OwnershipManaged, LabelDeploymentID: "dep-arch-timeout", LabelGeneration: "1", LabelRole: "head",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/containers", bytes.NewReader(body))
+	response := httptest.NewRecorder()
+	started := time.Now()
+	handleContainerDeployWithLaunchTimeout(response, request, launchTimeout)
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("architecture inspect exceeded launch budget: %s", elapsed)
+	}
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "unsupported_platform") {
+		t.Fatalf("architecture timeout returned status=%d body=%s", response.Code, response.Body.String())
+	}
+	if _, err := os.Stat(markerPath); err != nil {
+		t.Fatalf("architecture inspect did not start: %v", err)
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if err := coordinatedCandidateLaunches.wait(waitCtx, name); err != nil {
+		t.Fatalf("architecture timeout did not release rollback barrier: %v", err)
+	}
+}
+
+func TestCoordinatedLaunchPullTimeoutReleasesRollbackBarrier(t *testing.T) {
+	const launchTimeout = 75 * time.Millisecond
+	binDir := t.TempDir()
+	markerPath := filepath.Join(binDir, "pull-started")
+	dockerPath := filepath.Join(binDir, "docker")
+	script := fmt.Sprintf(`#!/bin/sh
+if [ "$1" = manifest ] && [ "$2" = inspect ]; then
+  printf '%%s\n' '{"schemaVersion":2,"architecture":"%s","os":"%s"}'
+  exit 0
+fi
+if [ "$1" = pull ]; then
+  : > %q
+  exec sleep 30
+fi
+exit 1
+`, runtime.GOARCH, runtime.GOOS, markerPath)
+	if err := os.WriteFile(dockerPath, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	name := "yokai-deployment-dep-pull-timeout-g1-head"
+	body, err := json.Marshal(ContainerRequest{
+		Image: "test-image", Name: name,
+		Labels: map[string]string{
+			LabelManaged: "true", LabelOwnership: OwnershipManaged, LabelDeploymentID: "dep-pull-timeout", LabelGeneration: "1", LabelRole: "head",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/containers", bytes.NewReader(body))
+	response := httptest.NewRecorder()
+	started := time.Now()
+	handleContainerDeployWithLaunchTimeout(response, request, launchTimeout)
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("docker pull exceeded launch budget: %s", elapsed)
+	}
+	if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "pull_failed") {
+		t.Fatalf("pull timeout returned status=%d body=%s", response.Code, response.Body.String())
+	}
+	if _, err := os.Stat(markerPath); err != nil {
+		t.Fatalf("docker pull did not start: %v", err)
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if err := coordinatedCandidateLaunches.wait(waitCtx, name); err != nil {
+		t.Fatalf("pull timeout did not release rollback barrier: %v", err)
+	}
+}
+
 func TestManagedMemberLogTailEndpointIsBoundedSanitizedAndNonFollowing(t *testing.T) {
 	const sentinel = "exact-request-key"
 	binDir := t.TempDir()
@@ -834,6 +931,117 @@ func TestMergeContainerMetrics(t *testing.T) {
 
 	if merged[1].Status != "stopped" {
 		t.Errorf("expected appended container status 'stopped', got %q", merged[1].Status)
+	}
+}
+
+func TestMergeContainerMetricsHealthUsesServiceAddressAndLoopbackFallback(t *testing.T) {
+	healthHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/health" {
+			http.NotFound(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+
+	t.Run("managed service address", func(t *testing.T) {
+		listener, err := net.Listen("tcp", "127.0.0.2:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		server := httptest.NewUnstartedServer(healthHandler)
+		_ = server.Listener.Close()
+		server.Listener = listener
+		server.Start()
+		defer server.Close()
+		_, port, err := net.SplitHostPort(listener.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		merged := mergeContainerMetrics(nil, []Container{{
+			ID: "managed123456", Name: "yokai-head", Image: "lmsysorg/sglang:latest", Status: "running",
+			Ports: map[string]string{"8000": port}, Ownership: OwnershipManaged,
+			Labels: map[string]string{LabelServiceAddress: "127.0.0.2"},
+		}})
+		if len(merged) != 1 || merged[0].Health != "healthy" || merged[0].ServiceAddress != "127.0.0.2" {
+			t.Fatalf("managed service address was not used: %#v", merged)
+		}
+		data, err := json.Marshal(merged[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(data), "127.0.0.2") || strings.Contains(string(data), "service_address") {
+			t.Fatalf("internal health address was serialized: %s", data)
+		}
+	})
+
+	t.Run("loopback fallback", func(t *testing.T) {
+		server := httptest.NewServer(healthHandler)
+		defer server.Close()
+		_, port, err := net.SplitHostPort(strings.TrimPrefix(server.URL, "http://"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		merged := mergeContainerMetrics(nil, []Container{{
+			ID: "ordinary12345", Name: "ordinary", Image: "vllm/vllm-openai:latest", Status: "running",
+			Ports: map[string]string{"8000": port}, Ownership: OwnershipObserved,
+		}})
+		if len(merged) != 1 || merged[0].Health != "healthy" || merged[0].ServiceAddress != "" {
+			t.Fatalf("ordinary container did not use loopback fallback: %#v", merged)
+		}
+	})
+
+	t.Run("invalid managed address falls back", func(t *testing.T) {
+		server := httptest.NewServer(healthHandler)
+		defer server.Close()
+		_, port, err := net.SplitHostPort(strings.TrimPrefix(server.URL, "http://"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		merged := mergeContainerMetrics(nil, []Container{{
+			ID: "managed123456", Name: "yokai-head", Image: "lmsysorg/sglang:latest", Status: "running",
+			Ports: map[string]string{"8000": port}, Ownership: OwnershipManaged,
+			Labels: map[string]string{LabelServiceAddress: "evil.example.com/x?"},
+		}})
+		if len(merged) != 1 || merged[0].Health != "healthy" || merged[0].ServiceAddress != "" {
+			t.Fatalf("invalid managed service address did not fall back safely: %#v", merged)
+		}
+	})
+}
+
+func TestHandleContainerTestMapsUpstreamAuthorizationWithoutLeakingSecret(t *testing.T) {
+	const secret = "exact-request-secret"
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			service := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				http.Error(w, "rejected "+secret, status)
+			}))
+			defer service.Close()
+			_, port, err := net.SplitHostPort(strings.TrimPrefix(service.URL, "http://"))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			binDir := t.TempDir()
+			dockerPath := filepath.Join(binDir, "docker")
+			line := fmt.Sprintf(`{"ID":"managed123456","Names":"yokai-head","Image":"lmsysorg/sglang:latest","Status":"Up 2 minutes","Ports":"","CreatedAt":"2026-08-27 10:00:00 +0000 UTC","RunningFor":"2 minutes","Labels":"io.yokai.managed=true,io.yokai.ownership=managed,io.yokai.service.address=127.0.0.1,io.yokai.service.port=%s"}`, port)
+			script := "#!/bin/sh\nprintf '%s\\n' '" + line + "'\n"
+			if err := os.WriteFile(dockerPath, []byte(script), 0700); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+			request := httptest.NewRequest(http.MethodPost, "/containers/managed123456/test", strings.NewReader(`{"api_key":"`+secret+`"}`))
+			request.SetPathValue("id", "managed123456")
+			response := httptest.NewRecorder()
+			handleContainerTest(response, request)
+			if response.Code != http.StatusBadGateway || !strings.Contains(response.Body.String(), `"error": "service_unauthorized"`) {
+				t.Fatalf("upstream %d mapped to status=%d body=%s", status, response.Code, response.Body.String())
+			}
+			if strings.Contains(response.Body.String(), secret) {
+				t.Fatalf("authorization response leaked request key: %s", response.Body.String())
+			}
+		})
 	}
 }
 
@@ -1182,6 +1390,71 @@ exit 1
 	}
 	if _, err := os.Stat(restartCalled); err != nil {
 		t.Fatalf("managed restart did not run after stop settled: %v", err)
+	}
+}
+
+func TestDeploymentMemberLifecycleHonorsRequestCancellation(t *testing.T) {
+	type lifecycleCase struct {
+		name       string
+		hang       string
+		action     string
+		handler    func(http.ResponseWriter, *http.Request)
+		wantStatus int
+		wantCode   string
+	}
+	for _, test := range []lifecycleCase{
+		{name: "provenance inspect", hang: "inspect", action: "stop", handler: handleDeploymentMemberStop, wantStatus: http.StatusConflict, wantCode: "deployment_member_mismatch"},
+		{name: "stop", hang: "stop", action: "stop", handler: handleDeploymentMemberStop, wantStatus: http.StatusInternalServerError, wantCode: "stop_failed"},
+		{name: "remove", hang: "rm", action: "delete", handler: handleDeploymentMemberDelete, wantStatus: http.StatusInternalServerError, wantCode: "remove_failed"},
+		{name: "restart", hang: "restart", action: "restart", handler: handleDeploymentMemberRestart, wantStatus: http.StatusInternalServerError, wantCode: "restart_failed"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			binDir := t.TempDir()
+			markerPath := filepath.Join(binDir, test.hang+"-started")
+			dockerPath := filepath.Join(binDir, "docker")
+			id := strings.Repeat("c", 64)
+			labels := `{"io.yokai.managed":"true","io.yokai.ownership":"managed","io.yokai.deployment.id":"dep-test","io.yokai.deployment.generation":"1","io.yokai.deployment.role":"head"}`
+			script := fmt.Sprintf(`#!/bin/sh
+if [ "$1" = %q ]; then
+  : > %q
+  exec sleep 30
+fi
+if [ "$1" = inspect ]; then
+  printf '%%s\n' '"%s"' '"/previous"' '%s'
+  exit 0
+fi
+exit 1
+`, test.hang, markerPath, id, labels)
+			if err := os.WriteFile(dockerPath, []byte(script), 0700); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+			ctx, cancel := context.WithTimeout(context.Background(), 75*time.Millisecond)
+			defer cancel()
+			request := httptest.NewRequest(http.MethodPost, "/deployments/dep-test/members/"+id+"/"+test.action+"?generation=1&role=head&name=previous", nil).WithContext(ctx)
+			request.SetPathValue("deploymentID", "dep-test")
+			request.SetPathValue("id", id)
+			response := httptest.NewRecorder()
+			started := time.Now()
+			test.handler(response, request)
+			if elapsed := time.Since(started); elapsed > time.Second {
+				t.Fatalf("%s exceeded request deadline: %s", test.name, elapsed)
+			}
+			if response.Code != test.wantStatus || !strings.Contains(response.Body.String(), `"error": "`+test.wantCode+`"`) {
+				t.Fatalf("%s returned status=%d body=%s", test.name, response.Code, response.Body.String())
+			}
+			if _, err := os.Stat(markerPath); err != nil {
+				t.Fatalf("docker %s did not start: %v", test.hang, err)
+			}
+			if test.action == "stop" && test.hang == "stop" {
+				waitCtx, waitCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+				defer waitCancel()
+				if err := containerStops.wait(waitCtx, id); err != nil {
+					t.Fatalf("canceled stop did not release lifecycle barrier: %v", err)
+				}
+			}
+		})
 	}
 }
 

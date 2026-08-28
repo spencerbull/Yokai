@@ -61,6 +61,30 @@ func TestDeploymentResponsesRedactInternalHashAndExposeStoppedGroups(t *testing.
 	}
 }
 
+func TestStartDeploymentErrorResponseIncludesPopulatedSafeDeployment(t *testing.T) {
+	response := httptest.NewRecorder()
+	writeDeploymentStartError(response, deployments.Deployment{
+		ID: "dep-start", RequestHash: "internal-only", State: deployments.StateStopped,
+		Members: []deployments.Member{{Role: "head", Status: "stopped"}},
+	}, deployments.WrapError(deployments.ErrorDependency, "start deployment", errors.New("injected persist failure")))
+	if response.Code != http.StatusBadGateway {
+		t.Fatalf("start error status=%d body=%s", response.Code, response.Body.String())
+	}
+	var envelope struct {
+		Error      string                 `json:"error"`
+		Deployment deployments.Deployment `json:"deployment"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Error != "deployment_dependency" || envelope.Deployment.ID != "dep-start" || envelope.Deployment.State != deployments.StateStopped {
+		t.Fatalf("start error omitted the populated deployment: %#v", envelope)
+	}
+	if envelope.Deployment.RequestHash != "" || strings.Contains(response.Body.String(), "internal-only") {
+		t.Fatalf("start error exposed internal deployment fields: %s", response.Body.String())
+	}
+}
+
 func TestLegacyMemberLifecycleFailsClosedForManagedDeploymentMember(t *testing.T) {
 	store, err := deployments.OpenStore(filepath.Join(t.TempDir(), deployments.StoreFile))
 	if err != nil {
@@ -188,18 +212,95 @@ func TestDeploymentAgentOperationErrorClassification(t *testing.T) {
 		err            error
 		clientConflict bool
 		want           deployments.ErrorKind
+		wantAuth       bool
 	}{
 		{name: "transport", err: errors.New("connection refused"), want: deployments.ErrorUnavailable},
 		{name: "inventory client capability", err: &agentHTTPError{Status: http.StatusBadRequest}, clientConflict: true, want: deployments.ErrorConflict},
 		{name: "missing member", err: &agentHTTPError{Status: http.StatusNotFound}, want: deployments.ErrorConflict},
 		{name: "agent failure", err: &agentHTTPError{Status: http.StatusInternalServerError}, want: deployments.ErrorDependency},
+		{name: "service authorization", err: &agentHTTPError{Status: http.StatusBadGateway, Code: "service_unauthorized"}, want: deployments.ErrorDependency, wantAuth: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			got := deploymentAgentOperationError("test", test.err, test.clientConflict)
 			if kind := deployments.ErrorKindOf(got); kind != test.want {
 				t.Fatalf("got kind %q want %q: %v", kind, test.want, got)
 			}
+			if errors.Is(got, deployments.ErrServiceUnauthorized) != test.wantAuth {
+				t.Fatalf("authorization sentinel mismatch: want=%v err=%v", test.wantAuth, got)
+			}
 		})
+	}
+}
+
+func TestWaitRunningFailsPromptlyForTerminalContainerStates(t *testing.T) {
+	for _, status := range []string{"dead", "exited"} {
+		t.Run(status, func(t *testing.T) {
+			requests := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+				requests++
+				if request.Method != http.MethodGet || request.URL.String() != "/containers?scope=all" {
+					t.Fatalf("unexpected inventory request: %s %s", request.Method, request.URL.String())
+				}
+				writeJSON(w, http.StatusOK, map[string]any{"containers": []map[string]any{{
+					"id": "1234567890ab", "name": "candidate-head", "status": status, "ownership": "managed",
+				}}})
+			}))
+			defer server.Close()
+
+			const deviceID = "spark-a"
+			port := server.Listener.Addr().(*net.TCPAddr).Port
+			cfg := config.DefaultConfig()
+			cfg.Devices = []config.Device{{ID: deviceID}}
+			tunnels := NewTunnelPool(cfg)
+			tunnels.tunnels[deviceID] = &tunnel{deviceID: deviceID, localPort: port, connected: true}
+			d := &Daemon{cfg: cfg, tunnels: tunnels, aggregator: NewAggregator(cfg, tunnels)}
+			ops := &daemonDeploymentOperations{daemon: d, waitInterval: 10 * time.Millisecond, waitTimeout: time.Second}
+
+			started := time.Now()
+			err := ops.WaitRunning(context.Background(), deviceID, "1234567890ab")
+			if err == nil || !strings.Contains(err.Error(), status) {
+				t.Fatalf("terminal %s was not reported: %v", status, err)
+			}
+			if elapsed := time.Since(started); elapsed > 250*time.Millisecond || requests != 1 {
+				t.Fatalf("terminal %s was retried: elapsed=%s requests=%d", status, elapsed, requests)
+			}
+		})
+	}
+}
+
+func TestDaemonDeploymentTestMapsAgentServiceUnauthorized(t *testing.T) {
+	const (
+		deviceID = "spark-a"
+		secret   = "request-only-secret"
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodPost || request.URL.String() != "/containers/container-head/test?require_metrics=true" {
+			t.Fatalf("unexpected service-test request: %s %s", request.Method, request.URL.String())
+		}
+		var body map[string]string
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil || body["api_key"] != secret {
+			t.Fatalf("request key was not forwarded transiently: body=%#v err=%v", body, err)
+		}
+		writeJSON(w, http.StatusBadGateway, map[string]string{
+			"error": "service_unauthorized", "message": "model service rejected the API key",
+		})
+	}))
+	defer server.Close()
+
+	port := server.Listener.Addr().(*net.TCPAddr).Port
+	cfg := config.DefaultConfig()
+	cfg.Devices = []config.Device{{ID: deviceID}}
+	tunnels := NewTunnelPool(cfg)
+	tunnels.tunnels[deviceID] = &tunnel{deviceID: deviceID, localPort: port, connected: true}
+	d := &Daemon{cfg: cfg, tunnels: tunnels, aggregator: NewAggregator(cfg, tunnels)}
+	ops := &daemonDeploymentOperations{daemon: d}
+
+	_, err := ops.Test(context.Background(), deviceID, "container-head", secret)
+	if err == nil || !errors.Is(err, deployments.ErrServiceUnauthorized) || deployments.ErrorKindOf(err) != deployments.ErrorDependency {
+		t.Fatalf("agent authorization code did not reach the deployment sentinel: %v", err)
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("daemon deployment error retained request key: %v", err)
 	}
 }
 

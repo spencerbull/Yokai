@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -146,7 +147,7 @@ func TestFailedRunCleanupRemovesOnlyOwnedAmbiguousCandidate(t *testing.T) {
 	}}
 	removed := ""
 	deps := failedRunCleanupDeps{
-		inspect: func(name string) (string, string, map[string]string, error) {
+		inspect: func(_ context.Context, name string) (string, string, map[string]string, error) {
 			return strings.Repeat("a", 64), name, map[string]string{
 				LabelManaged:      "true",
 				LabelOwnership:    OwnershipManaged,
@@ -155,12 +156,12 @@ func TestFailedRunCleanupRemovesOnlyOwnedAmbiguousCandidate(t *testing.T) {
 				LabelRole:         "head",
 			}, nil
 		},
-		remove: func(name string) error {
+		remove: func(_ context.Context, name string) error {
 			removed = name
 			return nil
 		},
 	}
-	if !cleanupFailedManagedRun(request, "yokai-deployment-dep-test-g3-head", deps) || removed != strings.Repeat("a", 64) {
+	if !cleanupFailedManagedRun(context.Background(), request, "yokai-deployment-dep-test-g3-head", deps) || removed != strings.Repeat("a", 64) {
 		t.Fatalf("owned ambiguous launch candidate was not cleaned up: removed=%q", removed)
 	}
 }
@@ -173,19 +174,19 @@ func TestFailedRunCleanupRemovesOwnedLegacyContainer(t *testing.T) {
 	}}
 	removed := ""
 	deps := failedRunCleanupDeps{
-		inspect: func(name string) (string, string, map[string]string, error) {
+		inspect: func(_ context.Context, name string) (string, string, map[string]string, error) {
 			return strings.Repeat("f", 64), name, map[string]string{
 				LabelManaged:     "true",
 				LabelOwnership:   OwnershipManaged,
 				LabelLaunchNonce: "launch-a",
 			}, nil
 		},
-		remove: func(id string) error {
+		remove: func(_ context.Context, id string) error {
 			removed = id
 			return nil
 		},
 	}
-	if !cleanupFailedManagedRun(request, "yokai-legacy", deps) || removed != strings.Repeat("f", 64) {
+	if !cleanupFailedManagedRun(context.Background(), request, "yokai-legacy", deps) || removed != strings.Repeat("f", 64) {
 		t.Fatalf("owned legacy launch artifact was not cleaned up: removed=%q", removed)
 	}
 }
@@ -282,13 +283,13 @@ func TestFailedRunCleanupPreservesLegacyNameCollisionAndPartialProvenance(t *tes
 		t.Run(name, func(t *testing.T) {
 			removed := false
 			deps := failedRunCleanupDeps{
-				inspect: func(string) (string, string, map[string]string, error) {
+				inspect: func(context.Context, string) (string, string, map[string]string, error) {
 					return strings.Repeat("f", 64), test.observedName, test.observedLabels, nil
 				},
-				remove: func(string) error { removed = true; return nil },
+				remove: func(context.Context, string) error { removed = true; return nil },
 			}
 			request := ContainerRequest{Labels: test.requestLabels}
-			if cleanupFailedManagedRun(request, "yokai-legacy", deps) || removed {
+			if cleanupFailedManagedRun(context.Background(), request, "yokai-legacy", deps) || removed {
 				t.Fatal("cleanup removed a legacy collision without exact managed identity")
 			}
 		})
@@ -305,15 +306,15 @@ func TestFailedRunCleanupPreservesUnownedNameCollision(t *testing.T) {
 	}}
 	removed := false
 	deps := failedRunCleanupDeps{
-		inspect: func(name string) (string, string, map[string]string, error) {
+		inspect: func(_ context.Context, name string) (string, string, map[string]string, error) {
 			return strings.Repeat("b", 64), name, map[string]string{LabelOwnership: OwnershipObserved}, nil
 		},
-		remove: func(string) error {
+		remove: func(context.Context, string) error {
 			removed = true
 			return nil
 		},
 	}
-	if cleanupFailedManagedRun(request, "yokai-deployment-dep-test-g3-head", deps) || removed {
+	if cleanupFailedManagedRun(context.Background(), request, "yokai-deployment-dep-test-g3-head", deps) || removed {
 		t.Fatal("unowned same-name container was removed after docker run failure")
 	}
 }
@@ -339,12 +340,12 @@ func TestFailedRunCleanupRejectsEveryProvenanceMismatch(t *testing.T) {
 			observedName := mutate(labels)
 			removed := false
 			deps := failedRunCleanupDeps{
-				inspect: func(string) (string, string, map[string]string, error) {
+				inspect: func(context.Context, string) (string, string, map[string]string, error) {
 					return strings.Repeat("c", 64), observedName, labels, nil
 				},
-				remove: func(string) error { removed = true; return nil },
+				remove: func(context.Context, string) error { removed = true; return nil },
 			}
-			if cleanupFailedManagedRun(request, name, deps) || removed {
+			if cleanupFailedManagedRun(context.Background(), request, name, deps) || removed {
 				t.Fatalf("%s mismatch was removed", mismatch)
 			}
 		})
@@ -356,17 +357,112 @@ func TestFailedRunCleanupRetriesLateOwnedCandidate(t *testing.T) {
 	attempts := 0
 	removed := false
 	deps := failedRunCleanupDeps{
-		inspect: func(name string) (string, string, map[string]string, error) {
+		inspect: func(_ context.Context, name string) (string, string, map[string]string, error) {
 			attempts++
 			if attempts < 3 {
 				return "", "", nil, errors.New("not materialized yet")
 			}
 			return strings.Repeat("d", 64), name, request.Labels, nil
 		},
-		remove: func(string) error { removed = true; return nil },
+		remove: func(context.Context, string) error { removed = true; return nil },
 	}
-	if !cleanupFailedManagedRunEventually(request, "yokai-deployment-dep-test-g3-head", deps, 100*time.Millisecond, time.Millisecond) || !removed || attempts < 3 {
+	if !cleanupFailedManagedRunEventually(context.Background(), request, "yokai-deployment-dep-test-g3-head", deps, 100*time.Millisecond, time.Millisecond) || !removed || attempts < 3 {
 		t.Fatalf("late owned candidate was not removed: attempts=%d removed=%v", attempts, removed)
+	}
+}
+
+func TestFailedRunCleanupDeadlineBoundsHungDockerOperations(t *testing.T) {
+	request := ContainerRequest{Labels: map[string]string{
+		LabelManaged: "true", LabelOwnership: OwnershipManaged,
+		LabelDeploymentID: "dep-test", LabelGeneration: "3", LabelRole: "head",
+	}}
+	const candidateID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	for _, test := range []struct {
+		name string
+		deps func(*string) failedRunCleanupDeps
+	}{
+		{
+			name: "inspect",
+			deps: func(_ *string) failedRunCleanupDeps {
+				return failedRunCleanupDeps{
+					inspect: func(ctx context.Context, _ string) (string, string, map[string]string, error) {
+						<-ctx.Done()
+						return "", "", nil, ctx.Err()
+					},
+					remove: func(context.Context, string) error {
+						t.Fatal("remove called after timed-out inspect")
+						return nil
+					},
+				}
+			},
+		},
+		{
+			name: "remove",
+			deps: func(removed *string) failedRunCleanupDeps {
+				return failedRunCleanupDeps{
+					inspect: func(_ context.Context, name string) (string, string, map[string]string, error) {
+						return candidateID, name, request.Labels, nil
+					},
+					remove: func(ctx context.Context, id string) error {
+						*removed = id
+						<-ctx.Done()
+						return ctx.Err()
+					},
+				}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			removed := ""
+			started := time.Now()
+			if cleanupFailedManagedRunEventually(context.Background(), request, "yokai-deployment-dep-test-g3-head", test.deps(&removed), 50*time.Millisecond, time.Millisecond) {
+				t.Fatal("timed-out cleanup reported success")
+			}
+			if elapsed := time.Since(started); elapsed > time.Second {
+				t.Fatalf("hung %s exceeded cleanup budget: %s", test.name, elapsed)
+			}
+			if test.name == "remove" && removed != candidateID {
+				t.Fatalf("cleanup targeted %q, want exact inspected ID %q", removed, candidateID)
+			}
+		})
+	}
+}
+
+func TestDockerLifecycleCommandsHonorCancellation(t *testing.T) {
+	for _, command := range []string{"inspect", "rm", "stop", "restart"} {
+		t.Run(command, func(t *testing.T) {
+			binDir := t.TempDir()
+			markerPath := filepath.Join(binDir, command+"-started")
+			dockerPath := filepath.Join(binDir, "docker")
+			script := "#!/bin/sh\nif [ \"$1\" = \"" + command + "\" ]; then\n  : > \"" + markerPath + "\"\n  exec sleep 30\nfi\nexit 1\n"
+			if err := os.WriteFile(dockerPath, []byte(script), 0700); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+			ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+			defer cancel()
+			started := time.Now()
+			var err error
+			switch command {
+			case "inspect":
+				_, _, _, err = inspectContainerIdentityWithContext(ctx, "candidate")
+			case "rm":
+				err = removeContainerWithContext(ctx, strings.Repeat("a", 64))
+			case "stop":
+				err = stopContainerWithContext(ctx, strings.Repeat("a", 64))
+			case "restart":
+				err = restartContainerWithContext(ctx, strings.Repeat("a", 64))
+			}
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("%s cancellation was not returned: %v", command, err)
+			}
+			if elapsed := time.Since(started); elapsed > time.Second {
+				t.Fatalf("docker %s exceeded cancellation bound: %s", command, elapsed)
+			}
+			if _, err := os.Stat(markerPath); err != nil {
+				t.Fatalf("docker %s did not start: %v", command, err)
+			}
+		})
 	}
 }
 
@@ -381,10 +477,10 @@ func TestRunContainerCancellationKillsDockerCLIAndCleansOwnedCandidate(t *testin
 	request := ContainerRequest{Image: "example.invalid/image", Name: "yokai-deployment-dep-test-g3-head", Labels: map[string]string{LabelManaged: "true", LabelOwnership: OwnershipManaged, LabelDeploymentID: "dep-test", LabelGeneration: "3", LabelRole: "head"}}
 	removed := false
 	deps := failedRunCleanupDeps{
-		inspect: func(name string) (string, string, map[string]string, error) {
+		inspect: func(_ context.Context, name string) (string, string, map[string]string, error) {
 			return strings.Repeat("e", 64), name, request.Labels, nil
 		},
-		remove: func(string) error { removed = true; return nil },
+		remove: func(context.Context, string) error { removed = true; return nil },
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	time.AfterFunc(10*time.Millisecond, cancel)
@@ -419,6 +515,31 @@ func TestValidateImagePlatformCancellationBoundsManifestInspect(t *testing.T) {
 	}
 	if _, err := os.Stat(markerPath); err != nil {
 		t.Fatalf("manifest process did not start: %v", err)
+	}
+}
+
+func TestValidatePulledImageArchitectureCancellationBoundsInspect(t *testing.T) {
+	binDir := t.TempDir()
+	markerPath := filepath.Join(binDir, "inspect-started")
+	dockerPath := filepath.Join(binDir, "docker")
+	script := "#!/bin/sh\nif [ \"$1\" = inspect ]; then\n  : > \"" + markerPath + "\"\n  exec sleep 30\nfi\nexit 1\n"
+	if err := os.WriteFile(dockerPath, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	err := validatePulledImageArchitecture(ctx, "example.invalid/image")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("architecture inspect cancellation was not returned: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("architecture inspect exceeded cancellation bound: %s", elapsed)
+	}
+	if _, err := os.Stat(markerPath); err != nil {
+		t.Fatalf("architecture inspect did not start: %v", err)
 	}
 }
 
@@ -503,6 +624,44 @@ printf '%s\n' '{"ID":"external12345","Names":"external-service","Image":"externa
 		if strings.Contains(lower, forbidden) {
 			t.Fatalf("all-scope inventory exposed %q: %s", forbidden, data)
 		}
+	}
+}
+
+func TestContainerInventoryAllSkipsMetricsWhileManagedPopulatesThem(t *testing.T) {
+	probeCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		probeCalls++
+		if r.URL.Path != "/metrics" {
+			t.Fatalf("unexpected metrics path %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte("vllm:num_requests_running 1\n"))
+	}))
+	defer server.Close()
+	port := strings.TrimPrefix(server.URL, "http://127.0.0.1:")
+
+	binDir := t.TempDir()
+	dockerPath := filepath.Join(binDir, "docker")
+	line := fmt.Sprintf(`{"ID":"managed123456","Names":"yokai-managed","Image":"vllm/vllm-openai:latest","Status":"Up 2 minutes","Ports":"","CreatedAt":"2026-08-27 10:00:00 +0000 UTC","RunningFor":"2 minutes","Labels":"io.yokai.managed=true,io.yokai.ownership=managed,io.yokai.service.address=127.0.0.1,io.yokai.service.port=%s"}`, port)
+	script := "#!/bin/sh\nprintf '%s\\n' '" + line + "'\n"
+	if err := os.WriteFile(dockerPath, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	all, err := listContainersScope(InventoryScopeAll)
+	if err != nil || len(all) != 1 {
+		t.Fatalf("all inventory failed: containers=%#v err=%v", all, err)
+	}
+	if probeCalls != 0 || all[0].VLLMMetrics != nil {
+		t.Fatalf("all-scope identity inventory scraped metrics: calls=%d metrics=%#v", probeCalls, all[0].VLLMMetrics)
+	}
+
+	managed, err := listContainersScope(InventoryScopeManaged)
+	if err != nil || len(managed) != 1 || managed[0].VLLMMetrics == nil {
+		t.Fatalf("managed inventory did not populate metrics: containers=%#v err=%v", managed, err)
+	}
+	if probeCalls != 1 || managed[0].VLLMMetrics.RequestsRunning != 1 {
+		t.Fatalf("managed scrape mismatch: calls=%d metrics=%#v", probeCalls, managed[0].VLLMMetrics)
 	}
 }
 

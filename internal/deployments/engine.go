@@ -366,13 +366,20 @@ func (e *Engine) Start(ctx context.Context, id, apiKey string) (Deployment, erro
 	if err := e.persistProgress(&deployment, PhaseStarting, "start_group", "", "started", "head then worker"); err != nil {
 		return Deployment{}, err
 	}
+	restartMayHaveHappened := false
 	for _, role := range []string{bkc.MultiDeviceRoleHead, bkc.MultiDeviceRoleWorker} {
 		index := memberIndexByRole(deployment.Members, role)
 		if index < 0 {
+			if restartMayHaveHappened {
+				return e.failStart(ctx, deployment, WrapError(ErrorConflict, "start deployment", fmt.Errorf("deployment has no %s member", role)))
+			}
 			return Deployment{}, WrapError(ErrorConflict, "start deployment", fmt.Errorf("deployment has no %s member", role))
 		}
 		member := deployment.Members[index]
 		if err := e.beforeMemberAction(&deployment, index, PhaseStarting, "restart", "starting"); err != nil {
+			if restartMayHaveHappened {
+				return e.failStart(ctx, deployment, err)
+			}
 			return Deployment{}, err
 		}
 		observed, inspectErr := e.Ops.Inspect(ctx, member.DeviceID, memberLocator(member))
@@ -380,26 +387,33 @@ func (e *Engine) Start(ctx context.Context, id, apiKey string) (Deployment, erro
 			if errors.Is(inspectErr, ErrContainerNotFound) {
 				return e.failStart(ctx, deployment, WrapError(ErrorConflict, "start deployment", fmt.Errorf("managed %s member is absent", member.Role)))
 			}
+			if restartMayHaveHappened {
+				return e.failStart(ctx, deployment, inspectErr)
+			}
 			return Deployment{}, inspectErr
 		}
 		if identityErr := validateManagedMemberIdentity(deployment, member, observed); identityErr != nil {
 			return e.failStart(ctx, deployment, WrapError(ErrorConflict, "start deployment", identityErr))
 		}
 		if observed.Status != "running" || member.Status == "stopping" {
+			restartMayHaveHappened = true
 			if err := e.Ops.RestartManaged(ctx, deployment, member); err != nil {
 				return e.failStart(ctx, deployment, err)
 			}
 		}
 		if err := e.afterMemberAction(&deployment, index, PhaseStarting, "restart", "running"); err != nil {
+			if restartMayHaveHappened {
+				return e.failStart(ctx, deployment, err)
+			}
 			return Deployment{}, err
 		}
 	}
 	if err := e.persistProgress(&deployment, PhaseReadiness, "readiness", "", "started", "waiting for both ranks and semantic gates"); err != nil {
-		return Deployment{}, err
+		return e.failStart(ctx, deployment, err)
 	}
 	expected, err := expectedStoredDeploymentModel(deployment)
 	if err != nil {
-		return Deployment{}, err
+		return e.failStart(ctx, deployment, err)
 	}
 	readyMembers, result, readyErr := e.waitReady(ctx, deployment.Members, apiKey, expected)
 	deployment.Members = readyMembers
@@ -408,11 +422,11 @@ func (e *Engine) Start(ctx context.Context, id, apiKey string) (Deployment, erro
 	}
 	deployment.LastTest = &result
 	if err := e.persistProgress(&deployment, PhaseReadiness, "readiness", "", "completed", "both ranks running and semantic gates passed"); err != nil {
-		return Deployment{}, err
+		return deployment, err
 	}
 	deployment.State = StateRunning
 	if err := e.persistProgress(&deployment, PhaseRunning, "start_group", "", "completed", "both ranks running and semantic gates passed"); err != nil {
-		return Deployment{}, err
+		return deployment, err
 	}
 	return deployment, nil
 }
@@ -823,6 +837,9 @@ func (e *Engine) waitReady(ctx context.Context, members []Member, apiKey, expect
 				return members, TestResult{}, fmt.Errorf("deployment has no rank-0 member")
 			}
 			result, err := e.Ops.Test(ctx, head.DeviceID, memberLocator(head), apiKey)
+			if errors.Is(err, ErrServiceUnauthorized) {
+				return members, TestResult{}, err
+			}
 			if err == nil {
 				err = validatePromotionResult(result, expectedModelID)
 			}

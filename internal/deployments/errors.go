@@ -52,4 +52,5 @@ var (
 	ErrIdempotencyConflict = errors.New("idempotency key already used for a different request")
 	ErrRecoveryPerformed   = errors.New("incomplete idempotent request was reconciled; use a new idempotency key to create a new deployment")
 	ErrContainerNotFound   = errors.New("container not found")
+	ErrServiceUnauthorized = errors.New("model service rejected the API key")
 )

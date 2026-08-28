@@ -119,7 +119,7 @@ func (f *fakeOperations) Test(_ context.Context, deviceID, containerID, apiKey s
 		return TestResult{}, err
 	}
 	if f.expectedAPIKey != "" && apiKey != f.expectedAPIKey {
-		return TestResult{}, errors.New("invalid original API key")
+		return TestResult{}, ErrServiceUnauthorized
 	}
 	if f.testFailures > 0 {
 		f.testFailures--
@@ -1148,6 +1148,92 @@ func TestStoppedDeploymentStartsHeadThenWorkerAndRunsReadiness(t *testing.T) {
 	}
 }
 
+func TestStartPersistFailureAfterRestartCleansUpAndReturnsDeployment(t *testing.T) {
+	ops := &fakeOperations{}
+	engine, store, _ := newTestEngine(t, ops)
+	deployment, err := engine.Create(context.Background(), validRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := engine.Stop(context.Background(), deployment.ID); err != nil {
+		t.Fatal(err)
+	}
+	ops.events = nil
+	originalWrite := store.write
+	writes := 0
+	store.write = func(path string, document storeDocument) (bool, error) {
+		writes++
+		if writes == 3 {
+			return false, errors.New("injected post-restart persistence failure")
+		}
+		return originalWrite(path, document)
+	}
+
+	failed, err := engine.Start(context.Background(), deployment.ID, "start-key")
+	if err == nil || failed.ID != deployment.ID || failed.State != StateStopped {
+		t.Fatalf("post-restart persistence failure returned an untruthful record: deployment=%#v err=%v", failed, err)
+	}
+	if !containsString(ops.events, "restart:spark-a:new-head") || !containsString(ops.events, "stop:spark-a:new-head") {
+		t.Fatalf("post-restart failure did not clean the affected member: %v", ops.events)
+	}
+	if containsString(ops.events, "restart:spark-b:new-worker") {
+		t.Fatalf("worker restarted after the head completion write failed: %v", ops.events)
+	}
+	for _, member := range failed.Members {
+		if member.Status != "stopped" {
+			t.Fatalf("cleanup returned active member: %#v", member)
+		}
+	}
+}
+
+func TestStartPostReadinessPersistFailuresReturnRunningMembersWithoutCleanup(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		failWrite int
+		wantState State
+	}{
+		{name: "readiness completion", failWrite: 7, wantState: StateStarting},
+		{name: "running promotion", failWrite: 8, wantState: StateRunning},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ops := &fakeOperations{}
+			engine, store, _ := newTestEngine(t, ops)
+			deployment, err := engine.Create(context.Background(), validRequest())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := engine.Stop(context.Background(), deployment.ID); err != nil {
+				t.Fatal(err)
+			}
+			ops.events = nil
+			originalWrite := store.write
+			writes := 0
+			store.write = func(path string, document storeDocument) (bool, error) {
+				writes++
+				if writes == test.failWrite {
+					return false, errors.New("injected post-readiness persistence failure")
+				}
+				return originalWrite(path, document)
+			}
+
+			result, err := engine.Start(context.Background(), deployment.ID, "start-key")
+			if err == nil || result.ID != deployment.ID || result.State != test.wantState || result.LastTest == nil {
+				t.Fatalf("post-readiness failure returned an untruthful record: deployment=%#v err=%v", result, err)
+			}
+			for _, member := range result.Members {
+				if member.Status != "running" {
+					t.Fatalf("post-readiness failure lost running member state: %#v", member)
+				}
+			}
+			for _, event := range ops.events {
+				if strings.HasPrefix(event, "stop:") {
+					t.Fatalf("healthy group was cleaned up after readiness: %v", ops.events)
+				}
+			}
+		})
+	}
+}
+
 func TestStoppedDeploymentRequiresOriginalLaunchKey(t *testing.T) {
 	ops := &fakeOperations{}
 	engine, _, _ := newTestEngine(t, ops)
@@ -1161,10 +1247,22 @@ func TestStoppedDeploymentRequiresOriginalLaunchKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	ops.expectedAPIKey = request.APIKey
+	ops.testCalls = 0
+	engine.ReadinessTimeout = 30 * time.Second
+	engine.ReadinessInterval = 10 * time.Millisecond
 
-	failed, err := engine.Start(context.Background(), deployment.ID, "different-key")
+	startCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	startedAt := time.Now()
+	failed, err := engine.Start(startCtx, deployment.ID, "different-key")
 	if err == nil || failed.State != StateStopped {
 		t.Fatalf("wrong key did not fail readiness back to stopped: deployment=%#v err=%v", failed, err)
+	}
+	if !errors.Is(err, ErrServiceUnauthorized) || ops.testCalls != 1 {
+		t.Fatalf("wrong key was not a one-probe typed failure: calls=%d err=%v", ops.testCalls, err)
+	}
+	if elapsed := time.Since(startedAt); elapsed >= time.Second {
+		t.Fatalf("wrong key consumed readiness retries despite 30s nominal timeout: %s", elapsed)
 	}
 	for _, member := range failed.Members {
 		if member.Status != "stopped" {

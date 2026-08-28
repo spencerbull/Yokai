@@ -220,8 +220,9 @@ func listContainersScope(scope string) ([]Container, error) {
 			container.Ports[port] = port
 		}
 
-		// Scrape native metrics for supported inference containers.
-		if (isVLLMImage(container.Image) || isSGLangImage(container.Image)) && container.Status == "running" {
+		// The all-scope inventory is an identity path used by deployment
+		// operations. Keep inference scrapes on the managed metrics/UI path.
+		if scope == InventoryScopeManaged && (isVLLMImage(container.Image) || isSGLangImage(container.Image)) && container.Status == "running" {
 			if baseURL, err := containerBaseURL(container); err == nil {
 				if vm, err := scrapeVLLMMetricsURL(baseURL+"/metrics", ""); err == nil {
 					container.VLLMMetrics = vm
@@ -412,9 +413,11 @@ func runContainerWithContext(ctx context.Context, req ContainerRequest, cleanupD
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		if hasCompleteManagedCandidateProvenance(req) {
-			cleanupFailedManagedRunEventually(req, containerName, cleanupDeps, deployments.DefaultCandidateLaunchSettleTimeout, 250*time.Millisecond)
+			cleanupFailedManagedRunEventually(ctx, req, containerName, cleanupDeps, deployments.DefaultCandidateLaunchSettleTimeout, 250*time.Millisecond)
 		} else {
-			cleanupFailedManagedRun(req, containerName, cleanupDeps)
+			cleanupCtx, cancelCleanup := context.WithTimeout(context.WithoutCancel(ctx), deployments.DefaultCandidateLaunchSettleTimeout)
+			cleanupFailedManagedRun(cleanupCtx, req, containerName, cleanupDeps)
+			cancelCleanup()
 		}
 		// Docker output is not safe to return here: launch arguments can include
 		// request-time credentials such as SGLang's rank-0 API key.
@@ -463,20 +466,20 @@ func prepareLegacyLaunchNonce(req *ContainerRequest) error {
 	return nil
 }
 
-func cleanupFailedManagedRunEventually(req ContainerRequest, containerName string, deps failedRunCleanupDeps, timeout, interval time.Duration) bool {
+func cleanupFailedManagedRunEventually(ctx context.Context, req ContainerRequest, containerName string, deps failedRunCleanupDeps, timeout, interval time.Duration) bool {
 	if timeout <= 0 || interval <= 0 {
-		return cleanupFailedManagedRun(req, containerName, deps)
+		return cleanupFailedManagedRun(ctx, req, containerName, deps)
 	}
-	deadline := time.NewTimer(timeout)
-	defer deadline.Stop()
+	settleCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+	defer cancel()
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
-		if cleanupFailedManagedRun(req, containerName, deps) {
+		if cleanupFailedManagedRun(settleCtx, req, containerName, deps) {
 			return true
 		}
 		select {
-		case <-deadline.C:
+		case <-settleCtx.Done():
 			return false
 		case <-ticker.C:
 		}
@@ -484,13 +487,13 @@ func cleanupFailedManagedRunEventually(req ContainerRequest, containerName strin
 }
 
 type failedRunCleanupDeps struct {
-	inspect func(string) (string, string, map[string]string, error)
-	remove  func(string) error
+	inspect func(context.Context, string) (string, string, map[string]string, error)
+	remove  func(context.Context, string) error
 }
 
 var liveFailedRunCleanupDeps = failedRunCleanupDeps{
-	inspect: inspectContainerIdentity,
-	remove:  removeContainer,
+	inspect: inspectContainerIdentityWithContext,
+	remove:  removeContainerWithContext,
 }
 
 // cleanupFailedManagedRun handles Docker's ambiguous run failure: the daemon
@@ -499,7 +502,7 @@ var liveFailedRunCleanupDeps = failedRunCleanupDeps{
 // labels match the request, never an unrelated same-name container. Grouped
 // requests additionally require their complete deployment provenance; partial
 // grouped provenance cannot fall back to the legacy cleanup path.
-func cleanupFailedManagedRun(req ContainerRequest, containerName string, deps failedRunCleanupDeps) bool {
+func cleanupFailedManagedRun(ctx context.Context, req ContainerRequest, containerName string, deps failedRunCleanupDeps) bool {
 	expected := map[string]string{
 		LabelManaged:   "true",
 		LabelOwnership: OwnershipManaged,
@@ -529,7 +532,7 @@ func cleanupFailedManagedRun(req ContainerRequest, containerName string, deps fa
 			return false
 		}
 	}
-	id, name, labels, err := deps.inspect(containerName)
+	id, name, labels, err := deps.inspect(ctx, containerName)
 	if err != nil || name != containerName {
 		return false
 	}
@@ -538,14 +541,21 @@ func cleanupFailedManagedRun(req ContainerRequest, containerName string, deps fa
 			return false
 		}
 	}
-	return deps.remove(id) == nil
+	return deps.remove(ctx, id) == nil
 }
 
 var errContainerIdentityNotFound = errors.New("container identity not found")
 
 func inspectContainerIdentity(containerName string) (string, string, map[string]string, error) {
-	output, err := exec.Command("docker", "inspect", "--format={{json .Id}}\n{{json .Name}}\n{{json .Config.Labels}}", containerName).CombinedOutput()
+	return inspectContainerIdentityWithContext(context.Background(), containerName)
+}
+
+func inspectContainerIdentityWithContext(ctx context.Context, containerName string) (string, string, map[string]string, error) {
+	output, err := exec.CommandContext(ctx, "docker", "inspect", "--format={{json .Id}}\n{{json .Name}}\n{{json .Config.Labels}}", containerName).CombinedOutput()
 	if err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return "", "", nil, fmt.Errorf("docker inspect canceled: %w", contextErr)
+		}
 		message := strings.ToLower(string(output))
 		if strings.Contains(message, "no such object") || strings.Contains(message, "no such container") {
 			return "", "", nil, fmt.Errorf("%w: %s", errContainerIdentityNotFound, containerName)
@@ -678,8 +688,15 @@ func containerExists(idOrName string) bool {
 
 // stopContainer stops a container by ID or name.
 func stopContainer(idOrName string) error {
-	cmd := exec.Command("docker", "stop", idOrName)
+	return stopContainerWithContext(context.Background(), idOrName)
+}
+
+func stopContainerWithContext(ctx context.Context, idOrName string) error {
+	cmd := exec.CommandContext(ctx, "docker", "stop", idOrName)
 	if err := cmd.Run(); err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return fmt.Errorf("docker stop canceled: %w", contextErr)
+		}
 		return fmt.Errorf("docker stop failed: %w", err)
 	}
 	return nil
@@ -687,8 +704,15 @@ func stopContainer(idOrName string) error {
 
 // removeContainer removes a stopped container.
 func removeContainer(idOrName string) error {
-	cmd := exec.Command("docker", "rm", "-f", idOrName)
+	return removeContainerWithContext(context.Background(), idOrName)
+}
+
+func removeContainerWithContext(ctx context.Context, idOrName string) error {
+	cmd := exec.CommandContext(ctx, "docker", "rm", "-f", idOrName)
 	if err := cmd.Run(); err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return fmt.Errorf("docker rm canceled: %w", contextErr)
+		}
 		return fmt.Errorf("docker rm failed: %w", err)
 	}
 	return nil
@@ -696,8 +720,15 @@ func removeContainer(idOrName string) error {
 
 // restartContainer restarts a container.
 func restartContainer(idOrName string) error {
-	cmd := exec.Command("docker", "restart", idOrName)
+	return restartContainerWithContext(context.Background(), idOrName)
+}
+
+func restartContainerWithContext(ctx context.Context, idOrName string) error {
+	cmd := exec.CommandContext(ctx, "docker", "restart", idOrName)
 	if err := cmd.Run(); err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return fmt.Errorf("docker restart canceled: %w", contextErr)
+		}
 		return fmt.Errorf("docker restart failed: %w", err)
 	}
 	return nil
@@ -705,8 +736,15 @@ func restartContainer(idOrName string) error {
 
 // pullImage pulls a Docker image.
 func pullImage(image string) error {
-	cmd := exec.Command("docker", "pull", image)
+	return pullImageWithContext(context.Background(), image)
+}
+
+func pullImageWithContext(ctx context.Context, image string) error {
+	cmd := exec.CommandContext(ctx, "docker", "pull", image)
 	if err := cmd.Run(); err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return fmt.Errorf("docker pull canceled: %w", contextErr)
+		}
 		return fmt.Errorf("docker pull failed: %w", err)
 	}
 	return nil
@@ -951,10 +989,13 @@ func validateImagePlatform(ctx context.Context, image string) error {
 	return nil
 }
 
-func validatePulledImageArchitecture(image string) error {
-	cmd := exec.Command("docker", "inspect", image, "--format", "{{.Architecture}}")
+func validatePulledImageArchitecture(ctx context.Context, image string) error {
+	cmd := exec.CommandContext(ctx, "docker", "inspect", image, "--format", "{{.Architecture}}")
 	out, err := cmd.Output()
 	if err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return fmt.Errorf("docker inspect canceled: %w", contextErr)
+		}
 		return fmt.Errorf("docker inspect failed: %w", err)
 	}
 
@@ -1033,7 +1074,7 @@ func imageSupportsPlatform(manifestJSON []byte, hostOS, hostArch string) (bool, 
 // It tries the first external port it finds. For inference servers it hits /health,
 // for other services it does a simple TCP dial.
 // Returns "healthy", "unhealthy", or "starting".
-func probeContainerHealth(ports map[string]string, image string) string {
+func probeContainerHealth(ports map[string]string, image, serviceAddress string) string {
 	if len(ports) == 0 {
 		return ""
 	}
@@ -1048,7 +1089,11 @@ func probeContainerHealth(ports map[string]string, image string) string {
 		return ""
 	}
 
-	addr := "127.0.0.1:" + externalPort
+	host := strings.TrimSpace(serviceAddress)
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	addr := net.JoinHostPort(host, externalPort)
 
 	// For known inference servers, try their /health endpoint
 	imageLower := strings.ToLower(image)
@@ -1096,14 +1141,17 @@ func scrapeVLLMMetricsURLWithClient(client *http.Client, metricsURL, apiKey stri
 	}
 	resp, err := client.Do(request)
 	if err != nil {
-		return nil, err
+		return nil, redactSecretError(err, apiKey)
 	}
 	defer func() {
 		_ = resp.Body.Close()
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("inference metrics returned %d", resp.StatusCode)
+		return nil, redactSecretError(&serviceHTTPStatusError{
+			status:  resp.StatusCode,
+			message: fmt.Sprintf("inference metrics returned %d", resp.StatusCode),
+		}, apiKey)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 256*1024))

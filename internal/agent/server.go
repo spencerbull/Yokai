@@ -234,6 +234,7 @@ func mergeContainerMetrics(metricContainers []ContainerMetrics, dockerContainers
 			metricContainers[idx].Image = container.Image
 			metricContainers[idx].Uptime = container.Uptime
 			metricContainers[idx].Ports = container.Ports
+			metricContainers[idx].ServiceAddress = managedServiceAddress(container)
 			if container.VLLMMetrics != nil {
 				metricContainers[idx].GenerationTokPerSec = container.VLLMMetrics.GenerationTokPerSec
 				metricContainers[idx].PromptTokPerSec = container.VLLMMetrics.PromptTokPerSec
@@ -245,12 +246,13 @@ func mergeContainerMetrics(metricContainers []ContainerMetrics, dockerContainers
 		}
 
 		cm := ContainerMetrics{
-			ID:     id,
-			Name:   container.Name,
-			Image:  container.Image,
-			Status: container.Status,
-			Uptime: container.Uptime,
-			Ports:  container.Ports,
+			ID:             id,
+			Name:           container.Name,
+			Image:          container.Image,
+			Status:         container.Status,
+			Uptime:         container.Uptime,
+			Ports:          container.Ports,
+			ServiceAddress: managedServiceAddress(container),
 		}
 		if container.VLLMMetrics != nil {
 			cm.GenerationTokPerSec = container.VLLMMetrics.GenerationTokPerSec
@@ -272,7 +274,7 @@ func mergeContainerMetrics(metricContainers []ContainerMetrics, dockerContainers
 	// Probe health for running containers with exposed ports
 	for i := range metricContainers {
 		if metricContainers[i].Status == "running" && len(metricContainers[i].Ports) > 0 {
-			metricContainers[i].Health = probeContainerHealth(metricContainers[i].Ports, metricContainers[i].Image)
+			metricContainers[i].Health = probeContainerHealth(metricContainers[i].Ports, metricContainers[i].Image, metricContainers[i].ServiceAddress)
 		}
 	}
 
@@ -370,13 +372,13 @@ func handleContainerDeployWithLaunchTimeout(w http.ResponseWriter, r *http.Reque
 		}
 
 		log.Printf("Pulling image: %s", req.Image)
-		if err := pullImage(req.Image); err != nil {
+		if err := pullImageWithContext(launchCtx, req.Image); err != nil {
 			writeError(w, http.StatusInternalServerError, "pull_failed", err.Error())
 			return
 		}
 	}
 
-	if err := validatePulledImageArchitecture(req.Image); err != nil {
+	if err := validatePulledImageArchitecture(launchCtx, req.Image); err != nil {
 		writeError(w, http.StatusBadRequest, "unsupported_platform", err.Error())
 		return
 	}
@@ -499,7 +501,7 @@ func rejectLegacyGroupedMutation(w http.ResponseWriter, id string) bool {
 }
 
 func deploymentMemberProvenance(r *http.Request) (map[string]string, error) {
-	_, name, labels, err := inspectContainerIdentity(r.PathValue("id"))
+	_, name, labels, err := inspectContainerIdentityWithContext(r.Context(), r.PathValue("id"))
 	if err != nil {
 		return nil, err
 	}
@@ -546,7 +548,7 @@ func handleDeploymentMemberStop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer finishStop()
-	if err := stopContainer(r.PathValue("id")); err != nil {
+	if err := stopContainerWithContext(r.Context(), r.PathValue("id")); err != nil {
 		writeError(w, http.StatusInternalServerError, "stop_failed", err.Error())
 		return
 	}
@@ -573,7 +575,7 @@ func handleDeploymentMemberDelete(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "deployment_member_mismatch", err.Error())
 		return
 	}
-	if err := removeContainer(r.PathValue("id")); err != nil {
+	if err := removeContainerWithContext(r.Context(), r.PathValue("id")); err != nil {
 		writeError(w, http.StatusInternalServerError, "remove_failed", err.Error())
 		return
 	}
@@ -588,7 +590,7 @@ func handleDeploymentMemberRestart(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "container_stop_in_progress", "container stop has not settled")
 		return
 	}
-	if err := restartContainer(r.PathValue("id")); err != nil {
+	if err := restartContainerWithContext(r.Context(), r.PathValue("id")); err != nil {
 		writeError(w, http.StatusInternalServerError, "restart_failed", err.Error())
 		return
 	}
@@ -669,6 +671,10 @@ func handleContainerTest(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := testContainerServiceWithOptions(*target, r.URL.Query().Get("require_metrics") == "true", request.APIKey)
 	if err != nil {
+		if isServiceAuthorizationError(err) {
+			writeError(w, http.StatusBadGateway, "service_unauthorized", "model service rejected the API key")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "service_test_failed", err.Error())
 		return
 	}
@@ -810,7 +816,7 @@ func handleImagePull(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := pullImage(req.Image); err != nil {
+	if err := pullImageWithContext(r.Context(), req.Image); err != nil {
 		writeError(w, http.StatusInternalServerError, "pull_failed", err.Error())
 		return
 	}
