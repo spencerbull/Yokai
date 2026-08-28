@@ -18,13 +18,15 @@ import (
 
 // Aggregator polls agents for metrics and forwards commands
 type Aggregator struct {
-	cfg     *config.Config
-	tunnels *TunnelPool
-	catalog *docker.Catalog
-	metrics map[string]*AgentMetrics // keyed by device ID
-	mu      sync.RWMutex
-	cancel  context.CancelFunc
-	client  *http.Client
+	cfg            *config.Config
+	tunnels        *TunnelPool
+	catalog        *docker.Catalog
+	metrics        map[string]*AgentMetrics // keyed by device ID
+	mu             sync.RWMutex
+	cancel         context.CancelFunc
+	client         *http.Client
+	mutationClient *http.Client
+	probeClient    *http.Client
 }
 
 // hfToken returns the HuggingFace token available to the daemon, falling back
@@ -52,8 +54,14 @@ func (a *Aggregator) agentRequest(method, url, deviceID string, body io.Reader) 
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	if device := a.cfg.FindDevice(deviceID); device != nil && device.AgentToken != "" {
-		req.Header.Set("Authorization", "Bearer "+device.AgentToken)
+	a.mu.RLock()
+	token := ""
+	if device := a.cfg.FindDevice(deviceID); device != nil {
+		token = device.AgentToken
+	}
+	a.mu.RUnlock()
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	return req, nil
 }
@@ -83,12 +91,45 @@ type AgentMetrics struct {
 // NewAggregator creates a new metrics aggregator
 func NewAggregator(cfg *config.Config, tunnels *TunnelPool) *Aggregator {
 	return &Aggregator{
-		cfg:     cfg,
-		tunnels: tunnels,
-		catalog: docker.NewCatalog(),
-		metrics: make(map[string]*AgentMetrics),
-		client:  &http.Client{Timeout: 10 * time.Second},
+		cfg:            cfg,
+		tunnels:        tunnels,
+		catalog:        docker.NewCatalog(),
+		metrics:        make(map[string]*AgentMetrics),
+		client:         &http.Client{Timeout: 10 * time.Second},
+		mutationClient: &http.Client{Timeout: 2 * time.Minute},
+		probeClient:    &http.Client{Timeout: 2 * time.Minute},
 	}
+}
+
+// agentMutationDo keeps Docker lifecycle calls off the short metrics/UI
+// client. Docker stop and restart can legitimately consume their full daemon
+// grace period; timing out first makes the accepted effect ambiguous and can
+// race transactional rollback.
+func (a *Aggregator) agentMutationDo(method, url, deviceID string, body io.Reader) (*http.Response, error) {
+	req, err := a.agentRequest(method, url, deviceID, body)
+	if err != nil {
+		return nil, err
+	}
+	client := a.mutationClient
+	if client == nil {
+		client = &http.Client{Timeout: 2 * time.Minute}
+	}
+	return client.Do(req)
+}
+
+// agentProbeDo lets the agent complete its bounded model discovery, chat, and
+// metrics checks. The agent's two service calls may each consume 45 seconds,
+// so the short metrics/UI client would cancel every slow first-token probe.
+func (a *Aggregator) agentProbeDo(method, url, deviceID string, body io.Reader) (*http.Response, error) {
+	req, err := a.agentRequest(method, url, deviceID, body)
+	if err != nil {
+		return nil, err
+	}
+	client := a.probeClient
+	if client == nil {
+		client = &http.Client{Timeout: 2 * time.Minute}
+	}
+	return client.Do(req)
 }
 
 // UpdateConfig replaces the config pointer (caller holds Daemon.mu).
@@ -115,7 +156,7 @@ func (a *Aggregator) Stop() {
 
 // pollMetrics polls each device's agent at regular intervals
 func (a *Aggregator) pollMetrics(ctx context.Context) {
-	interval := time.Duration(a.cfg.Daemon.MetricsPollInterval) * time.Second
+	interval := a.metricsPollInterval()
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -131,9 +172,25 @@ func (a *Aggregator) pollMetrics(ctx context.Context) {
 
 // pollAllDevices polls metrics from all configured devices
 func (a *Aggregator) pollAllDevices() {
-	for _, device := range a.cfg.Devices {
-		go a.pollDevice(device.ID)
+	for _, deviceID := range a.configuredDeviceIDs() {
+		go a.pollDevice(deviceID)
 	}
+}
+
+func (a *Aggregator) metricsPollInterval() time.Duration {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return time.Duration(a.cfg.Daemon.MetricsPollInterval) * time.Second
+}
+
+func (a *Aggregator) configuredDeviceIDs() []string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	deviceIDs := make([]string, 0, len(a.cfg.Devices))
+	for _, device := range a.cfg.Devices {
+		deviceIDs = append(deviceIDs, device.ID)
+	}
+	return deviceIDs
 }
 
 // pollDevice polls metrics from a single device
@@ -335,7 +392,7 @@ func (a *Aggregator) StopContainer(deviceID, containerID string) error {
 	}
 
 	url := fmt.Sprintf("http://localhost:%d/containers/%s/stop", localPort, containerID)
-	resp, err := a.agentDo("POST", url, deviceID, nil)
+	resp, err := a.agentMutationDo("POST", url, deviceID, nil)
 	if err != nil {
 		return fmt.Errorf("stop request: %w", err)
 	}
@@ -344,7 +401,7 @@ func (a *Aggregator) StopContainer(deviceID, containerID string) error {
 	}()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
-		return fmt.Errorf("stop failed with status %d", resp.StatusCode)
+		return agentResponseError(resp)
 	}
 
 	return nil
@@ -358,7 +415,7 @@ func (a *Aggregator) RemoveContainer(deviceID, containerID string) error {
 	}
 
 	url := fmt.Sprintf("http://localhost:%d/containers/%s", localPort, containerID)
-	resp, err := a.agentDo("DELETE", url, deviceID, nil)
+	resp, err := a.agentMutationDo("DELETE", url, deviceID, nil)
 	if err != nil {
 		return fmt.Errorf("remove request: %w", err)
 	}
@@ -366,8 +423,8 @@ func (a *Aggregator) RemoveContainer(deviceID, containerID string) error {
 		_ = resp.Body.Close() // Best-effort close of response body.
 	}()
 
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
-		return fmt.Errorf("remove failed with status %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusNotFound {
+		return agentResponseError(resp)
 	}
 
 	return nil
@@ -381,7 +438,7 @@ func (a *Aggregator) RestartContainer(deviceID, containerID string) error {
 	}
 
 	url := fmt.Sprintf("http://localhost:%d/containers/%s/restart", localPort, containerID)
-	resp, err := a.agentDo("POST", url, deviceID, nil)
+	resp, err := a.agentMutationDo("POST", url, deviceID, nil)
 	if err != nil {
 		return fmt.Errorf("restart request: %w", err)
 	}
@@ -390,7 +447,7 @@ func (a *Aggregator) RestartContainer(deviceID, containerID string) error {
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("restart failed with status %d", resp.StatusCode)
+		return agentResponseError(resp)
 	}
 
 	return nil
@@ -398,13 +455,28 @@ func (a *Aggregator) RestartContainer(deviceID, containerID string) error {
 
 // TestContainer runs a workload-specific smoke test against a running service.
 func (a *Aggregator) TestContainer(deviceID, containerID string) (*ServiceTestResult, error) {
+	return a.testContainer(deviceID, containerID, false, "")
+}
+
+func (a *Aggregator) TestContainerWithMetrics(deviceID, containerID, apiKey string) (*ServiceTestResult, error) {
+	return a.testContainer(deviceID, containerID, true, apiKey)
+}
+
+func (a *Aggregator) testContainer(deviceID, containerID string, requireMetrics bool, apiKey string) (*ServiceTestResult, error) {
 	localPort := a.tunnels.LocalPort(deviceID)
 	if localPort == 0 {
 		return nil, fmt.Errorf("device %s is not connected", deviceID)
 	}
 
 	url := fmt.Sprintf("http://localhost:%d/containers/%s/test", localPort, containerID)
-	resp, err := a.agentDo("POST", url, deviceID, bytes.NewBufferString("{}"))
+	if requireMetrics {
+		url += "?require_metrics=true"
+	}
+	body, err := json.Marshal(map[string]string{"api_key": apiKey})
+	if err != nil {
+		return nil, fmt.Errorf("encoding service test: %w", err)
+	}
+	resp, err := a.agentProbeDo("POST", url, deviceID, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("test request: %w", err)
 	}
@@ -413,15 +485,7 @@ func (a *Aggregator) TestContainer(deviceID, containerID string) (*ServiceTestRe
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		var agentErr struct {
-			Error   string `json:"error"`
-			Message string `json:"message"`
-		}
-		if json.Unmarshal(body, &agentErr) == nil && agentErr.Message != "" {
-			return nil, fmt.Errorf("agent %s: %s", agentErr.Error, agentErr.Message)
-		}
-		return nil, fmt.Errorf("service test failed with status %d", resp.StatusCode)
+		return nil, agentResponseError(resp)
 	}
 
 	var result ServiceTestResult

@@ -1,6 +1,9 @@
 package bkc
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
 
 func init() {
 	glmCommon := strings.Join([]string{
@@ -8,6 +11,87 @@ func init() {
 	}, " ")
 
 	register(
+		Config{
+			ID:       GLM53FlashNVFP4DualGB10ID,
+			Name:     "GLM-5.3-Flash NVFP4 (dual GB10 SGLang TP=2)",
+			Workload: WorkloadSGLang,
+			ModelID:  GLM53FlashNVFP4Model,
+			Image:    GLM53FlashNVFP4Image,
+			Port:     "8000",
+			ExtraArgs: strings.Join([]string{
+				"sglang serve",
+				"--trust-remote-code",
+				"--tp-size 2",
+				"--nnodes 2",
+				"--node-rank " + MultiDeviceRoleRankPlaceholder,
+				"--dist-init-addr " + MultiDeviceHeadAddrPlaceholder + ":25000",
+				"--dist-timeout " + strconv.Itoa(GLM53FlashNVFP4GuardSeconds),
+				"--watchdog-timeout " + strconv.Itoa(GLM53FlashNVFP4GuardSeconds),
+				"--attention-backend dsa",
+				"--dsa-prefill-backend tilelang",
+				"--dsa-decode-backend tilelang",
+				"--moe-runner-backend flashinfer_cutlass",
+				"--kv-cache-dtype bfloat16",
+				"--disable-shared-experts-fusion",
+				"--reasoning-parser glm45",
+				"--tool-call-parser glm47",
+				"--mem-fraction-static 0.84",
+				"--context-length 65536",
+				"--max-running-requests 2",
+				"--log-level warning",
+				"--enable-metrics",
+				"--revision " + GLM53FlashNVFP4Revision,
+			}, " "),
+			Env: map[string]string{
+				"GLOO_SOCKET_IFNAME":       "enP2p1s0f0np0",
+				"NCCL_SOCKET_IFNAME":       "enP2p1s0f0np0",
+				"NCCL_IB_HCA":              "roceP2p1s0f0",
+				"NCCL_IB_GID_INDEX":        "3",
+				"NCCL_IB_ADDR_FAMILY":      "AF_INET",
+				"NCCL_IB_ROCE_VERSION_NUM": "2",
+				"NCCL_IB_DISABLE":          "0",
+				"NCCL_NET":                 "IB",
+				"NCCL_CROSS_NIC":           "1",
+				"NCCL_CUMEM_ENABLE":        "0",
+				"NCCL_IGNORE_CPU_AFFINITY": "1",
+				"NCCL_NVLS_ENABLE":         "0",
+				"NCCL_DEBUG":               "INFO",
+			},
+			Volumes:     hfMountDefault,
+			Runtime:     runtimeDefault,
+			Description: "Pinned two-node SGLang torch-distributed canary for one GB10 GPU per DGX Spark.",
+			Source:      "Yokai BKC " + GLM53FlashNVFP4DualGB10ID,
+			Notes: []string{
+				"Requires explicit head and worker device bindings with fabric IP addresses.",
+				"Uses host networking and TCP rendezvous on port 25000; rank 0 binds the explicitly supplied client address on port 8000.",
+				"Pins one-hour SGLang and torch-distributed guards so asymmetric 181 GiB cold loads do not trip shorter engine defaults.",
+				"Carries exact loader-timeout and CUDA DSA TileLang source patches that are not both present in the pinned image.",
+				"The 32/1/128 DSA tile and its 100352-byte shared-memory budget are correctness-bound to this two-node TP=2 topology.",
+				"The one-hour SGLang watchdog is a supervised-canary setting; retune it after cold-load behavior is proven.",
+				"No MTP is enabled for the first canary.",
+			},
+			TargetDevices:   []string{DeviceGB10},
+			MinVRAMGBPerGPU: 100,
+			MinGPUCount:     1,
+			Quantization:    QuantNVFP4,
+			Arch:            ArchBlackwell,
+			MultiDevice: &MultiDeviceDeployment{
+				WorldSize:          2,
+				TensorParallelSize: 2,
+				Backend:            MultiDeviceBackendTorch,
+				GPUsPerNode:        1,
+				RendezvousPort:     GLM53FlashNVFP4RendezvousPort,
+				ServicePort:        GLM53FlashNVFP4ServicePort,
+				ModelRevision:      GLM53FlashNVFP4Revision,
+				RuntimePatches:     cloneRuntimePatches(glm53FlashRuntimePatches),
+				Roles: []MultiDeviceRole{
+					{Name: MultiDeviceRoleHead, Rank: 0, API: true},
+					{Name: MultiDeviceRoleWorker, Rank: 1, API: false},
+				},
+				RequiredCapabilities: append([]string(nil), multiDeviceCapabilities...),
+			},
+		},
+
 		// GLM-4.5-Air FP8.
 		Config{
 			ID:       "glm-4-5-air-fp8",
@@ -142,13 +226,13 @@ func init() {
 
 		// GLM-ASR.
 		Config{
-			ID:       "glm-asr-nano-2512",
-			Name:     "GLM-ASR Nano 2512",
-			Workload: WorkloadVLLM,
-			ModelID:  "zai-org/GLM-ASR-Nano-2512",
-			Image:    imageVLLMLatest,
-			Port:     "8000",
-			ExtraArgs: "--tensor-parallel-size 1",
+			ID:              "glm-asr-nano-2512",
+			Name:            "GLM-ASR Nano 2512",
+			Workload:        WorkloadVLLM,
+			ModelID:         "zai-org/GLM-ASR-Nano-2512",
+			Image:           imageVLLMLatest,
+			Port:            "8000",
+			ExtraArgs:       "--tensor-parallel-size 1",
 			Volumes:         hfMountDefault,
 			Runtime:         runtimeDefault,
 			Description:     "Compact GLM ASR — runs on any modern GPU.",
@@ -185,4 +269,8 @@ func init() {
 			Arch:            ArchHopper,
 		},
 	)
+}
+
+func cloneRuntimePatches(patches []MultiDeviceRuntimePatch) []MultiDeviceRuntimePatch {
+	return append([]MultiDeviceRuntimePatch(nil), patches...)
 }

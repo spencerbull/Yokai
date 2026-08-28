@@ -1,14 +1,390 @@
 package agent
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
+	"reflect"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/spencerbull/yokai/internal/bkc"
+	"github.com/spencerbull/yokai/internal/config"
 	"github.com/spencerbull/yokai/internal/plugins"
 )
+
+const glmTestImage = "lmsysorg/sglang@sha256:73f9294b78e38d8cc297bfed16daec8ac192b126a2d1fb9055e259a632c68f00"
+
+func TestMultiDeviceDockerRunArgs(t *testing.T) {
+	req := ContainerRequest{
+		Image:       glmTestImage,
+		NetworkMode: "host",
+		Ports:       map[string]string{"8000": "8000"},
+		Labels: map[string]string{
+			"io.yokai.deployment.role": "head",
+			LabelServiceAddress:        "100.96.0.20",
+			LabelServicePort:           "8000",
+			LabelManaged:               "true",
+		},
+		GPUIDs:  "0",
+		Devices: []string{"/dev/infiniband:/dev/infiniband"},
+		CapAdd:  []string{"IPC_LOCK"},
+		Runtime: config.RuntimeOptions{
+			IPCMode:       "host",
+			ShmSize:       "32g",
+			Ulimits:       map[string]string{"memlock": "-1", "stack": "67108864"},
+			RestartPolicy: config.RestartPolicyNo,
+		},
+		ExtraArgs: "sglang serve --tp-size 2 --node-rank 0 --host 100.96.0.20 --port 8000",
+		Args:      []string{"--api-key=-leading-dash-secret"},
+	}
+	args := buildDockerRunArgs(req, "yokai-test-head")
+	joined := strings.Join(args, " ")
+	for _, want := range []string{
+		"--network host",
+		"--label io.yokai.deployment.role=head",
+		"--label io.yokai.service.address=100.96.0.20",
+		"--label io.yokai.service.port=8000",
+		"--device /dev/infiniband:/dev/infiniband",
+		"--cap-add IPC_LOCK",
+		"--ipc host",
+		"--shm-size 32g",
+		"--ulimit memlock=-1",
+		"--gpus \"device=0\"",
+		"--restart no",
+		"--host 100.96.0.20 --port 8000",
+		"--api-key=-leading-dash-secret",
+		glmTestImage,
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("docker argv missing %q: %s", want, joined)
+		}
+	}
+	if strings.Contains(joined, "0.0.0.0") || strings.Contains(joined, "30000") || strings.Contains(joined, "-p ") {
+		t.Fatalf("coordinated host-network argv must preserve the explicit endpoint without port publishing: %s", joined)
+	}
+}
+
+func TestPinnedRuntimePatchDockerRunArgsPreserveBootstrapAsOneElement(t *testing.T) {
+	req := pinnedRuntimePatchRequest()
+	originalCommand := append(strings.Fields(req.ExtraArgs), req.Args...)
+	if err := applyPinnedSGLangRuntimePatch(&req); err != nil {
+		t.Fatal(err)
+	}
+	args := buildDockerRunArgs(req, "yokai-test-runtime-patch")
+	imageIndex := -1
+	for index, arg := range args {
+		if arg == req.Image {
+			imageIndex = index
+			break
+		}
+	}
+	if imageIndex < 0 {
+		t.Fatalf("docker argv omitted image: %#v", args)
+	}
+	wantAfterImage := append([]string{"python3", "-c", req.Args[2]}, originalCommand...)
+	if !reflect.DeepEqual(args[imageIndex+1:], wantAfterImage) {
+		t.Fatalf("wrapped docker command changed:\n got %#v\nwant %#v", args[imageIndex+1:], wantAfterImage)
+	}
+	scriptCount := 0
+	for _, arg := range args {
+		if arg == req.Args[2] {
+			scriptCount++
+		}
+	}
+	if scriptCount != 1 || args[imageIndex+3] != req.Args[2] || args[imageIndex+4] != "sglang" {
+		t.Fatalf("bootstrap script was not one argv element between the image prefix and original command: %#v", args[imageIndex:])
+	}
+}
+
+func TestRunContainerRejectsRuntimePatchLabelOnNonSGLangBeforeDockerRun(t *testing.T) {
+	binDir := t.TempDir()
+	runMarker := filepath.Join(binDir, "docker-run")
+	dockerPath := filepath.Join(binDir, "docker")
+	script := "#!/bin/sh\nif [ \"$1\" = run ]; then : > \"" + runMarker + "\"; fi\nexit 1\n"
+	if err := os.WriteFile(dockerPath, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	_, err := runContainer(ContainerRequest{
+		Image: "example.invalid/other-runtime", Model: bkc.GLM53FlashNVFP4Model, Ports: map[string]string{},
+		ExtraArgs: "sglang serve --model-path " + bkc.GLM53FlashNVFP4Model + " --revision " + bkc.GLM53FlashNVFP4Revision + " --tp-size 2",
+		Labels: map[string]string{
+			LabelBKCID: bkc.GLM53FlashNVFP4DualGB10ID, LabelModelRevision: bkc.GLM53FlashNVFP4Revision,
+			LabelImageDigest: bkc.GLM53FlashNVFP4ImageDigest, LabelRuntimePatch: bkc.GLM53FlashRuntimePatchSetLabel(),
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "runtime patch provenance") {
+		t.Fatalf("mislabeled non-SGLang image was not rejected: %v", err)
+	}
+	if _, statErr := os.Stat(runMarker); !os.IsNotExist(statErr) {
+		t.Fatalf("Docker launch was attempted for a mislabeled non-SGLang image: %v", statErr)
+	}
+}
+
+func TestLegacyDockerRunArgsPreserveUnlessStoppedDefault(t *testing.T) {
+	args := buildDockerRunArgs(ContainerRequest{Image: "example/image", Ports: map[string]string{}}, "yokai-legacy")
+	if !strings.Contains(strings.Join(args, " "), "--restart unless-stopped") {
+		t.Fatalf("legacy restart default changed: %v", args)
+	}
+}
+
+func TestFailedRunCleanupRemovesOnlyOwnedAmbiguousCandidate(t *testing.T) {
+	request := ContainerRequest{Labels: map[string]string{
+		LabelManaged:      "true",
+		LabelOwnership:    OwnershipManaged,
+		LabelDeploymentID: "dep-test",
+		LabelGeneration:   "3",
+		LabelRole:         "head",
+	}}
+	removed := ""
+	deps := failedRunCleanupDeps{
+		inspect: func(name string) (string, string, map[string]string, error) {
+			return strings.Repeat("a", 64), name, map[string]string{
+				LabelManaged:      "true",
+				LabelOwnership:    OwnershipManaged,
+				LabelDeploymentID: "dep-test",
+				LabelGeneration:   "3",
+				LabelRole:         "head",
+			}, nil
+		},
+		remove: func(name string) error {
+			removed = name
+			return nil
+		},
+	}
+	if !cleanupFailedManagedRun(request, "yokai-deployment-dep-test-g3-head", deps) || removed != strings.Repeat("a", 64) {
+		t.Fatalf("owned ambiguous launch candidate was not cleaned up: removed=%q", removed)
+	}
+}
+
+func TestFailedRunCleanupPreservesUnownedNameCollision(t *testing.T) {
+	request := ContainerRequest{Labels: map[string]string{
+		LabelManaged:      "true",
+		LabelOwnership:    OwnershipManaged,
+		LabelDeploymentID: "dep-test",
+		LabelGeneration:   "3",
+		LabelRole:         "head",
+	}}
+	removed := false
+	deps := failedRunCleanupDeps{
+		inspect: func(name string) (string, string, map[string]string, error) {
+			return strings.Repeat("b", 64), name, map[string]string{LabelOwnership: OwnershipObserved}, nil
+		},
+		remove: func(string) error {
+			removed = true
+			return nil
+		},
+	}
+	if cleanupFailedManagedRun(request, "yokai-deployment-dep-test-g3-head", deps) || removed {
+		t.Fatal("unowned same-name container was removed after docker run failure")
+	}
+}
+
+func TestFailedRunCleanupRejectsEveryProvenanceMismatch(t *testing.T) {
+	name := "yokai-deployment-dep-test-g3-head"
+	request := ContainerRequest{Labels: map[string]string{LabelManaged: "true", LabelOwnership: OwnershipManaged, LabelDeploymentID: "dep-test", LabelGeneration: "3", LabelRole: "head"}}
+	base := map[string]string{LabelManaged: "true", LabelOwnership: OwnershipManaged, LabelDeploymentID: "dep-test", LabelGeneration: "3", LabelRole: "head"}
+	tests := map[string]func(map[string]string) string{
+		"managed":    func(labels map[string]string) string { labels[LabelManaged] = "false"; return name },
+		"ownership":  func(labels map[string]string) string { labels[LabelOwnership] = OwnershipObserved; return name },
+		"deployment": func(labels map[string]string) string { labels[LabelDeploymentID] = "other"; return name },
+		"generation": func(labels map[string]string) string { labels[LabelGeneration] = "4"; return name },
+		"role":       func(labels map[string]string) string { labels[LabelRole] = "worker"; return name },
+		"name":       func(map[string]string) string { return "unowned-collision" },
+	}
+	for mismatch, mutate := range tests {
+		t.Run(mismatch, func(t *testing.T) {
+			labels := make(map[string]string, len(base))
+			for key, value := range base {
+				labels[key] = value
+			}
+			observedName := mutate(labels)
+			removed := false
+			deps := failedRunCleanupDeps{
+				inspect: func(string) (string, string, map[string]string, error) {
+					return strings.Repeat("c", 64), observedName, labels, nil
+				},
+				remove: func(string) error { removed = true; return nil },
+			}
+			if cleanupFailedManagedRun(request, name, deps) || removed {
+				t.Fatalf("%s mismatch was removed", mismatch)
+			}
+		})
+	}
+}
+
+func TestFailedRunCleanupRetriesLateOwnedCandidate(t *testing.T) {
+	request := ContainerRequest{Labels: map[string]string{LabelManaged: "true", LabelOwnership: OwnershipManaged, LabelDeploymentID: "dep-test", LabelGeneration: "3", LabelRole: "head"}}
+	attempts := 0
+	removed := false
+	deps := failedRunCleanupDeps{
+		inspect: func(name string) (string, string, map[string]string, error) {
+			attempts++
+			if attempts < 3 {
+				return "", "", nil, errors.New("not materialized yet")
+			}
+			return strings.Repeat("d", 64), name, request.Labels, nil
+		},
+		remove: func(string) error { removed = true; return nil },
+	}
+	if !cleanupFailedManagedRunEventually(request, "yokai-deployment-dep-test-g3-head", deps, 100*time.Millisecond, time.Millisecond) || !removed || attempts < 3 {
+		t.Fatalf("late owned candidate was not removed: attempts=%d removed=%v", attempts, removed)
+	}
+}
+
+func TestRunContainerCancellationKillsDockerCLIAndCleansOwnedCandidate(t *testing.T) {
+	binDir := t.TempDir()
+	dockerPath := filepath.Join(binDir, "docker")
+	script := "#!/bin/sh\nif [ \"$1\" = run ]; then exec sleep 5; fi\nexit 1\n"
+	if err := os.WriteFile(dockerPath, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	request := ContainerRequest{Image: "example.invalid/image", Name: "yokai-deployment-dep-test-g3-head", Labels: map[string]string{LabelManaged: "true", LabelOwnership: OwnershipManaged, LabelDeploymentID: "dep-test", LabelGeneration: "3", LabelRole: "head"}}
+	removed := false
+	deps := failedRunCleanupDeps{
+		inspect: func(name string) (string, string, map[string]string, error) {
+			return strings.Repeat("e", 64), name, request.Labels, nil
+		},
+		remove: func(string) error { removed = true; return nil },
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(10*time.Millisecond, cancel)
+	started := time.Now()
+	if _, err := runContainerWithContext(ctx, request, deps); err == nil || !removed {
+		t.Fatalf("canceled launch did not clean owned candidate: err=%v removed=%v", err, removed)
+	}
+	if time.Since(started) > time.Second {
+		t.Fatalf("docker CLI was not canceled promptly")
+	}
+}
+
+func TestValidateImagePlatformCancellationBoundsManifestInspect(t *testing.T) {
+	binDir := t.TempDir()
+	markerPath := filepath.Join(binDir, "manifest-started")
+	dockerPath := filepath.Join(binDir, "docker")
+	script := "#!/bin/sh\nif [ \"$1\" = manifest ] && [ \"$2\" = inspect ]; then\n  : > \"" + markerPath + "\"\n  exec sleep 30\nfi\nexit 1\n"
+	if err := os.WriteFile(dockerPath, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	err := validateImagePlatform(ctx, "example.invalid/image")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("manifest cancellation was not returned: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("manifest process exceeded cancellation bound: %s", elapsed)
+	}
+	if _, err := os.Stat(markerPath); err != nil {
+		t.Fatalf("manifest process did not start: %v", err)
+	}
+}
+
+func TestValidateImagePlatformStillRejectsUnsupportedManifest(t *testing.T) {
+	unsupportedArch := "arm64"
+	if runtime.GOARCH == unsupportedArch {
+		unsupportedArch = "amd64"
+	}
+	binDir := t.TempDir()
+	dockerPath := filepath.Join(binDir, "docker")
+	script := "#!/bin/sh\nif [ \"$1\" = manifest ] && [ \"$2\" = inspect ]; then\n  printf '%s\\n' '{\"schemaVersion\":2,\"architecture\":\"" + unsupportedArch + "\",\"os\":\"" + runtime.GOOS + "\"}'\n  exit 0\nfi\nexit 1\n"
+	if err := os.WriteFile(dockerPath, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if err := validateImagePlatform(context.Background(), "example.invalid/image"); err == nil || !strings.Contains(err.Error(), "does not support host platform") {
+		t.Fatalf("unsupported manifest was not rejected: %v", err)
+	}
+}
+
+func TestDockerRunFailureDoesNotExposeCommandOrDaemonOutput(t *testing.T) {
+	const secret = "sentinel-rank-zero-secret"
+	binDir := t.TempDir()
+	dockerPath := filepath.Join(binDir, "docker")
+	script := `#!/bin/sh
+if [ "$1" = "run" ]; then
+  printf '%s\n' 'daemon echoed sentinel-rank-zero-secret' >&2
+  exit 1
+fi
+exit 1
+`
+	if err := os.WriteFile(dockerPath, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	_, err := runContainer(ContainerRequest{
+		Image: "example.invalid/image", Name: "safe-failure", Ports: map[string]string{},
+		Args: []string{"--api-key=" + secret},
+	})
+	if err == nil {
+		t.Fatal("expected docker run failure")
+	}
+	if strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), "--api-key") {
+		t.Fatalf("loggable launch error exposed rank-0 command or daemon output: %v", err)
+	}
+}
+
+func TestContainerInventoryScopesAndRedaction(t *testing.T) {
+	binDir := t.TempDir()
+	dockerPath := filepath.Join(binDir, "docker")
+	script := `#!/bin/sh
+printf '%s\n' '{"ID":"managed123456","Names":"yokai-managed","Image":"safe/image","Status":"Up 2 minutes","Ports":"","CreatedAt":"2026-08-27 10:00:00 +0000 UTC","RunningFor":"2 minutes","Labels":"io.yokai.managed=true,io.yokai.ownership=managed","Env":"API_KEY=managed-secret"}'
+printf '%s\n' '{"ID":"external12345","Names":"external-service","Image":"external/image","Status":"Exited (0) 1 minute ago","Ports":"","CreatedAt":"2026-08-27 10:00:00 +0000 UTC","RunningFor":"1 minute","Labels":"api_key=sentinel-secret,io.yokai.api_key=sentinel-secret,io.yokai.service.port=30000","Env":"API_KEY=sentinel-secret"}'
+`
+	if err := os.WriteFile(dockerPath, []byte(script), 0700); err != nil {
+		t.Fatalf("write fake docker: %v", err)
+	}
+	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
+
+	managed, err := listContainersScope(InventoryScopeManaged)
+	if err != nil {
+		t.Fatalf("managed inventory: %v", err)
+	}
+	if len(managed) != 1 || managed[0].Ownership != OwnershipManaged {
+		t.Fatalf("unexpected managed inventory: %#v", managed)
+	}
+	all, err := listContainersScope(InventoryScopeAll)
+	if err != nil {
+		t.Fatalf("all inventory: %v", err)
+	}
+	if len(all) != 2 || all[1].Status != "stopped" || all[1].Ownership != OwnershipObserved {
+		t.Fatalf("unexpected all inventory: %#v", all)
+	}
+	data, err := json.Marshal(all)
+	if err != nil {
+		t.Fatalf("marshal inventory: %v", err)
+	}
+	lower := strings.ToLower(string(data))
+	for _, forbidden := range []string{"api_key", "sentinel-secret", "\"env\""} {
+		if strings.Contains(lower, forbidden) {
+			t.Fatalf("all-scope inventory exposed %q: %s", forbidden, data)
+		}
+	}
+}
+
+func TestRuntimePatchLabelIsSafeInventoryProvenance(t *testing.T) {
+	labels := sanitizeInventoryLabels(map[string]string{
+		LabelRuntimePatch: bkc.GLM53FlashRuntimePatchSetLabel(),
+		"api_key":         "must-not-survive",
+	})
+	if labels[LabelRuntimePatch] != bkc.GLM53FlashRuntimePatchSetLabel() || len(labels) != 1 {
+		t.Fatalf("runtime patch provenance was not safely filtered: %#v", labels)
+	}
+}
 
 func TestSanitizeName(t *testing.T) {
 	t.Parallel()
@@ -122,6 +498,11 @@ func TestParseStatus(t *testing.T) {
 			name:         "restarting",
 			dockerStatus: "Restarting (1) 30 seconds ago",
 			expected:     "restarting",
+		},
+		{
+			name:         "dead",
+			dockerStatus: "Dead",
+			expected:     "dead",
 		},
 		{
 			name:         "unknown status",
@@ -288,6 +669,9 @@ sglang:time_to_first_token_seconds_count{model_name="Qwen3.8-27B"} 10
 	}
 	if !metrics.HasTTFT || metrics.TTFTBuckets["0.5"] != 10 || metrics.TTFTCount != 10 {
 		t.Fatalf("unexpected TTFT histogram: %#v", metrics)
+	}
+	if !metrics.HasSGLangNativeMetric || metrics.HasVLLMNativeMetric {
+		t.Fatalf("unexpected native metric family detection: %#v", metrics)
 	}
 }
 

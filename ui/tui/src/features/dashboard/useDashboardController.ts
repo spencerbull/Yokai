@@ -96,6 +96,9 @@ export function useDashboardController(active: boolean, terminalWidth: number, t
 
   return {
     ...fleet,
+    showNotice(next: DashboardNotice) {
+      setNotice(next)
+    },
     aiServices,
     confirm,
     currentOverviewServices,

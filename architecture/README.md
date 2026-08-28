@@ -13,6 +13,7 @@ This directory contains multi-level architecture documentation for yokai, a TUI 
 | L5 | [TUI Screen Map](05-tui-screen-map.md) | View hierarchy, navigation state machine, keybinds |
 | L6 | [Agent API](06-agent-api.md) | REST API contract, request/response schemas, SSE streaming |
 | L7 | [Daemon UI API](07-daemon-ui-api.md) | UI-neutral daemon contract for the OpenTUI frontend and future clients |
+| L8 | [Multi-Device Deployments](08-multi-device-deployments.md) | Atomic two-device deployment state, validation, ownership, and rollback |
 
 ## How to Read
 
@@ -23,5 +24,6 @@ This directory contains multi-level architecture documentation for yokai, a TUI 
 - **L5** maps every TUI screen and how users navigate between them
 - **L6** is the API reference for the agent service
 - **L7** defines the daemon-facing API used by the new OpenTUI frontend and any future UI
+- **L8** defines the additive coordinated-deployment transaction and its secret/ownership boundaries
 
 All diagrams are rendered in markdown using ASCII art — no external tools required.

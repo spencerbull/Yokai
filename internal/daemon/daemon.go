@@ -14,18 +14,22 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/spencerbull/yokai/internal/bkc"
 	"github.com/spencerbull/yokai/internal/config"
+	"github.com/spencerbull/yokai/internal/deployments"
 )
 
 // Daemon is the local background service that maintains SSH tunnels,
 // polls agents for metrics, and exposes a REST API for the TUI.
 type Daemon struct {
-	cfg        *config.Config
-	tunnels    *TunnelPool
-	aggregator *Aggregator
-	version    string
-	mu         sync.RWMutex
-	server     *http.Server
+	cfg              *config.Config
+	tunnels          *TunnelPool
+	aggregator       *Aggregator
+	version          string
+	mu               sync.RWMutex
+	server           *http.Server
+	deploymentStore  *deployments.Store
+	deploymentEngine *deployments.Engine
 }
 
 // Run starts the daemon and blocks until interrupted.
@@ -44,12 +48,41 @@ func Run(version string) error {
 		cfg:     cfg,
 		version: version,
 	}
+	deploymentPath, err := deploymentsPath()
+	if err != nil {
+		return fmt.Errorf("resolve deployments store: %w", err)
+	}
+	d.deploymentStore, err = deployments.OpenStore(deploymentPath)
+	if err != nil {
+		return fmt.Errorf("loading deployments store: %w", err)
+	}
 
 	d.tunnels = NewTunnelPool(cfg)
 	d.aggregator = NewAggregator(cfg, d.tunnels)
+	d.deploymentEngine = deployments.NewEngine(d.deploymentStore, &daemonDeploymentOperations{daemon: d})
 
 	// Start SSH tunnels for all devices
 	d.tunnels.ConnectAll()
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+		defer cancel()
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		var lastErr error
+		for {
+			if err := d.deploymentEngine.Reconcile(ctx); err == nil {
+				return
+			} else {
+				lastErr = err
+			}
+			select {
+			case <-ctx.Done():
+				log.Printf("deployment reconciliation incomplete: %v", lastErr)
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
 
 	// Start metrics polling
 	d.aggregator.Start()
@@ -76,6 +109,13 @@ func Run(version string) error {
 	mux.HandleFunc("GET /metrics", d.handleMetrics)
 	mux.HandleFunc("GET /metrics/{deviceID}", d.handleDeviceMetrics)
 	mux.HandleFunc("POST /deploy", d.handleDeploy)
+	mux.HandleFunc("POST /deployments", d.handleCreateDeployment)
+	mux.HandleFunc("GET /deployments", d.handleListDeployments)
+	mux.HandleFunc("GET /deployments/{deploymentID}", d.handleGetDeployment)
+	mux.HandleFunc("POST /deployments/{deploymentID}/test", d.handleTestDeployment)
+	mux.HandleFunc("POST /deployments/{deploymentID}/stop", d.handleStopDeployment)
+	mux.HandleFunc("POST /deployments/{deploymentID}/start", d.handleStartDeployment)
+	mux.HandleFunc("POST /deployments/{deploymentID}/rollback", d.handleRollbackDeployment)
 	mux.HandleFunc("POST /containers/{deviceID}/{containerID}/stop", d.handleStopContainer)
 	mux.HandleFunc("DELETE /containers/{deviceID}/{containerID}/remove", d.handleRemoveContainer)
 	mux.HandleFunc("POST /containers/{deviceID}/{containerID}/restart", d.handleRestartContainer)
@@ -162,6 +202,26 @@ func (d *Daemon) handleDeploy(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	if req.BKCID != "" {
+		cfg, ok := bkc.LookupID(req.BKCID)
+		if !ok {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown_bkc", "message": "unknown BKC id"})
+			return
+		}
+		if cfg.MultiDevice != nil {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "multi_device_required", "message": "multi-device BKCs must use POST /deployments"})
+			return
+		}
+	}
+	for _, cfg := range bkc.Catalog() {
+		if cfg.MultiDevice == nil {
+			continue
+		}
+		if req.Image == cfg.Image || (strings.EqualFold(req.ServiceType, string(cfg.Workload)) && strings.EqualFold(req.Model, cfg.ModelID)) {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "multi_device_required", "message": "requests matching a multi-device BKC must use POST /deployments"})
+			return
+		}
+	}
 
 	result, err := d.aggregator.Deploy(req)
 	if err != nil {
@@ -186,6 +246,10 @@ func (d *Daemon) handleDeploy(w http.ResponseWriter, r *http.Request) {
 func (d *Daemon) handleStopContainer(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.PathValue("deviceID")
 	containerID := r.PathValue("containerID")
+	if err := d.guardGroupedMemberMutation(deviceID, containerID); err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "grouped_deployment_required", "message": err.Error()})
+		return
+	}
 
 	err := d.aggregator.StopContainer(deviceID, containerID)
 	if err != nil {
@@ -202,6 +266,10 @@ func (d *Daemon) handleStopContainer(w http.ResponseWriter, r *http.Request) {
 func (d *Daemon) handleRemoveContainer(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.PathValue("deviceID")
 	containerID := r.PathValue("containerID")
+	if err := d.guardGroupedMemberMutation(deviceID, containerID); err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "grouped_deployment_required", "message": err.Error()})
+		return
+	}
 
 	err := d.aggregator.RemoveContainer(deviceID, containerID)
 	if err != nil {
@@ -230,6 +298,10 @@ func (d *Daemon) handleRemoveContainer(w http.ResponseWriter, r *http.Request) {
 func (d *Daemon) handleRestartContainer(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.PathValue("deviceID")
 	containerID := r.PathValue("containerID")
+	if err := d.guardGroupedMemberMutation(deviceID, containerID); err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "grouped_deployment_required", "message": err.Error()})
+		return
+	}
 
 	err := d.aggregator.RestartContainer(deviceID, containerID)
 	if err != nil {

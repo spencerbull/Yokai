@@ -76,6 +76,7 @@ type Config struct {
 	Description string
 	Source      string
 	Notes       []string
+	MultiDevice *MultiDeviceDeployment
 
 	// Device-awareness fields.
 	TargetDevices   []string // preferred/validated GPUs (see Device* constants)
@@ -85,12 +86,60 @@ type Config struct {
 	Arch            string   // see Arch* constants (primary architecture this targets)
 }
 
+// MultiDeviceDeployment describes an additive, coordinated deployment recipe.
+// It is intentionally separate from MinGPUCount: MinGPUCount remains the
+// per-device resource gate used by legacy single-device selection.
+type MultiDeviceDeployment struct {
+	WorldSize            int                       `json:"world_size"`
+	TensorParallelSize   int                       `json:"tp_size"`
+	Backend              string                    `json:"backend"`
+	GPUsPerNode          int                       `json:"gpus_per_node"`
+	RendezvousPort       int                       `json:"rendezvous_port"`
+	ServicePort          int                       `json:"service_port"`
+	ModelRevision        string                    `json:"model_revision"`
+	RuntimePatches       []MultiDeviceRuntimePatch `json:"runtime_patches,omitempty"`
+	Roles                []MultiDeviceRole         `json:"roles"`
+	RequiredCapabilities []string                  `json:"required_capabilities"`
+}
+
+// MultiDeviceRuntimePatch records immutable source provenance for a narrowly
+// gated in-container bootstrap. It is catalog metadata, never user-supplied
+// executable content.
+type MultiDeviceRuntimePatch struct {
+	Label           string `json:"label"`
+	SourcePath      string `json:"source_path"`
+	OriginalLine    string `json:"original_line"`
+	ReplacementLine string `json:"replacement_line"`
+	OriginalSHA256  string `json:"original_sha256"`
+	PatchedSHA256   string `json:"patched_sha256"`
+}
+
+// MultiDeviceRole is a stable logical role in a coordinated deployment.
+type MultiDeviceRole struct {
+	Name string `json:"name"`
+	Rank int    `json:"rank"`
+	API  bool   `json:"api"`
+}
+
 // Catalog returns a copy of the full BKC catalog. Safe to mutate the returned
 // slice.
 func Catalog() []Config {
 	out := make([]Config, len(catalog))
-	copy(out, catalog)
+	for index := range catalog {
+		out[index] = cloneMultiDeviceConfig(catalog[index])
+	}
 	return out
+}
+
+// LookupID returns the BKC entry with the exact stable ID.
+func LookupID(id string) (Config, bool) {
+	id = strings.TrimSpace(id)
+	for _, cfg := range catalog {
+		if cfg.ID == id {
+			return cloneMultiDeviceConfig(cfg), true
+		}
+	}
+	return Config{}, false
 }
 
 // Lookup returns the first BKC entry matching the given workload and model id,
@@ -103,7 +152,7 @@ func Lookup(workload Workload, modelID string) (Config, bool) {
 			continue
 		}
 		if strings.EqualFold(cfg.ModelID, modelID) {
-			return cfg, true
+			return cloneMultiDeviceConfig(cfg), true
 		}
 	}
 	return Config{}, false
@@ -123,10 +172,39 @@ func LookupAll(workload Workload, modelID string) []Config {
 			continue
 		}
 		if strings.EqualFold(cfg.ModelID, modelID) {
-			out = append(out, cfg)
+			out = append(out, cloneMultiDeviceConfig(cfg))
 		}
 	}
 	return out
+}
+
+func cloneMultiDeviceConfig(cfg Config) Config {
+	cfg.Env = cloneStringMap(cfg.Env)
+	cfg.Volumes = cloneStringMap(cfg.Volumes)
+	cfg.Plugins = append([]string(nil), cfg.Plugins...)
+	cfg.TargetDevices = append([]string(nil), cfg.TargetDevices...)
+	cfg.Notes = append([]string(nil), cfg.Notes...)
+	cfg.Runtime.Ulimits = cloneStringMap(cfg.Runtime.Ulimits)
+	if cfg.MultiDevice == nil {
+		return cfg
+	}
+	metadata := *cfg.MultiDevice
+	metadata.RuntimePatches = append([]MultiDeviceRuntimePatch(nil), cfg.MultiDevice.RuntimePatches...)
+	metadata.Roles = append([]MultiDeviceRole(nil), cfg.MultiDevice.Roles...)
+	metadata.RequiredCapabilities = append([]string(nil), cfg.MultiDevice.RequiredCapabilities...)
+	cfg.MultiDevice = &metadata
+	return cfg
+}
+
+func cloneStringMap(src map[string]string) map[string]string {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[string]string, len(src))
+	for key, value := range src {
+		dst[key] = value
+	}
+	return dst
 }
 
 // LookupForDevice returns the BKC that best fits the provided device profile,
@@ -240,7 +318,7 @@ func LookupBest(workload Workload, modelID string) (Config, MatchType, bool) {
 		return matches[i].cfg.Name < matches[j].cfg.Name
 	})
 
-	return matches[0].cfg, MatchSuggested, true
+	return cloneMultiDeviceConfig(matches[0].cfg), MatchSuggested, true
 }
 
 var splitNonAlphaNum = regexp.MustCompile(`[^a-z0-9]+`)
