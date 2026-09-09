@@ -61,7 +61,7 @@ export function resolveTheme(input: {
   if (input.omarchyTheme) {
     return {
       preference: input.preference,
-      resolvedMode: themeModeFromHex(input.omarchyTheme.background),
+      resolvedMode: themeModeFromHex(input.omarchyTheme.background) ?? "dark",
       source: "omarchy" as ThemeSource,
       themeName: input.omarchyTheme.name,
       colors: colorsFromOmarchy(input.omarchyTheme),
@@ -135,10 +135,10 @@ function blendHex(baseHex: string, mixHex: string, ratio: number) {
   return `#${blended.map((value) => value.toString(16).padStart(2, "0")).join("")}`
 }
 
-function themeModeFromHex(hex: string): ThemeMode {
+export function themeModeFromHex(hex: string): ThemeMode | null {
   const channels = parseHex(hex)
   if (!channels) {
-    return "dark"
+    return null
   }
 
   const [red, green, blue] = channels

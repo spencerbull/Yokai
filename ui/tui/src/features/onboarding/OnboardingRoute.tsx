@@ -14,7 +14,7 @@ export function OnboardingRoute(props: OnboardingRouteProps) {
   const wide = props.contentWidth >= 96
 
   return (
-    <box flexDirection="column" gap={1} flexGrow={1} justifyContent="center">
+    <box width="100%" height="100%" backgroundColor={theme.colors.background} flexDirection="column" gap={1} flexGrow={1} justifyContent="center">
       {props.controller.notice ? <Banner color={noticeColor(theme, props.controller.notice.level)}>{props.controller.notice.message}</Banner> : null}
       {props.controller.error ? <Banner color={theme.colors.warning}>{props.controller.error}</Banner> : null}
       {props.controller.pendingAction ? <Banner color={theme.colors.accent}>Running {props.controller.pendingAction}...</Banner> : null}

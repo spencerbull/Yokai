@@ -53,6 +53,7 @@ export function TailscaleImportModal(props: TailscaleImportModalProps) {
               width={58}
               backgroundColor={theme.colors.panelMuted}
               textColor={theme.colors.text}
+              focusedTextColor={theme.colors.text}
               focusedBackgroundColor={theme.colors.panelMuted}
               cursorColor={theme.colors.accent}
               placeholder="Filter hostname, DNS, IP, OS, or tag"

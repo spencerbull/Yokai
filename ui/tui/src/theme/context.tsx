@@ -5,6 +5,7 @@ import { useRenderer } from "@opentui/react"
 import { patchSettings, getSettings } from "../services/daemon-client"
 import { loadOmarchyTheme, watchOmarchyTheme } from "./omarchy"
 import { normalizeThemePreference, resolveTheme } from "./resolve"
+import { watchTerminalTheme } from "./terminal"
 import type { ThemeMode, ThemePreference, ThemeState } from "./types"
 
 const ThemeContext = createContext<ThemeState | null>(null)
@@ -17,14 +18,7 @@ export function ThemeProvider(props: { children: ReactNode }) {
   const [isSaving, setIsSaving] = useState(false)
   const [error, setError] = useState<string>()
 
-  useEffect(() => {
-    const handler = (mode: ThemeMode) => setTerminalMode(mode)
-    renderer.on("theme_mode", handler)
-
-    return () => {
-      renderer.off("theme_mode", handler)
-    }
-  }, [renderer])
+  useEffect(() => watchTerminalTheme(renderer, setTerminalMode), [renderer])
 
   useEffect(() => {
     let cancelled = false
@@ -51,7 +45,7 @@ export function ThemeProvider(props: { children: ReactNode }) {
 
   useEffect(() => {
     let cancelled = false
-    let stopWatching = async () => undefined
+    let stopWatching: () => Promise<void> = async () => undefined
 
     const load = async () => {
       const next = await loadOmarchyTheme()
@@ -81,6 +75,10 @@ export function ThemeProvider(props: { children: ReactNode }) {
     terminalMode,
     omarchyTheme,
   })
+
+  useEffect(() => {
+    renderer.setBackgroundColor(resolved.colors.background)
+  }, [renderer, resolved.colors.background])
 
   const value: ThemeState = {
     preference,
