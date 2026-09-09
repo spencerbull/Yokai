@@ -156,6 +156,7 @@ function HFTokenModal(props: { controller: SettingsController }) {
           width={50}
           backgroundColor={theme.colors.panelMuted}
           textColor={theme.colors.text}
+          focusedTextColor={theme.colors.text}
           focusedBackgroundColor={theme.colors.panelMuted}
           cursorColor={theme.colors.accent}
           placeholder="hf_..."
@@ -179,16 +180,16 @@ function DefaultsModal(props: { controller: SettingsController }) {
         <text fg={theme.colors.textSubtle}>Tab cycles fields. Enter saves. Esc closes.</text>
 
         <Field label="Default VLLM image" active={editor.field === "vllm"}>
-          <input value={editor.values.vllm} onInput={(value) => props.controller.saveDefaultsValue("vllm", value)} focused={editor.field === "vllm"} width={52} backgroundColor={theme.colors.panelMuted} textColor={theme.colors.text} focusedBackgroundColor={theme.colors.panelMuted} cursorColor={theme.colors.accent} placeholder="vllm/vllm-openai:latest" />
+          <input value={editor.values.vllm} onInput={(value) => props.controller.saveDefaultsValue("vllm", value)} focused={editor.field === "vllm"} width={52} backgroundColor={theme.colors.panelMuted} textColor={theme.colors.text} focusedTextColor={theme.colors.text} focusedBackgroundColor={theme.colors.panelMuted} cursorColor={theme.colors.accent} placeholder="vllm/vllm-openai:latest" />
         </Field>
         <Field label="Default SGLang image" active={editor.field === "sglang"}>
-          <input value={editor.values.sglang} onInput={(value) => props.controller.saveDefaultsValue("sglang", value)} focused={editor.field === "sglang"} width={52} backgroundColor={theme.colors.panelMuted} textColor={theme.colors.text} focusedBackgroundColor={theme.colors.panelMuted} cursorColor={theme.colors.accent} placeholder="lmsysorg/sglang:latest" />
+          <input value={editor.values.sglang} onInput={(value) => props.controller.saveDefaultsValue("sglang", value)} focused={editor.field === "sglang"} width={52} backgroundColor={theme.colors.panelMuted} textColor={theme.colors.text} focusedTextColor={theme.colors.text} focusedBackgroundColor={theme.colors.panelMuted} cursorColor={theme.colors.accent} placeholder="lmsysorg/sglang:latest" />
         </Field>
         <Field label="Default llama.cpp image" active={editor.field === "llama"}>
-          <input value={editor.values.llama} onInput={(value) => props.controller.saveDefaultsValue("llama", value)} focused={editor.field === "llama"} width={52} backgroundColor={theme.colors.panelMuted} textColor={theme.colors.text} focusedBackgroundColor={theme.colors.panelMuted} cursorColor={theme.colors.accent} placeholder="ghcr.io/ggml-org/llama.cpp:server-cuda" />
+          <input value={editor.values.llama} onInput={(value) => props.controller.saveDefaultsValue("llama", value)} focused={editor.field === "llama"} width={52} backgroundColor={theme.colors.panelMuted} textColor={theme.colors.text} focusedTextColor={theme.colors.text} focusedBackgroundColor={theme.colors.panelMuted} cursorColor={theme.colors.accent} placeholder="ghcr.io/ggml-org/llama.cpp:server-cuda" />
         </Field>
         <Field label="Default ComfyUI image" active={editor.field === "comfy"}>
-          <input value={editor.values.comfy} onInput={(value) => props.controller.saveDefaultsValue("comfy", value)} focused={editor.field === "comfy"} width={52} backgroundColor={theme.colors.panelMuted} textColor={theme.colors.text} focusedBackgroundColor={theme.colors.panelMuted} cursorColor={theme.colors.accent} placeholder="spencerbull/yokai-comfyui:latest" />
+          <input value={editor.values.comfy} onInput={(value) => props.controller.saveDefaultsValue("comfy", value)} focused={editor.field === "comfy"} width={52} backgroundColor={theme.colors.panelMuted} textColor={theme.colors.text} focusedTextColor={theme.colors.text} focusedBackgroundColor={theme.colors.panelMuted} cursorColor={theme.colors.accent} placeholder="spencerbull/yokai-comfyui:latest" />
         </Field>
       </box>
     </box>

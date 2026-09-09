@@ -153,7 +153,7 @@ function ImageStep(props: { controller: DeployController }) {
     <box flexDirection="column" gap={1}>
       <text fg={theme.colors.textMuted}>Enter the Docker image or pick a recent/default one.</text>
       <Field label="Docker image" active>
-        <input value={props.controller.form.image} onInput={(value) => props.controller.setValue("image", value)} focused width={52} backgroundColor={theme.colors.panel} textColor={theme.colors.text} focusedBackgroundColor={theme.colors.panel} cursorColor={theme.colors.accent} placeholder="vllm/vllm-openai:latest" />
+        <input value={props.controller.form.image} onInput={(value) => props.controller.setValue("image", value)} focused width={52} backgroundColor={theme.colors.panel} textColor={theme.colors.text} focusedTextColor={theme.colors.text} focusedBackgroundColor={theme.colors.panel} cursorColor={theme.colors.accent} placeholder="vllm/vllm-openai:latest" />
       </Field>
       <text fg={theme.colors.textSubtle}>Recent images:</text>
       {history.map((image) => (
@@ -175,7 +175,7 @@ function ModelStep(props: { controller: DeployController }) {
     <box flexDirection="column" gap={1}>
       <text fg={theme.colors.textMuted}>Enter a Hugging Face model ID. Matching models are searched through the daemon.</text>
       <Field label="Model ID" active>
-        <input value={props.controller.form.model} onInput={(value) => props.controller.setValue("model", value)} focused width={52} backgroundColor={theme.colors.panel} textColor={theme.colors.text} focusedBackgroundColor={theme.colors.panel} cursorColor={theme.colors.accent} placeholder="meta-llama/Llama-3.1-8B-Instruct" />
+        <input value={props.controller.form.model} onInput={(value) => props.controller.setValue("model", value)} focused width={52} backgroundColor={theme.colors.panel} textColor={theme.colors.text} focusedTextColor={theme.colors.text} focusedBackgroundColor={theme.colors.panel} cursorColor={theme.colors.accent} placeholder="meta-llama/Llama-3.1-8B-Instruct" />
       </Field>
       {props.controller.searchError ? <text fg={theme.colors.warning}>{props.controller.searchError}</text> : null}
       {props.controller.modelResults.slice(0, 4).map((model, index) => (
@@ -255,7 +255,7 @@ function ConfigStep(props: { controller: DeployController }) {
   return (
     <box flexDirection="column" gap={1}>
       <Field label="Port" active={props.controller.configField === "port"}>
-        <input value={props.controller.form.port} onInput={(value) => props.controller.setValue("port", value)} focused={props.controller.configField === "port"} width={12} backgroundColor={theme.colors.panel} textColor={theme.colors.text} focusedBackgroundColor={theme.colors.panel} cursorColor={theme.colors.accent} placeholder="8000" />
+        <input value={props.controller.form.port} onInput={(value) => props.controller.setValue("port", value)} focused={props.controller.configField === "port"} width={12} backgroundColor={theme.colors.panel} textColor={theme.colors.text} focusedTextColor={theme.colors.text} focusedBackgroundColor={theme.colors.panel} cursorColor={theme.colors.accent} placeholder="8000" />
       </Field>
       <Field label="Extra args" active={props.controller.configField === "extraArgs"}>
         <box minHeight={6} paddingY={0} flexDirection="column" justifyContent="center">
@@ -306,39 +306,39 @@ function ConfigStep(props: { controller: DeployController }) {
           <text fg={theme.colors.textSubtle}>The pinned recipe is immutable. These values go to POST /deployments; legacy POST /deploy is disabled for this BKC.</text>
           <box flexDirection="row" gap={1}>
             <Field label="Head device ID" active={props.controller.configField === "headDevice"}>
-              <input value={props.controller.form.headDeviceId} onInput={(value) => props.controller.setValue("headDeviceId", value)} focused={props.controller.configField === "headDevice"} width={22} backgroundColor={theme.colors.panel} textColor={theme.colors.text} focusedBackgroundColor={theme.colors.panel} cursorColor={theme.colors.accent} placeholder="spark-a" />
+              <input value={props.controller.form.headDeviceId} onInput={(value) => props.controller.setValue("headDeviceId", value)} focused={props.controller.configField === "headDevice"} width={22} backgroundColor={theme.colors.panel} textColor={theme.colors.text} focusedTextColor={theme.colors.text} focusedBackgroundColor={theme.colors.panel} cursorColor={theme.colors.accent} placeholder="spark-a" />
             </Field>
             <Field label="Head fabric IP" active={props.controller.configField === "headFabric"}>
-              <input value={props.controller.form.headFabricAddress} onInput={(value) => props.controller.setValue("headFabricAddress", value)} focused={props.controller.configField === "headFabric"} width={20} backgroundColor={theme.colors.panel} textColor={theme.colors.text} focusedBackgroundColor={theme.colors.panel} cursorColor={theme.colors.accent} placeholder="192.168.201.1" />
+              <input value={props.controller.form.headFabricAddress} onInput={(value) => props.controller.setValue("headFabricAddress", value)} focused={props.controller.configField === "headFabric"} width={20} backgroundColor={theme.colors.panel} textColor={theme.colors.text} focusedTextColor={theme.colors.text} focusedBackgroundColor={theme.colors.panel} cursorColor={theme.colors.accent} placeholder="192.168.201.1" />
             </Field>
           </box>
           <Field label="Head client/monitor IP (Tailnet or routable IP)" active={props.controller.configField === "headService"}>
-            <input value={props.controller.form.headServiceAddress} onInput={(value) => props.controller.setValue("headServiceAddress", value)} focused={props.controller.configField === "headService"} width={28} backgroundColor={theme.colors.panel} textColor={theme.colors.text} focusedBackgroundColor={theme.colors.panel} cursorColor={theme.colors.accent} placeholder="100.x.y.z" />
+            <input value={props.controller.form.headServiceAddress} onInput={(value) => props.controller.setValue("headServiceAddress", value)} focused={props.controller.configField === "headService"} width={28} backgroundColor={theme.colors.panel} textColor={theme.colors.text} focusedTextColor={theme.colors.text} focusedBackgroundColor={theme.colors.panel} cursorColor={theme.colors.accent} placeholder="100.x.y.z" />
           </Field>
 		  <Field label="Observed old head container (exact name or >=12-char ID prefix)" active={props.controller.configField === "headObserved"}>
-			<input value={props.controller.form.headObservedContainerId} onInput={(value) => props.controller.setValue("headObservedContainerId", value)} focused={props.controller.configField === "headObserved"} width={52} backgroundColor={theme.colors.panel} textColor={theme.colors.text} focusedBackgroundColor={theme.colors.panel} cursorColor={theme.colors.accent} placeholder="deepseek-head or 12+ ID chars" />
+			<input value={props.controller.form.headObservedContainerId} onInput={(value) => props.controller.setValue("headObservedContainerId", value)} focused={props.controller.configField === "headObserved"} width={52} backgroundColor={theme.colors.panel} textColor={theme.colors.text} focusedTextColor={theme.colors.text} focusedBackgroundColor={theme.colors.panel} cursorColor={theme.colors.accent} placeholder="deepseek-head or 12+ ID chars" />
 		  </Field>
           <text fg={theme.colors.textSubtle}>Rank 0 binds only this explicit address on port {props.controller.activeBKC.multi_device.service_port}; rendezvous stays on the private head fabric IP:{props.controller.activeBKC.multi_device.rendezvous_port}.</text>
           <box flexDirection="row" gap={1}>
             <Field label="Worker device ID" active={props.controller.configField === "workerDevice"}>
-              <input value={props.controller.form.workerDeviceId} onInput={(value) => props.controller.setValue("workerDeviceId", value)} focused={props.controller.configField === "workerDevice"} width={22} backgroundColor={theme.colors.panel} textColor={theme.colors.text} focusedBackgroundColor={theme.colors.panel} cursorColor={theme.colors.accent} placeholder="spark-b" />
+              <input value={props.controller.form.workerDeviceId} onInput={(value) => props.controller.setValue("workerDeviceId", value)} focused={props.controller.configField === "workerDevice"} width={22} backgroundColor={theme.colors.panel} textColor={theme.colors.text} focusedTextColor={theme.colors.text} focusedBackgroundColor={theme.colors.panel} cursorColor={theme.colors.accent} placeholder="spark-b" />
             </Field>
             <Field label="Worker fabric IP" active={props.controller.configField === "workerFabric"}>
-              <input value={props.controller.form.workerFabricAddress} onInput={(value) => props.controller.setValue("workerFabricAddress", value)} focused={props.controller.configField === "workerFabric"} width={20} backgroundColor={theme.colors.panel} textColor={theme.colors.text} focusedBackgroundColor={theme.colors.panel} cursorColor={theme.colors.accent} placeholder="192.168.201.2" />
+              <input value={props.controller.form.workerFabricAddress} onInput={(value) => props.controller.setValue("workerFabricAddress", value)} focused={props.controller.configField === "workerFabric"} width={20} backgroundColor={theme.colors.panel} textColor={theme.colors.text} focusedTextColor={theme.colors.text} focusedBackgroundColor={theme.colors.panel} cursorColor={theme.colors.accent} placeholder="192.168.201.2" />
             </Field>
           </box>
 		  <Field label="Observed old worker container (exact name or >=12-char ID prefix)" active={props.controller.configField === "workerObserved"}>
-			<input value={props.controller.form.workerObservedContainerId} onInput={(value) => props.controller.setValue("workerObservedContainerId", value)} focused={props.controller.configField === "workerObserved"} width={52} backgroundColor={theme.colors.panel} textColor={theme.colors.text} focusedBackgroundColor={theme.colors.panel} cursorColor={theme.colors.accent} placeholder="deepseek-worker or 12+ ID chars" />
+			<input value={props.controller.form.workerObservedContainerId} onInput={(value) => props.controller.setValue("workerObservedContainerId", value)} focused={props.controller.configField === "workerObserved"} width={52} backgroundColor={theme.colors.panel} textColor={theme.colors.text} focusedTextColor={theme.colors.text} focusedBackgroundColor={theme.colors.panel} cursorColor={theme.colors.accent} placeholder="deepseek-worker or 12+ ID chars" />
 		  </Field>
           <Field label="Idempotency key" active={props.controller.configField === "idempotencyKey"}>
-            <input value={props.controller.form.idempotencyKey} onInput={(value) => props.controller.setValue("idempotencyKey", value)} focused={props.controller.configField === "idempotencyKey"} width={44} backgroundColor={theme.colors.panel} textColor={theme.colors.text} focusedBackgroundColor={theme.colors.panel} cursorColor={theme.colors.accent} placeholder="glm53-canary-2026-08-27" />
+            <input value={props.controller.form.idempotencyKey} onInput={(value) => props.controller.setValue("idempotencyKey", value)} focused={props.controller.configField === "idempotencyKey"} width={44} backgroundColor={theme.colors.panel} textColor={theme.colors.text} focusedTextColor={theme.colors.text} focusedBackgroundColor={theme.colors.panel} cursorColor={theme.colors.accent} placeholder="glm53-canary-2026-08-27" />
           </Field>
           <Field label="Local model path (optional, same on both nodes)" active={props.controller.configField === "localModelPath"}>
-            <input value={props.controller.form.localModelPath} onInput={(value) => props.controller.setValue("localModelPath", value)} focused={props.controller.configField === "localModelPath"} width={52} backgroundColor={theme.colors.panel} textColor={theme.colors.text} focusedBackgroundColor={theme.colors.panel} cursorColor={theme.colors.accent} placeholder="/srv/models/glm53-snapshot" />
+            <input value={props.controller.form.localModelPath} onInput={(value) => props.controller.setValue("localModelPath", value)} focused={props.controller.configField === "localModelPath"} width={52} backgroundColor={theme.colors.panel} textColor={theme.colors.text} focusedTextColor={theme.colors.text} focusedBackgroundColor={theme.colors.panel} cursorColor={theme.colors.accent} placeholder="/srv/models/glm53-snapshot" />
           </Field>
           <text fg={theme.colors.textSubtle}>An explicit local path is mounted read-only at /models/yokai-deployment on both nodes. It must already exist on each device.</text>
 		  <Field label="Rank-0 SGLang API key (masked; omitted from Yokai store)" active={props.controller.configField === "apiKey"}>
-			<input value={props.controller.form.apiKey} onInput={(value) => props.controller.setValue("apiKey", value)} focused={props.controller.configField === "apiKey"} password width={52} backgroundColor={theme.colors.panel} textColor={theme.colors.text} focusedBackgroundColor={theme.colors.panel} cursorColor={theme.colors.accent} placeholder="Docker command retains original; required again for Start" />
+			<input value={props.controller.form.apiKey} onInput={(value) => props.controller.setValue("apiKey", value)} focused={props.controller.configField === "apiKey"} password width={52} backgroundColor={theme.colors.panel} textColor={theme.colors.text} focusedTextColor={theme.colors.text} focusedBackgroundColor={theme.colors.panel} cursorColor={theme.colors.accent} placeholder="Docker command retains original; required again for Start" />
 		  </Field>
         </box>
       ) : null}
@@ -349,10 +349,10 @@ function ConfigStep(props: { controller: DeployController }) {
           <text fg={theme.colors.textMuted}>Estimate `--gpu-memory-utilization` and related flags using `hf-mem` plus the selected device GPU VRAM.</text>
           <box flexDirection="row" gap={1}>
             <Field label="Context length" active={props.controller.configField === "contextLength"}>
-              <input value={helper.contextLength} onInput={(value) => props.controller.updateVLLMHelper("contextLength", value)} focused={props.controller.configField === "contextLength"} width={14} backgroundColor={theme.colors.panel} textColor={theme.colors.text} focusedBackgroundColor={theme.colors.panel} cursorColor={theme.colors.accent} placeholder="32768" />
+              <input value={helper.contextLength} onInput={(value) => props.controller.updateVLLMHelper("contextLength", value)} focused={props.controller.configField === "contextLength"} width={14} backgroundColor={theme.colors.panel} textColor={theme.colors.text} focusedTextColor={theme.colors.text} focusedBackgroundColor={theme.colors.panel} cursorColor={theme.colors.accent} placeholder="32768" />
             </Field>
             <Field label="Overhead (GB)" active={props.controller.configField === "overheadGB"}>
-              <input value={helper.overheadGB} onInput={(value) => props.controller.updateVLLMHelper("overheadGB", value)} focused={props.controller.configField === "overheadGB"} width={10} backgroundColor={theme.colors.panel} textColor={theme.colors.text} focusedBackgroundColor={theme.colors.panel} cursorColor={theme.colors.accent} placeholder="1.5" />
+              <input value={helper.overheadGB} onInput={(value) => props.controller.updateVLLMHelper("overheadGB", value)} focused={props.controller.configField === "overheadGB"} width={10} backgroundColor={theme.colors.panel} textColor={theme.colors.text} focusedTextColor={theme.colors.text} focusedBackgroundColor={theme.colors.panel} cursorColor={theme.colors.accent} placeholder="1.5" />
             </Field>
           </box>
           <box flexDirection="row" gap={1}>

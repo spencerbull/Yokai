@@ -46,13 +46,13 @@ export function DeviceEditorModal(props: DeviceEditorModalProps) {
         <text fg={theme.colors.textSubtle}>{authMethodHint(props.form.authMethod)}</text>
 
         <Field label="Label" active={props.field === "label"}>
-          <input value={props.form.label} onInput={(value) => props.onChange("label", value)} focused={props.field === "label"} width={46} backgroundColor={theme.colors.panelMuted} textColor={theme.colors.text} focusedBackgroundColor={theme.colors.panelMuted} cursorColor={theme.colors.accent} placeholder="darkporgs" />
+          <input value={props.form.label} onInput={(value) => props.onChange("label", value)} focused={props.field === "label"} width={46} backgroundColor={theme.colors.panelMuted} textColor={theme.colors.text} focusedTextColor={theme.colors.text} focusedBackgroundColor={theme.colors.panelMuted} cursorColor={theme.colors.accent} placeholder="darkporgs" />
         </Field>
         <Field label="Host / DNS / IP" active={props.field === "host"}>
-          <input value={props.form.host} onInput={(value) => props.onChange("host", value)} focused={props.field === "host"} width={46} backgroundColor={theme.colors.panelMuted} textColor={theme.colors.text} focusedBackgroundColor={theme.colors.panelMuted} cursorColor={theme.colors.accent} placeholder="gpu-box.tailnet.ts.net" />
+          <input value={props.form.host} onInput={(value) => props.onChange("host", value)} focused={props.field === "host"} width={46} backgroundColor={theme.colors.panelMuted} textColor={theme.colors.text} focusedTextColor={theme.colors.text} focusedBackgroundColor={theme.colors.panelMuted} cursorColor={theme.colors.accent} placeholder="gpu-box.tailnet.ts.net" />
         </Field>
         <Field label="SSH User" active={props.field === "sshUser"}>
-          <input value={props.form.sshUser} onInput={(value) => props.onChange("sshUser", value)} focused={props.field === "sshUser"} width={46} backgroundColor={theme.colors.panelMuted} textColor={theme.colors.text} focusedBackgroundColor={theme.colors.panelMuted} cursorColor={theme.colors.accent} placeholder="root" />
+          <input value={props.form.sshUser} onInput={(value) => props.onChange("sshUser", value)} focused={props.field === "sshUser"} width={46} backgroundColor={theme.colors.panelMuted} textColor={theme.colors.text} focusedTextColor={theme.colors.text} focusedBackgroundColor={theme.colors.panelMuted} cursorColor={theme.colors.accent} placeholder="root" />
         </Field>
         <Field label="Auth Method" active={props.field === "authMethod"}>
           <box flexDirection="row" gap={1}>
@@ -79,33 +79,33 @@ export function DeviceEditorModal(props: DeviceEditorModalProps) {
         {props.form.authMethod === "key" ? (
           <>
             <Field label="SSH Key" active={props.field === "sshKey"}>
-              <input value={props.form.sshKey} onInput={(value) => props.onChange("sshKey", value)} focused={props.field === "sshKey"} width={46} backgroundColor={theme.colors.panelMuted} textColor={theme.colors.text} focusedBackgroundColor={theme.colors.panelMuted} cursorColor={theme.colors.accent} placeholder="~/.ssh/id_ed25519" />
+              <input value={props.form.sshKey} onInput={(value) => props.onChange("sshKey", value)} focused={props.field === "sshKey"} width={46} backgroundColor={theme.colors.panelMuted} textColor={theme.colors.text} focusedTextColor={theme.colors.text} focusedBackgroundColor={theme.colors.panelMuted} cursorColor={theme.colors.accent} placeholder="~/.ssh/id_ed25519" />
             </Field>
             <Field label="Key Passphrase" active={props.field === "sshKeyPassphrase"}>
-              <input value={props.form.sshKeyPassphrase} onInput={(value) => props.onChange("sshKeyPassphrase", value)} focused={props.field === "sshKeyPassphrase"} password width={46} backgroundColor={theme.colors.panelMuted} textColor={theme.colors.text} focusedBackgroundColor={theme.colors.panelMuted} cursorColor={theme.colors.accent} placeholder="leave blank if key is not encrypted" />
+              <input value={props.form.sshKeyPassphrase} onInput={(value) => props.onChange("sshKeyPassphrase", value)} focused={props.field === "sshKeyPassphrase"} password width={46} backgroundColor={theme.colors.panelMuted} textColor={theme.colors.text} focusedTextColor={theme.colors.text} focusedBackgroundColor={theme.colors.panelMuted} cursorColor={theme.colors.accent} placeholder="leave blank if key is not encrypted" />
             </Field>
           </>
         ) : null}
 
         {props.form.authMethod === "password" ? (
           <Field label="SSH Password" active={props.field === "sshPassword"}>
-            <input value={props.form.sshPassword} onInput={(value) => props.onChange("sshPassword", value)} focused={props.field === "sshPassword"} password width={46} backgroundColor={theme.colors.panelMuted} textColor={theme.colors.text} focusedBackgroundColor={theme.colors.panelMuted} cursorColor={theme.colors.accent} placeholder="remote account password" />
+            <input value={props.form.sshPassword} onInput={(value) => props.onChange("sshPassword", value)} focused={props.field === "sshPassword"} password width={46} backgroundColor={theme.colors.panelMuted} textColor={theme.colors.text} focusedTextColor={theme.colors.text} focusedBackgroundColor={theme.colors.panelMuted} cursorColor={theme.colors.accent} placeholder="remote account password" />
           </Field>
         ) : null}
 
         <box flexDirection="row" gap={1}>
           <Field label="SSH Port" active={props.field === "sshPort"}>
-            <input value={props.form.sshPort} onInput={(value) => props.onChange("sshPort", value)} focused={props.field === "sshPort"} width={10} backgroundColor={theme.colors.panelMuted} textColor={theme.colors.text} focusedBackgroundColor={theme.colors.panelMuted} cursorColor={theme.colors.accent} placeholder="22" />
+            <input value={props.form.sshPort} onInput={(value) => props.onChange("sshPort", value)} focused={props.field === "sshPort"} width={10} backgroundColor={theme.colors.panelMuted} textColor={theme.colors.text} focusedTextColor={theme.colors.text} focusedBackgroundColor={theme.colors.panelMuted} cursorColor={theme.colors.accent} placeholder="22" />
           </Field>
           <Field label="Agent Port" active={props.field === "agentPort"}>
-            <input value={props.form.agentPort} onInput={(value) => props.onChange("agentPort", value)} focused={props.field === "agentPort"} width={10} backgroundColor={theme.colors.panelMuted} textColor={theme.colors.text} focusedBackgroundColor={theme.colors.panelMuted} cursorColor={theme.colors.accent} placeholder="7474" />
+            <input value={props.form.agentPort} onInput={(value) => props.onChange("agentPort", value)} focused={props.field === "agentPort"} width={10} backgroundColor={theme.colors.panelMuted} textColor={theme.colors.text} focusedTextColor={theme.colors.text} focusedBackgroundColor={theme.colors.panelMuted} cursorColor={theme.colors.accent} placeholder="7474" />
           </Field>
         </box>
         <Field label="Agent Token" active={props.field === "agentToken"}>
-          <input value={props.form.agentToken} onInput={(value) => props.onChange("agentToken", value)} focused={props.field === "agentToken"} width={46} backgroundColor={theme.colors.panelMuted} textColor={theme.colors.text} focusedBackgroundColor={theme.colors.panelMuted} cursorColor={theme.colors.accent} placeholder="optional for already bootstrapped devices" />
+          <input value={props.form.agentToken} onInput={(value) => props.onChange("agentToken", value)} focused={props.field === "agentToken"} width={46} backgroundColor={theme.colors.panelMuted} textColor={theme.colors.text} focusedTextColor={theme.colors.text} focusedBackgroundColor={theme.colors.panelMuted} cursorColor={theme.colors.accent} placeholder="optional for already bootstrapped devices" />
         </Field>
         <Field label="Tags" active={props.field === "tagsText"}>
-          <input value={props.form.tagsText} onInput={(value) => props.onChange("tagsText", value)} focused={props.field === "tagsText"} width={46} backgroundColor={theme.colors.panelMuted} textColor={theme.colors.text} focusedBackgroundColor={theme.colors.panelMuted} cursorColor={theme.colors.accent} placeholder="tag:ai-gpu, lab" />
+          <input value={props.form.tagsText} onInput={(value) => props.onChange("tagsText", value)} focused={props.field === "tagsText"} width={46} backgroundColor={theme.colors.panelMuted} textColor={theme.colors.text} focusedTextColor={theme.colors.text} focusedBackgroundColor={theme.colors.panelMuted} cursorColor={theme.colors.accent} placeholder="tag:ai-gpu, lab" />
         </Field>
 
         <text fg={theme.colors.textSubtle}>Tab cycles fields. Enter saves. Esc cancels.</text>

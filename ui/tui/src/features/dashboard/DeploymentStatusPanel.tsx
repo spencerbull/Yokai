@@ -22,7 +22,7 @@ export function DeploymentStatusPanel(props: { deployments: DeploymentRecord[] }
 			<text fg={stateColor}>{deployment.id} · {deployment.state} · g{deployment.generation} · {roles}</text>
 			{deployment.state === "stopped" ? (
 			  <box flexDirection="row" gap={1}>
-				<input value={apiKeys[deployment.id] ?? ""} onInput={(value) => setAPIKeys((current) => ({ ...current, [deployment.id]: value }))} password width={36} backgroundColor={theme.colors.panelMuted} textColor={theme.colors.text} cursorColor={theme.colors.accent} placeholder="original launch API key" />
+				<input value={apiKeys[deployment.id] ?? ""} onInput={(value) => setAPIKeys((current) => ({ ...current, [deployment.id]: value }))} password width={36} backgroundColor={theme.colors.panelMuted} textColor={theme.colors.text} focusedTextColor={theme.colors.text} cursorColor={theme.colors.accent} placeholder="original launch API key" />
 				<box border borderStyle="single" borderColor={theme.colors.borderStrong} paddingX={1} onMouseDown={() => void startStopped(deployment.id)}>
 				  <text fg={theme.colors.accent}>{pendingID === deployment.id ? "Starting..." : "Start group"}</text>
 				</box>
