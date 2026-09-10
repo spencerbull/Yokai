@@ -58,7 +58,13 @@ builds:
     goarch:
       - amd64
       - arm64
-    ldflags:
+    ignore:
+      # Match yokai: bun cannot build the TUI sidecar for Windows ARM64.
+      # Keep the binary count identical per platform so the shared archive
+      # does not trip goreleaser's different-binary-count validation.
+      - goos: windows
+        goarch: arm64
+    ldflags:    
       - -s -w -X main.version={{.Version}} -X main.buildTime={{.Date}}
 
 archives:
