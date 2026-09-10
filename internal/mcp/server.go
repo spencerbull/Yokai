@@ -33,6 +33,7 @@ const (
 	toolProposeRecipe  = "propose_recipe"
 	toolGetRecipe      = "get_recipe"
 	toolValidateRecipe = "validate_recipe"
+	toolVerifyRecipe   = "verify_recipe"
 )
 
 type rpcRequest struct {
@@ -216,6 +217,18 @@ func (s *Server) toolDefinitions() []toolDefinition {
 				"required": []string{"recipe_id", "device_id"},
 			},
 		},
+		{
+			Name:        toolVerifyRecipe,
+			Description: "Run a candidate recipe as a transient container on a live device, readiness-probe it, then tear it down. This is the on-hardware verification step; only a passing live probe promotes the candidate to validated (and doubles as real image-digest verification, since a fake digest fails at pull). Pass device_id from list_topology. The candidate must first pass the live hardware gate (VRAM/GPU count).",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"recipe_id": map[string]any{"type": "string", "description": "Candidate recipe id."},
+					"device_id": map[string]any{"type": "string", "description": "Device to run the transient verification trial on (live topology)."},
+				},
+				"required": []string{"recipe_id", "device_id"},
+			},
+		},
 	}
 }
 
@@ -302,6 +315,20 @@ func (s *Server) callTool(req rpcRequest) (string, error) {
 			return "", errors.New("device_id is required")
 		}
 		body, err := s.post(ctx, "/agent/recipe/"+urlQueryEscape(id)+"/validate?device_id="+urlQueryEscape(deviceID), nil)
+		if err != nil {
+			return "", err
+		}
+		return string(body), nil
+	case toolVerifyRecipe:
+		id, _ := params.Arguments["recipe_id"].(string)
+		deviceID, _ := params.Arguments["device_id"].(string)
+		if strings.TrimSpace(id) == "" {
+			return "", errors.New("recipe_id is required")
+		}
+		if strings.TrimSpace(deviceID) == "" {
+			return "", errors.New("device_id is required")
+		}
+		body, err := s.post(ctx, "/agent/recipe/"+urlQueryEscape(id)+"/verify?device_id="+urlQueryEscape(deviceID), nil)
 		if err != nil {
 			return "", err
 		}
