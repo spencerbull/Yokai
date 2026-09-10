@@ -40,6 +40,7 @@ type Device struct {
 	AgentToken          string   `json:"agent_token,omitempty"`
 	MonitoringInstalled bool     `json:"monitoring_installed,omitempty"`
 	GPUType             string   `json:"gpu_type,omitempty"` // "nvidia", "amd", "apple", ""
+	Control             bool     `json:"control,omitempty"`  // fleet brain/control-plane device (self-host guard anchor)
 	Tags                []string `json:"tags,omitempty"`
 }
 
