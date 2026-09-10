@@ -28,6 +28,7 @@ func testRecipeDaemon(t *testing.T) (*Daemon, *http.ServeMux) {
 	mux.HandleFunc("GET /agent/recipe/{recipeID}", d.handleAgentGetRecipe)
 	mux.HandleFunc("PATCH /agent/recipe/{recipeID}", d.handleAgentPatchRecipe)
 	mux.HandleFunc("POST /agent/recipe/{recipeID}/validate", d.handleAgentValidateRecipe)
+	mux.HandleFunc("POST /agent/recipe/{recipeID}/verify", d.handleAgentVerifyRecipe)
 	return d, mux
 }
 
@@ -162,4 +163,53 @@ func TestCandidateAppearsInCatalogWithTier(t *testing.T) {
 	if !sawCandidate {
 		t.Fatalf("expected catalog to include the candidate")
 	}
+}
+
+func TestVerifyRecipeRequiresDevice(t *testing.T) {
+	_, mux := testRecipeDaemon(t)
+	created := probeJSON(t, mux, "POST", "/agent/recipe", validProposedRecipe(), http.StatusCreated)
+	id, _ := created["id"].(string)
+
+	out := probeJSON(t, mux, "POST", "/agent/recipe/"+id+"/verify", nil, http.StatusBadRequest)
+	if out["error"] != "device_required" {
+		t.Fatalf("expected device_required, got %v", out["error"])
+	}
+}
+
+func TestVerifyRecipeNotFound(t *testing.T) {
+	_, mux := testRecipeDaemon(t)
+	out := probeJSON(t, mux, "POST", "/agent/recipe/nope/verify?device_id=dell-pro-max", nil, http.StatusNotFound)
+	if out["error"] != "not_found" {
+		t.Fatalf("expected not_found, got %v", out["error"])
+	}
+}
+
+// TestVerifyRecipeDeviceUnreachable exercises the live hardware gate: with no
+// reachable device, verify must refuse (and record evidence) rather than
+// promote. Promotion is evidence-only, so a candidate must never be validated
+// without a live probe passing.
+func TestVerifyRecipeDeviceUnreachable(t *testing.T) {
+	d, mux := testRecipeDaemon(t)
+	created := probeJSON(t, mux, "POST", "/agent/recipe", validProposedRecipe(), http.StatusCreated)
+	id, _ := created["id"].(string)
+
+	out := probeJSON(t, mux, "POST", "/agent/recipe/"+id+"/verify?device_id=dell-pro-max", nil, http.StatusUnprocessableEntity)
+	if out["error"] != "device_unreachable" {
+		t.Fatalf("expected device_unreachable, got %v", out["error"])
+	}
+
+	// The failed gate must be recorded as server-side evidence and the
+	// candidate must remain proposed (no promotion without a live probe).
+	rec := probeJSON(t, mux, "GET", "/agent/recipe/"+id, nil, http.StatusOK)
+	if rec["status"] != string(recipes.StatusProposed) {
+		t.Fatalf("candidate must stay proposed, got %v", rec["status"])
+	}
+	if rec["last_verify"] == nil {
+		t.Fatalf("expected last_verify evidence to be recorded")
+	}
+	lv := rec["last_verify"].(map[string]any)
+	if lv["ok"] != false || lv["device_id"] != "dell-pro-max" {
+		t.Fatalf("unexpected last_verify evidence: %v", lv)
+	}
+	_ = d
 }

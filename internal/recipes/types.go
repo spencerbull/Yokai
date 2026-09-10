@@ -96,19 +96,33 @@ func (c RecipeConfig) ToBKC() bkc.Config {
 	}
 }
 
+// RecipeVerify records the outcome of the most recent on-hardware trial. It
+// is written only by the daemon's verification path (server-recorded evidence),
+// never by a proposing agent. A passing trial is the sole path to validated.
+type RecipeVerify struct {
+	DeviceID      string `json:"device_id"`
+	At            string `json:"at"`
+	OK            bool   `json:"ok"`
+	ContainerID   string `json:"container_id,omitempty"`
+	ServedModelID string `json:"served_model_id,omitempty"`
+	MetricsReady  bool   `json:"metrics_ready"`
+	Message       string `json:"message,omitempty"`
+}
+
 // Recipe is a stored candidate recipe plus its metadata.
 type Recipe struct {
-	ID          string       `json:"id"`
-	Tier        Tier         `json:"tier"`
-	Status      Status       `json:"status"`
-	Config      RecipeConfig `json:"config"`
-	Provenance  Provenance   `json:"provenance"`
-	ValidatedOn []string     `json:"validated_on,omitempty"`
-	Fingerprint string       `json:"fingerprint"`
-	ProposedBy  string       `json:"proposed_by,omitempty"`
-	Supersedes  string       `json:"supersedes,omitempty"`
-	CreatedAt   string       `json:"created_at,omitempty"`
-	UpdatedAt   string       `json:"updated_at,omitempty"`
+	ID          string        `json:"id"`
+	Tier        Tier          `json:"tier"`
+	Status      Status        `json:"status"`
+	Config      RecipeConfig  `json:"config"`
+	Provenance  Provenance    `json:"provenance"`
+	ValidatedOn []string      `json:"validated_on,omitempty"`
+	LastVerify  *RecipeVerify `json:"last_verify,omitempty"`
+	Fingerprint string        `json:"fingerprint"`
+	ProposedBy  string        `json:"proposed_by,omitempty"`
+	Supersedes  string        `json:"supersedes,omitempty"`
+	CreatedAt   string        `json:"created_at,omitempty"`
+	UpdatedAt   string        `json:"updated_at,omitempty"`
 }
 
 // Fingerprint returns a canonical hash of a recipe config so near-duplicate
