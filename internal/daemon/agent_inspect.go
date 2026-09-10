@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -31,6 +32,19 @@ type recipeInspectReport struct {
 func (d *Daemon) handleAgentInspectRecipe(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("recipeID")
 	deviceID := strings.TrimSpace(r.URL.Query().Get("device_id"))
+
+	// device_id may arrive via the JSON body (MCP swap-style payload) too.
+	if deviceID == "" {
+		var body struct {
+			DeviceID string `json:"device_id"`
+		}
+		if r.Body != nil {
+			if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
+				deviceID = strings.TrimSpace(body.DeviceID)
+			}
+		}
+	}
+
 	if d.recipeStore == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not_found", "message": "recipe store is not loaded"})
 		return

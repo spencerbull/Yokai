@@ -22,16 +22,16 @@ type agentSwapRequest struct {
 }
 
 type recipeSwapReport struct {
-	RecipeID          string                `json:"recipe_id"`
-	DeviceID          string                `json:"device_id"`
-	SelfHosted        bool                  `json:"self_hosted"`
-	AllowSelf         bool                  `json:"allow_self"`
-	PreviousModelID   string                `json:"previous_model_id,omitempty"`
-	PreviousContainer string                `json:"previous_container,omitempty"`
-	NewContainerID    string                `json:"new_container_id,omitempty"`
-	Ready             bool                  `json:"ready"`
-	Status            string                `json:"status"`
-	SwapHistory       []recipes.SwapRecord  `json:"swap_history,omitempty"`
+	RecipeID          string               `json:"recipe_id"`
+	DeviceID          string               `json:"device_id"`
+	SelfHosted        bool                 `json:"self_hosted"`
+	AllowSelf         bool                 `json:"allow_self"`
+	PreviousModelID   string               `json:"previous_model_id,omitempty"`
+	PreviousContainer string               `json:"previous_container,omitempty"`
+	NewContainerID    string               `json:"new_container_id,omitempty"`
+	Ready             bool                 `json:"ready"`
+	Status            string               `json:"status"`
+	SwapHistory       []recipes.SwapRecord `json:"swap_history,omitempty"`
 }
 
 // handleAgentSwapRecipe deploys a verified candidate onto a device: pull +
@@ -99,10 +99,12 @@ func (d *Daemon) handleAgentSwapRecipe(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
-	record := func(ok bool, msg string) { rec.SwapHistory = append(rec.SwapHistory, recipes.SwapRecord{
-		DeviceID: req.DeviceID, At: now, PreviousModelID: report.PreviousModelID,
-		PreviousContainer: report.PreviousContainer, AllowSelf: req.AllowSelf, OK: ok, Message: msg,
-	}) }
+	record := func(ok bool, msg string) {
+		rec.SwapHistory = append(rec.SwapHistory, recipes.SwapRecord{
+			DeviceID: req.DeviceID, At: now, PreviousModelID: report.PreviousModelID,
+			PreviousContainer: report.PreviousContainer, AllowSelf: req.AllowSelf, OK: ok, Message: msg,
+		})
+	}
 
 	// Transient cutover trial: deploy + readiness-probe the new recipe.
 	if d.aggregator == nil {
