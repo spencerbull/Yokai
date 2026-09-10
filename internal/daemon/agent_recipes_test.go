@@ -29,6 +29,8 @@ func testRecipeDaemon(t *testing.T) (*Daemon, *http.ServeMux) {
 	mux.HandleFunc("PATCH /agent/recipe/{recipeID}", d.handleAgentPatchRecipe)
 	mux.HandleFunc("POST /agent/recipe/{recipeID}/validate", d.handleAgentValidateRecipe)
 	mux.HandleFunc("POST /agent/recipe/{recipeID}/verify", d.handleAgentVerifyRecipe)
+	mux.HandleFunc("POST /agent/recipe/{recipeID}/inspect", d.handleAgentInspectRecipe)
+	mux.HandleFunc("POST /agent/swap", d.handleAgentSwapRecipe)
 	return d, mux
 }
 
@@ -212,4 +214,93 @@ func TestVerifyRecipeDeviceUnreachable(t *testing.T) {
 		t.Fatalf("unexpected last_verify evidence: %v", lv)
 	}
 	_ = d
+}
+
+func TestInspectRecipeNoDevice(t *testing.T) {
+	_, mux := testRecipeDaemon(t)
+	created := probeJSON(t, mux, "POST", "/agent/recipe", validProposedRecipe(), http.StatusCreated)
+	id, _ := created["id"].(string)
+
+	out := probeJSON(t, mux, "POST", "/agent/recipe/"+id+"/inspect", nil, http.StatusOK)
+	if out["status"] != string(recipes.StatusProposed) {
+		t.Fatalf("inspect must not change status, got %v", out["status"])
+	}
+	if out["claimed_min_vram_gb"] == nil {
+		t.Fatalf("expected claimed requirements reported")
+	}
+}
+
+// TestInspectDoesNotPromote ensures the read-only inspect never promotes even
+// with an unreachable/failed device gate (promotion is verify-exclusive).
+func TestInspectDoesNotPromote(t *testing.T) {
+	d, mux := testRecipeDaemon(t)
+	created := probeJSON(t, mux, "POST", "/agent/recipe", validProposedRecipe(), http.StatusCreated)
+	id, _ := created["id"].(string)
+
+	probeJSON(t, mux, "POST", "/agent/recipe/"+id+"/inspect?device_id=some-device", nil, http.StatusOK)
+	rec := probeJSON(t, mux, "GET", "/agent/recipe/"+id, nil, http.StatusOK)
+	if rec["status"] != string(recipes.StatusProposed) {
+		t.Fatalf("inspect promoted a candidate to %v; must stay proposed", rec["status"])
+	}
+	_ = d
+}
+
+func TestSwapRecipeMissingFields(t *testing.T) {
+	_, mux := testRecipeDaemon(t)
+	out := probeJSON(t, mux, "POST", "/agent/swap", map[string]any{"recipe_id": "rec_x"}, http.StatusBadRequest)
+	if out["error"] != "recipe_and_device_required" {
+		t.Fatalf("expected recipe_and_device_required, got %v", out["error"])
+	}
+}
+
+func TestSwapRecipeRequiresValidated(t *testing.T) {
+	d, mux := testRecipeDaemon(t)
+	created := probeJSON(t, mux, "POST", "/agent/recipe", validProposedRecipe(), http.StatusCreated)
+	id, _ := created["id"].(string)
+
+	out := probeJSON(t, mux, "POST", "/agent/swap", map[string]any{
+		"recipe_id": id, "device_id": "dell-pro-max",
+	}, http.StatusUnprocessableEntity)
+	if out["error"] != "require_verify" {
+		t.Fatalf("expected require_verify, got %v", out["error"])
+	}
+	_ = d
+}
+
+// TestSwapRecipeSelfHostedBlocked is the user's concern: the acting agent is
+// backed by the model running on the device undergoing the swap. The guard must
+// refuse (self_hosted_swap) unless allow_self=true — and it runs BEFORE the
+// validated gate, so no swap can silently cut its own brain off.
+func TestSwapRecipeSelfHostedBlocked(t *testing.T) {
+	d := &Daemon{cfg: config.DefaultConfig()}
+	store, err := recipes.OpenStore(filepath.Join(t.TempDir(), "recipes.json"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	d.recipeStore = store
+	// The target device currently serves the agent's own model.
+	d.cfg.Services = append(d.cfg.Services, config.Service{ID: "brain", DeviceID: "dell-pro-max", Model: "TRAVIS_deepseek"})
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /agent/recipe", d.handleAgentProposeRecipe)
+	mux.HandleFunc("POST /agent/swap", d.handleAgentSwapRecipe)
+
+	created := probeJSON(t, mux, "POST", "/agent/recipe", validProposedRecipe(), http.StatusCreated)
+	id, _ := created["id"].(string)
+
+	// Without acknowledgment: refused, even though the recipe is only proposed
+	// (the self-host guard runs before the validated gate).
+	out := probeJSON(t, mux, "POST", "/agent/swap", map[string]any{
+		"recipe_id": id, "device_id": "dell-pro-max", "agent_backing_model": "TRAVIS_deepseek",
+	}, http.StatusConflict)
+	if out["error"] != "self_hosted_swap" {
+		t.Fatalf("expected self_hosted_swap, got %v", out["error"])
+	}
+
+	// With acknowledgment: passes the guard and proceeds to the validated gate.
+	out2 := probeJSON(t, mux, "POST", "/agent/swap", map[string]any{
+		"recipe_id": id, "device_id": "dell-pro-max", "agent_backing_model": "TRAVIS_deepseek", "allow_self": true,
+	}, http.StatusUnprocessableEntity)
+	if out2["error"] != "require_verify" {
+		t.Fatalf("expected require_verify after self-host acknowledged, got %v", out2["error"])
+	}
 }
