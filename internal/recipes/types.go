@@ -109,6 +109,21 @@ type RecipeVerify struct {
 	Message       string `json:"message,omitempty"`
 }
 
+// SwapRecord is a server-written, fleet-level record of a swap of a recipe
+// onto a device (deploy-on-verified). It captures the previous deployment that
+// became the rollback target, the new container, and whether the self-host
+// guard was acknowledged. Written only by the daemon.
+type SwapRecord struct {
+	DeviceID          string `json:"device_id"`
+	At                string `json:"at"`
+	PreviousModelID   string `json:"previous_model_id,omitempty"`
+	PreviousContainer string `json:"previous_container,omitempty"`
+	NewContainerID    string `json:"new_container_id,omitempty"`
+	AllowSelf         bool   `json:"allow_self"`
+	OK                bool   `json:"ok"`
+	Message           string `json:"message,omitempty"`
+}
+
 // Recipe is a stored candidate recipe plus its metadata.
 type Recipe struct {
 	ID          string        `json:"id"`
@@ -118,6 +133,7 @@ type Recipe struct {
 	Provenance  Provenance    `json:"provenance"`
 	ValidatedOn []string      `json:"validated_on,omitempty"`
 	LastVerify  *RecipeVerify `json:"last_verify,omitempty"`
+	SwapHistory []SwapRecord  `json:"swap_history,omitempty"`
 	Fingerprint string        `json:"fingerprint"`
 	ProposedBy  string        `json:"proposed_by,omitempty"`
 	Supersedes  string        `json:"supersedes,omitempty"`

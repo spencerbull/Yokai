@@ -34,6 +34,8 @@ const (
 	toolGetRecipe      = "get_recipe"
 	toolValidateRecipe = "validate_recipe"
 	toolVerifyRecipe   = "verify_recipe"
+	toolInspectRecipe  = "inspect_recipe"
+	toolSwapRecipe     = "swap_recipe"
 )
 
 type rpcRequest struct {
@@ -229,6 +231,32 @@ func (s *Server) toolDefinitions() []toolDefinition {
 				"required": []string{"recipe_id", "device_id"},
 			},
 		},
+		{
+			Name:        toolInspectRecipe,
+			Description: "Read-only pre-flight: check a candidate recipe against a device's live topology (VRAM/GPU count + declared target_devices) without deploying or changing its status. Pass an optional device_id from list_topology; omit it to report only the candidate's claimed requirements. Never promotes.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"recipe_id": map[string]any{"type": "string", "description": "Candidate recipe id."},
+					"device_id": map[string]any{"type": "string", "description": "Device to inspect against (optional; live topology)."},
+				},
+				"required": []string{"recipe_id"},
+			},
+		},
+		{
+			Name:        toolSwapRecipe,
+			Description: "Deploy-on-verified: swap a candidate recipe onto a device (pull + readiness probe + cutover; the previous deployment becomes the rollback target). Requires the candidate to be validated on exactly this device (see verify_recipe). Pass agent_backing_model (the model the acting agent itself runs as, if known) and allow_self=true only if you accept that a swap may disrupt that controller if it is served from the target device.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"recipe_id":           map[string]any{"type": "string", "description": "Validated candidate recipe id."},
+					"device_id":           map[string]any{"type": "string", "description": "Device to swap the recipe in on."},
+					"agent_backing_model": map[string]any{"type": "string", "description": "Model the acting agent itself runs as (self-host guard)."},
+					"allow_self":          map[string]any{"type": "boolean", "description": "Acknowledge the swap may disrupt the controller if served from the target device."},
+				},
+				"required": []string{"recipe_id", "device_id"},
+			},
+		},
 	}
 }
 
@@ -333,6 +361,40 @@ func (s *Server) callTool(req rpcRequest) (string, error) {
 			return "", err
 		}
 		return string(body), nil
+	case toolInspectRecipe:
+		id, _ := params.Arguments["recipe_id"].(string)
+		deviceID, _ := params.Arguments["device_id"].(string)
+		if strings.TrimSpace(id) == "" {
+			return "", errors.New("recipe_id is required")
+		}
+		path := "/agent/recipe/" + urlQueryEscape(id) + "/inspect"
+		if strings.TrimSpace(deviceID) != "" {
+			path += "?device_id=" + urlQueryEscape(deviceID)
+		}
+		body, err := s.get(ctx, path)
+		if err != nil {
+			return "", err
+		}
+		return string(body), nil
+	case toolSwapRecipe:
+		payload := map[string]any{}
+		for _, k := range []string{"recipe_id", "device_id", "agent_backing_model"} {
+			if v, ok := params.Arguments[k].(string); ok {
+				payload[k] = v
+			}
+		}
+		if v, ok := params.Arguments["allow_self"].(bool); ok {
+			payload["allow_self"] = v
+		}
+		body, err := json.Marshal(payload)
+		if err != nil {
+			return "", err
+		}
+		out, err := s.post(ctx, "/agent/swap", body)
+		if err != nil {
+			return "", err
+		}
+		return string(out), nil
 	default:
 		return "", fmt.Errorf("unknown tool: %s", params.Name)
 	}
