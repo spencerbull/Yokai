@@ -93,6 +93,21 @@ yokai solves all of this with a single binary. Install it, point it at your mach
 - **Backup-safe** -- writes a `.yokai.bak` of every config before modifying it
 - **Multi-endpoint** -- registers every running inference service as an available endpoint
 
+### Agent Integration (MCP)
+Let any model agent (pi, opencode, hermes, openclaw, Claude) *decide* what to run while yokai does the deploying. A thin **MCP stdio server** (`yokai-mcp`) wraps three read-only daemon endpoints:
+
+- `GET /agent/catalog` -- machine-readable BKC catalog with hardware affinity and **use-case tags** (`coding`, `chat`, `reasoning`, `vision`, `ocr`, `translation`, `speech`, `rerank`, `embedding`, `guardrails`)
+- `GET /agent/topology` -- each device's GPUs (count + VRAM), online status, and running services
+- `GET /agent/recommend?use_case=...&device_id=...` -- use-case → ranked recipes, filtered by hardware fit
+
+The MCP server exposes `list_catalog`, `list_topology`, and `recommend_model` tools. Wire it up from any MCP host, e.g. opencode:
+
+```json
+{"mcp": {"yokai": {"type": "stdio", "command": "yokai-mcp"}}}
+```
+
+The agent reasons over recipes and hardware; deployment (and rollback) reuses yokai's existing `/deploy` and `/deployments` engine. Recipe recommendations are gated server-side by the same hardware-affinity rules the deploy wizard uses.
+
 ### Self-Updating
 - **`yokai upgrade`** -- checks GitHub Releases, downloads the correct binary for your OS/arch, and replaces itself in place
 - **Cross-platform** -- builds for Linux, macOS, and Windows (amd64 + arm64)
