@@ -11,6 +11,7 @@ import (
 
 	"github.com/spencerbull/yokai/internal/bkc"
 	"github.com/spencerbull/yokai/internal/config"
+	"github.com/spencerbull/yokai/internal/recipes"
 )
 
 // agent.go implements the external-agent read contract. A provider-agnostic
@@ -58,8 +59,16 @@ type agentTopologyResponse struct {
 	Devices []agentTopologyDevice `json:"devices"`
 }
 
-type agentRecommendRecord struct {
+type agentRecipeRecord struct {
 	deployBKCRecord
+	Tier        string              `json:"tier,omitempty"`
+	Status      string              `json:"status,omitempty"`
+	Fingerprint string              `json:"fingerprint,omitempty"`
+	Provenance  *recipes.Provenance `json:"provenance,omitempty"`
+}
+
+type agentRecommendRecord struct {
+	agentRecipeRecord
 	FitsDevice bool   `json:"fits_device,omitempty"`
 	FitReason  string `json:"fit_reason,omitempty"`
 }
@@ -71,19 +80,56 @@ type agentRecommendResponse struct {
 	Options  []agentRecommendRecord `json:"options"`
 }
 
-// handleAgentCatalog dumps the full BKC catalog as machine-readable JSON with
-// hardware affinity and use-case metadata.
+// handleAgentCatalog dumps the curated + candidate recipe union as
+// machine-readable JSON with hardware affinity, use-case metadata, and each
+// record's trust tier and status.
 func (d *Daemon) handleAgentCatalog(w http.ResponseWriter, r *http.Request) {
-	catalog := bkc.Catalog()
-	records := make([]deployBKCRecord, 0, len(catalog))
-	for _, cfg := range catalog {
-		records = append(records, deployBKCRecordFromConfig(cfg, bkc.MatchExact, ""))
-	}
+	records := d.allAgentRecipes()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"count":     len(records),
 		"use_cases": bkc.AllUseCases(),
 		"catalog":   records,
 	})
+}
+
+// allAgentRecipes joins the immutable curated BKC catalog (tier=curated,
+// status=validated) with the mutable candidate store (tier=candidate), so
+// recommendation and catalog see a single union while preserving each
+// record's trust level.
+func (d *Daemon) allAgentRecipes() []agentRecipeRecord {
+	var records []agentRecipeRecord
+	for _, cfg := range bkc.Catalog() {
+		rec := agentRecipeRecord{
+			deployBKCRecord: deployBKCRecordFromConfig(cfg, bkc.MatchExact, ""),
+			Tier:            string(recipes.TierCurated),
+			Status:          string(recipes.StatusValidated),
+		}
+		records = append(records, rec)
+	}
+	if d.recipeStore == nil {
+		return records
+	}
+	for _, cand := range d.recipeStore.List() {
+		rc := cand.Config
+		cfg := rc.ToBKC()
+		cfg.ID = cand.ID
+		deploy := deployBKCRecordFromConfig(cfg, bkc.MatchExact, "")
+		records = append(records, agentRecipeRecord{
+			deployBKCRecord: deploy,
+			Tier:            string(cand.Tier),
+			Status:          string(cand.Status),
+			Fingerprint:     cand.Fingerprint,
+			Provenance:      &cand.Provenance,
+		})
+	}
+	sort.Slice(records, func(i, j int) bool {
+		li, lj := records[i].Tier, records[j].Tier
+		if li != lj {
+			return li > lj // curated before candidate
+		}
+		return records[i].ModelID < records[j].ModelID
+	})
+	return records
 }
 
 // handleAgentTopology reports each device's identity, online status, GPU
@@ -163,24 +209,27 @@ func (d *Daemon) handleAgentRecommend(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	all := bkc.Catalog()
-	var candidates []bkc.Config
-	for _, cfg := range all {
-		if !cfg.HasUseCase(useCase) {
+	all := d.allAgentRecipes()
+	var candidates []agentRecommendRecord
+	for _, rec := range all {
+		if !hasUseCase(rec.UseCases, useCase) {
 			continue
 		}
-		if workload != "" && !strings.EqualFold(workload, string(cfg.Workload)) {
+		if workload != "" && !strings.EqualFold(workload, rec.Workload) {
 			continue
 		}
-		candidates = append(candidates, cfg)
+		candidates = append(candidates, agentRecommendRecord{agentRecipeRecord: rec})
 	}
 
-	// Sort: hardware-fit first, then by name.
+	// Sort: hardware-fit first, then curated-before-candidate, then by name.
 	sort.SliceStable(candidates, func(i, j int) bool {
-		fi := fitsCandidate(candidates[i], vramGB, gpuCount)
-		fj := fitsCandidate(candidates[j], vramGB, gpuCount)
+		fi := fitsRecord(candidates[i], vramGB, gpuCount)
+		fj := fitsRecord(candidates[j], vramGB, gpuCount)
 		if hasMetrics && fi != fj {
 			return fi
+		}
+		if candidates[i].Tier != candidates[j].Tier {
+			return candidates[i].Tier > candidates[j].Tier // curated before candidate
 		}
 		if candidates[i].ModelID != candidates[j].ModelID {
 			return candidates[i].ModelID < candidates[j].ModelID
@@ -196,21 +245,22 @@ func (d *Daemon) handleAgentRecommend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	options := make([]agentRecommendRecord, 0, limit)
-	for _, cfg := range candidates[:limit] {
-		rec := deployBKCRecordFromConfig(cfg, bkc.MatchExact, "")
-		fits := fitsCandidate(cfg, vramGB, gpuCount)
+	for _, rec := range candidates[:limit] {
+		fits := fitsRecord(rec, vramGB, gpuCount)
 		reason := ""
 		if hasMetrics {
 			switch {
 			case !fits:
-				reason = fitMissReason(cfg, vramGB, gpuCount)
-			case rec.MinGPUCount > 0 && gpuCount >= rec.MinGPUCount && cfg.MinVRAMGBPerGPU <= 0:
+				reason = fitMissReason(rec, vramGB, gpuCount)
+			case rec.MinGPUCount > 0 && gpuCount >= rec.MinGPUCount && rec.MinVRAMGBPerGPU <= 0:
 				reason = fmt.Sprintf("fits %d GPU(s)", gpuCount)
 			default:
 				reason = "fits this device"
 			}
 		}
-		options = append(options, agentRecommendRecord{deployBKCRecord: rec, FitsDevice: fits && hasMetrics, FitReason: reason})
+		rec.FitsDevice = fits && hasMetrics
+		rec.FitReason = reason
+		options = append(options, rec)
 	}
 
 	writeJSON(w, http.StatusOK, agentRecommendResponse{
@@ -221,27 +271,27 @@ func (d *Daemon) handleAgentRecommend(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// fitsCandidate applies the same hardware-affinity gates the deploy wizard
-// uses, so the agent's suggestion can never outrank an unfit recipe.
-func fitsCandidate(cfg bkc.Config, vramGB float64, gpuCount int) bool {
+// fitsRecord applies the same hardware-affinity gates the deploy wizard uses,
+// so the agent's suggestion can never outrank an unfit recipe.
+func fitsRecord(rec agentRecommendRecord, vramGB float64, gpuCount int) bool {
 	if vramGB <= 0 {
 		return true // no device context; don't over-filter
 	}
-	if cfg.MinVRAMGBPerGPU > 0 && vramGB < cfg.MinVRAMGBPerGPU {
+	if rec.MinVRAMGBPerGPU > 0 && vramGB < rec.MinVRAMGBPerGPU {
 		return false
 	}
-	if cfg.MinGPUCount > 0 && gpuCount < cfg.MinGPUCount {
+	if rec.MinGPUCount > 0 && gpuCount < rec.MinGPUCount {
 		return false
 	}
 	return true
 }
 
-func fitMissReason(cfg bkc.Config, vramGB float64, gpuCount int) string {
-	if cfg.MinVRAMGBPerGPU > 0 && vramGB > 0 && vramGB < cfg.MinVRAMGBPerGPU {
-		return fmt.Sprintf("needs %.0fGB/GPU, device has %.0fGB", cfg.MinVRAMGBPerGPU, vramGB)
+func fitMissReason(rec agentRecommendRecord, vramGB float64, gpuCount int) string {
+	if rec.MinVRAMGBPerGPU > 0 && vramGB > 0 && vramGB < rec.MinVRAMGBPerGPU {
+		return fmt.Sprintf("needs %.0fGB/GPU, device has %.0fGB", rec.MinVRAMGBPerGPU, vramGB)
 	}
-	if cfg.MinGPUCount > 0 && gpuCount > 0 && gpuCount < cfg.MinGPUCount {
-		return fmt.Sprintf("needs %d GPU(s), device has %d", cfg.MinGPUCount, gpuCount)
+	if rec.MinGPUCount > 0 && gpuCount > 0 && gpuCount < rec.MinGPUCount {
+		return fmt.Sprintf("needs %d GPU(s), device has %d", rec.MinGPUCount, gpuCount)
 	}
 	return "does not fit device"
 }
@@ -309,4 +359,15 @@ func (d *Daemon) runningServices() []agentTopologyService {
 		})
 	}
 	return out
+}
+
+// hasUseCase reports whether a record's populated use-case list includes the
+// requested use case, case-insensitively.
+func hasUseCase(useCases []string, want string) bool {
+	for _, uc := range useCases {
+		if strings.EqualFold(uc, want) {
+			return true
+		}
+	}
+	return false
 }
