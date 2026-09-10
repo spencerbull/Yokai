@@ -375,6 +375,7 @@ func (s *Server) prettyCatalog(body []byte) (string, error) {
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "catalog: %d recipes; use cases: %s\n", raw.Count, strings.Join(raw.UseCases, ", "))
+	candidates := 0
 	for _, rmsg := range raw.Catalog {
 		var r struct {
 			ID       string   `json:"id"`
@@ -385,6 +386,8 @@ func (s *Server) prettyCatalog(body []byte) (string, error) {
 			MinVRAM  float64  `json:"min_vram_gb_per_gpu"`
 			MinGPU   int      `json:"min_gpu_count"`
 			UseCases []string `json:"use_cases"`
+			Tier     string   `json:"tier"`
+			Status   string   `json:"status"`
 		}
 		if err := json.Unmarshal(rmsg, &r); err != nil {
 			continue
@@ -401,8 +404,18 @@ func (s *Server) prettyCatalog(body []byte) (string, error) {
 				hardware = hw
 			}
 		}
-		fmt.Fprintf(&b, "  %s (%s)  workload=%s  quant=%s  use_cases=%s  hardware=[%s]\n",
-			r.ID, r.ModelID, r.Workload, r.Quant, strings.Join(r.UseCases, ","), hardware)
+		tierMark := "curated"
+		if r.Tier == "candidate" {
+			candidates++
+			tierMark = fmt.Sprintf("candidate[%s]", r.Status)
+		}
+		fmt.Fprintf(&b, "  [%s] %s (%s)  workload=%s  quant=%s  use_cases=%s  hardware=[%s]\n",
+			tierMark, r.ID, r.ModelID, r.Workload, r.Quant, strings.Join(r.UseCases, ","), hardware)
+	}
+	if candidates == 0 {
+		fmt.Fprintf(&b, "candidates: none\n")
+	} else {
+		fmt.Fprintf(&b, "candidates: %d (unvalidated, not auto-deployable)\n", candidates)
 	}
 	return b.String(), nil
 }
