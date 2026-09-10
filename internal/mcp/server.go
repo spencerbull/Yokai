@@ -367,11 +367,11 @@ func (s *Server) callTool(req rpcRequest) (string, error) {
 		if strings.TrimSpace(id) == "" {
 			return "", errors.New("recipe_id is required")
 		}
-		path := "/agent/recipe/" + urlQueryEscape(id) + "/inspect"
+		payload := map[string]any{"recipe_id": id}
 		if strings.TrimSpace(deviceID) != "" {
-			path += "?device_id=" + urlQueryEscape(deviceID)
+			payload["device_id"] = deviceID
 		}
-		body, err := s.get(ctx, path)
+		body, err := s.post(ctx, "/agent/recipe/"+urlQueryEscape(id)+"/inspect", payload)
 		if err != nil {
 			return "", err
 		}
@@ -386,11 +386,7 @@ func (s *Server) callTool(req rpcRequest) (string, error) {
 		if v, ok := params.Arguments["allow_self"].(bool); ok {
 			payload["allow_self"] = v
 		}
-		body, err := json.Marshal(payload)
-		if err != nil {
-			return "", err
-		}
-		out, err := s.post(ctx, "/agent/swap", body)
+		out, err := s.post(ctx, "/agent/swap", payload)
 		if err != nil {
 			return "", err
 		}
