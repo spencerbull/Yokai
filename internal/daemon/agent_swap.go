@@ -130,7 +130,7 @@ func (d *Daemon) handleAgentSwapRecipe(w http.ResponseWriter, r *http.Request) {
 		} else if prev != nil && prev.ContainerID != "" && prev.ContainerID != deploy.ContainerID {
 			_ = d.aggregator.StopContainer(req.DeviceID, prev.ContainerID)
 		}
-		if rec.SwapHistory == nil || len(rec.SwapHistory) == 0 || !rec.SwapHistory[len(rec.SwapHistory)-1].OK {
+		if len(rec.SwapHistory) == 0 || !rec.SwapHistory[len(rec.SwapHistory)-1].OK {
 			record(true, "swapped in; previous deployment retained as rollback target")
 		}
 		report.Ready = true
