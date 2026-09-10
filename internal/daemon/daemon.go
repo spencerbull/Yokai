@@ -118,6 +118,7 @@ func Run(version string) error {
 	mux.HandleFunc("GET /agent/recipe/{recipeID}", d.handleAgentGetRecipe)
 	mux.HandleFunc("PATCH /agent/recipe/{recipeID}", d.handleAgentPatchRecipe)
 	mux.HandleFunc("POST /agent/recipe/{recipeID}/validate", d.handleAgentValidateRecipe)
+	mux.HandleFunc("POST /agent/recipe/{recipeID}/verify", d.handleAgentVerifyRecipe)
 	mux.HandleFunc("POST /devices", d.handleCreateDevice)
 	mux.HandleFunc("PUT /devices/{deviceID}", d.handleUpdateDevice)
 	mux.HandleFunc("POST /devices/{deviceID}/test", d.handleTestDevice)
