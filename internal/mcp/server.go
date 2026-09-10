@@ -7,6 +7,7 @@ package mcp
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -28,6 +29,10 @@ const (
 	toolListCatalog    = "list_catalog"
 	toolListTopology   = "list_topology"
 	toolRecommendModel = "recommend_model"
+	toolListCandidates = "list_candidates"
+	toolProposeRecipe  = "propose_recipe"
+	toolGetRecipe      = "get_recipe"
+	toolValidateRecipe = "validate_recipe"
 )
 
 type rpcRequest struct {
@@ -172,6 +177,45 @@ func (s *Server) toolDefinitions() []toolDefinition {
 				"required": []string{"use_case"},
 			},
 		},
+		{
+			Name:        toolListCandidates,
+			Description: "List agent-researched candidate recipes currently in the store (tier=candidate) with their status, fingerprint, and provenance.",
+			InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
+		},
+		{
+			Name:        toolProposeRecipe,
+			Description: "Propose a new candidate recipe from research (tier=candidate, status=proposed). Pass proposed_by (your agent name), config (model_id, workload, image [must be digest-pinned repo/img@sha256:...], min_vram_gb_per_gpu, min_gpu_count, quantization, target_devices, plugins), and provenance (source/source_url + research_note). Candidates are server-validated and never auto-deployed.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"proposed_by": map[string]any{"type": "string", "description": "Your agent/human identity."},
+					"config":      map[string]any{"type": "object", "description": "Recipe config: model_id, workload, digest-pinned image, min_vram_gb_per_gpu, min_gpu_count, etc."},
+					"provenance":  map[string]any{"type": "object", "description": "{agent, source, source_url, research_note, reported_on}."},
+				},
+				"required": []string{"proposed_by", "config", "provenance"},
+			},
+		},
+		{
+			Name:        toolGetRecipe,
+			Description: "Fetch a single candidate recipe by id (from list_candidates).",
+			InputSchema: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"recipe_id": map[string]any{"type": "string", "description": "Candidate recipe id."}},
+				"required":   []string{"recipe_id"},
+			},
+		},
+		{
+			Name:        toolValidateRecipe,
+			Description: "Dry-run a candidate recipe against a real device's live GPU metrics (hardware gate: VRAM/GPU count). Pass device_id from list_topology. If the gate passes against live metrics, the candidate is promoted to validated (evidence-based). No deployment is performed.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"recipe_id": map[string]any{"type": "string", "description": "Candidate recipe id."},
+					"device_id": map[string]any{"type": "string", "description": "Device to validate against (live topology)."},
+				},
+				"required": []string{"recipe_id", "device_id"},
+			},
+		},
 	}
 }
 
@@ -221,6 +265,47 @@ func (s *Server) callTool(req rpcRequest) (string, error) {
 			return "", err
 		}
 		return string(body), nil
+	case toolListCandidates:
+		body, err := s.get(ctx, "/agent/recipes")
+		if err != nil {
+			return "", err
+		}
+		return string(body), nil
+	case toolProposeRecipe:
+		payload := map[string]any{
+			"proposed_by": params.Arguments["proposed_by"],
+			"config":      params.Arguments["config"],
+			"provenance":  params.Arguments["provenance"],
+		}
+		body, err := s.post(ctx, "/agent/recipe", payload)
+		if err != nil {
+			return "", err
+		}
+		return string(body), nil
+	case toolGetRecipe:
+		id, _ := params.Arguments["recipe_id"].(string)
+		if strings.TrimSpace(id) == "" {
+			return "", errors.New("recipe_id is required")
+		}
+		body, err := s.get(ctx, "/agent/recipe/"+urlQueryEscape(id))
+		if err != nil {
+			return "", err
+		}
+		return string(body), nil
+	case toolValidateRecipe:
+		id, _ := params.Arguments["recipe_id"].(string)
+		deviceID, _ := params.Arguments["device_id"].(string)
+		if strings.TrimSpace(id) == "" {
+			return "", errors.New("recipe_id is required")
+		}
+		if strings.TrimSpace(deviceID) == "" {
+			return "", errors.New("device_id is required")
+		}
+		body, err := s.post(ctx, "/agent/recipe/"+urlQueryEscape(id)+"/validate?device_id="+urlQueryEscape(deviceID), nil)
+		if err != nil {
+			return "", err
+		}
+		return string(body), nil
 	default:
 		return "", fmt.Errorf("unknown tool: %s", params.Name)
 	}
@@ -230,6 +315,37 @@ func (s *Server) get(ctx context.Context, path string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.baseURL+path, nil)
 	if err != nil {
 		return nil, err
+	}
+	resp, err := s.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("yokai daemon unreachable (is it running?): %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("daemon error %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	return body, nil
+}
+
+func (s *Server) post(ctx context.Context, path string, payload any) ([]byte, error) {
+	var bodyReader io.Reader
+	if payload != nil {
+		buf, err := json.Marshal(payload)
+		if err != nil {
+			return nil, err
+		}
+		bodyReader = bytes.NewReader(buf)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.baseURL+path, bodyReader)
+	if err != nil {
+		return nil, err
+	}
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
 	}
 	resp, err := s.http.Do(req)
 	if err != nil {

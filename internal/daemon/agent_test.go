@@ -103,20 +103,26 @@ func TestHandleAgentRecommendUnknownDevice(t *testing.T) {
 	}
 }
 
-func TestFitsCandidate(t *testing.T) {
+func TestFitsRecord(t *testing.T) {
 	t.Parallel()
 
+	mk := func(multi bool, vram float64, gpus int) agentRecommendRecord {
+		return agentRecommendRecord{agentRecipeRecord: agentRecipeRecord{
+			deployBKCRecord: deployBKCRecord{MinVRAMGBPerGPU: vram, MinGPUCount: gpus},
+		}}
+	}
+
 	// No device context -> never over-filter.
-	if !fitsCandidate(bkc.Config{MinVRAMGBPerGPU: 24, MinGPUCount: 2}, 0, 0) {
+	if !fitsRecord(mk(false, 24, 2), 0, 0) {
 		t.Fatalf("expected no-device context to pass")
 	}
-	if fitsCandidate(bkc.Config{MinVRAMGBPerGPU: 24}, 8, 1) {
+	if fitsRecord(mk(false, 24, 0), 8, 1) {
 		t.Fatalf("expected 8GB GPU to fail a 24GB recipe")
 	}
-	if fitsCandidate(bkc.Config{MinGPUCount: 2}, 24, 1) {
+	if fitsRecord(mk(false, 0, 2), 24, 1) {
 		t.Fatalf("expected 1 GPU to fail a 2-GPU recipe")
 	}
-	if !fitsCandidate(bkc.Config{MinVRAMGBPerGPU: 24, MinGPUCount: 2}, 24, 2) {
+	if !fitsRecord(mk(false, 24, 2), 24, 2) {
 		t.Fatalf("expected adequate hardware to pass")
 	}
 }
