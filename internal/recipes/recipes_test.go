@@ -155,3 +155,37 @@ func TestStoreRoundTripAndUpsert(t *testing.T) {
 		t.Fatalf("expected persisted status validated, got %s", got.Status)
 	}
 }
+
+func TestOpenStoreWithDefaultSeedsOnFirstRun(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, StoreFile)
+
+	s, err := OpenStoreWithDefault(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	got := s.List()
+	if len(got) != len(DefaultRecipes()) {
+		t.Fatalf("expected %d seeded recipes, got %d", len(DefaultRecipes()), len(got))
+	}
+	for _, r := range got {
+		if r.Tier != TierCandidate {
+			t.Fatalf("seed %s must be candidate tier, got %s", r.ID, r.Tier)
+		}
+		if r.Status != StatusProposed {
+			t.Fatalf("seed %s must be proposed (never validated), got %s", r.ID, r.Status)
+		}
+		if r.Fingerprint != Fingerprint(r.Config) {
+			t.Fatalf("seed %s fingerprint mismatch", r.ID)
+		}
+	}
+
+	// Re-open persists the baseline (idempotent, no re-seed duplication).
+	s2, err := OpenStoreWithDefault(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	if len(s2.List()) != len(DefaultRecipes()) {
+		t.Fatalf("re-open must not re-seed dupes; got %d", len(s2.List()))
+	}
+}

@@ -33,6 +33,30 @@ type Store struct {
 }
 
 func OpenStore(path string) (*Store, error) {
+	return openStoreNoSeed(path)
+}
+
+// OpenStoreWithDefault is like OpenStore but, when the store file does not
+// exist yet (first run), it seeds the overlay store from DefaultRecipes and
+// persists them so the baseline is stable across restarts and additions.
+// The seeded entries remain TierCandidate/proposed — never validated.
+func OpenStoreWithDefault(path string) (*Store, error) {
+	s, err := openStoreNoSeed(path)
+	if err != nil {
+		return nil, err
+	}
+	if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
+		s.doc.Recipes = append([]Recipe(nil), DefaultRecipes()...)
+		if _, err := s.write(path, s.doc); err != nil {
+			return nil, fmt.Errorf("seeding recipes store: %w", err)
+		}
+	}
+	return s, nil
+}
+
+// openStoreNoSeed is the shared open logic used by both OpenStore and
+// OpenStoreWithDefault (the latter seeds only on first creation).
+func openStoreNoSeed(path string) (*Store, error) {
 	s := &Store{path: path, doc: storeDocument{Version: StoreVersion, Recipes: []Recipe{}}, write: writeStoreAtomic}
 	data, err := os.ReadFile(path)
 	if err != nil {
