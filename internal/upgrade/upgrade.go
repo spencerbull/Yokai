@@ -169,9 +169,14 @@ func Run(currentVersion string) error {
 		return err
 	}
 
-	// 6. Print success message
+	// 6. Restart any running daemon so the new version takes effect immediately
+	// instead of silently keeping the previous binary in memory.
+	if err := restartRunningDaemon(currentBinaryPath); err != nil {
+		fmt.Printf("⚠️  Installed %s, but the running daemon could not be restarted automatically: %v\n", release.TagName, err)
+	}
+
+	// 7. Print success message
 	fmt.Printf("✅ Successfully updated to %s!\n", release.TagName)
-	fmt.Println("Restart yokai to use the new version.")
 
 	return nil
 }
