@@ -80,21 +80,46 @@ func (d *Daemon) handleHFModels(w http.ResponseWriter, r *http.Request) {
 // searchModelsMerged runs one HF search per pipeline filter and returns the
 // results deduplicated by model ID, sorted by likes (descending), capped at
 // limit. An empty filters slice performs a single unfiltered search (current
-// behavior for non-vLLM/SGLang workloads such as llamacpp/comfyui).
+// behavior for non-vLLM/SGLang workloads such as llamacpp/comfyui). Pipeline
+// searches degrade independently: a transient 429/5xx/timeout on one pipeline
+// does not discard a successful sibling pipeline.
 func (d *Daemon) searchModelsMerged(query string, filters []string, limit int) ([]hf.Model, error) {
 	if len(filters) == 0 {
 		return hf.NewClient(d.currentHFToken()).SearchModelsWithOptions(query, hf.SearchOptions{Limit: limit, Filter: ""})
 	}
 
-	results := make([][]hf.Model, 0, len(filters))
+	groups := make([][]hf.Model, 0, len(filters))
+	errs := make([]error, 0, len(filters))
 	for _, f := range filters {
 		models, err := hf.NewClient(d.currentHFToken()).SearchModelsWithOptions(query, hf.SearchOptions{Limit: limit, Filter: f})
 		if err != nil {
-			return nil, err
+			groups = append(groups, nil)
+			errs = append(errs, err)
+			continue
 		}
-		results = append(results, models)
+		groups = append(groups, models)
 	}
-	return mergeModelsByLikes(results, limit), nil
+	return mergeModelsBestEffort(groups, errs, limit)
+}
+
+// mergeModelsBestEffort merges per-pipeline groups, tolerating failed groups.
+// It returns the merged successful results (deduped, by likes, capped) unless
+// every pipeline failed, in which case it returns the first error.
+func mergeModelsBestEffort(groups [][]hf.Model, errs []error, limit int) ([]hf.Model, error) {
+	anysuccess := false
+	for _, g := range groups {
+		if len(g) > 0 {
+			anysuccess = true
+			break
+		}
+	}
+	if !anysuccess {
+		if len(errs) > 0 {
+			return nil, errs[0]
+		}
+		return []hf.Model{}, nil
+	}
+	return mergeModelsByLikes(groups, limit), nil
 }
 
 // mergeModelsByLikes merges per-pipeline search results, dedupes by model ID,
