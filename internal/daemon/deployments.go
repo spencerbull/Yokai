@@ -605,8 +605,17 @@ func (e *agentHTTPError) Error() string {
 	return fmt.Sprintf("agent returned status %d", e.Status)
 }
 
+// agentErrorReadLimit bounds how much of an agent error response the daemon
+// reads before decoding. It comfortably exceeds the agent's bounded pull
+// diagnostic envelope so the real docker error is decoded rather than truncated.
+const agentErrorReadLimit = 32 * 1024
+
 func agentResponseError(response *http.Response) error {
-	data, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
+	// The agent's pull diagnostics are bounded (last 8 KiB of docker output via
+	// agent.boundedBuffer); read enough to decode the complete envelope so the
+	// real docker error surfaces instead of being dropped as "agent returned
+	// status 500".
+	data, _ := io.ReadAll(io.LimitReader(response.Body, agentErrorReadLimit))
 	var envelope struct {
 		Error   string `json:"error"`
 		Message string `json:"message"`
