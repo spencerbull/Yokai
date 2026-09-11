@@ -39,6 +39,51 @@ const (
 	DeviceR9700      = "radeon-r9700" // AMD Radeon AI PRO R9700, 32 GB
 )
 
+// DeviceProfileFromGPU maps an nvidia-smi-reported GPU (memory type + product
+// name) to a Device* profile tag, or "" when it cannot be identified. This lets
+// the daemon route a selected device to its hardware-specific BKC variant (e.g.
+// a DGX Spark GB10 device to GB10-only configs) without the UI having to know
+// profile names. The unified-memory signal covers systems where nvidia-smi
+// reports no dedicated VRAM (DGX Spark GB10).
+func DeviceProfileFromGPU(memoryType, name string) string {
+	n := strings.ToLower(name)
+	switch {
+	case strings.Contains(n, "jetson"):
+		return DeviceJetsonThor
+	case strings.Contains(n, "gb10") || strings.Contains(n, "dgx spark") || memoryType == "unified":
+		return DeviceGB10
+	case strings.Contains(n, "gb200"):
+		return DeviceGB200
+	case strings.Contains(n, "b200"):
+		return DeviceB200
+	case strings.Contains(n, "h200"):
+		return DeviceH200
+	case strings.Contains(n, "h20"):
+		return DeviceH20
+	case strings.Contains(n, "h100"):
+		return DeviceH100_80
+	case strings.Contains(n, "a100"):
+		return DeviceA100_80
+	case strings.Contains(n, "rtx pro 6000"):
+		return DeviceRTXPRO6000
+	case strings.Contains(n, "rtx 5090"):
+		return DeviceRTX5090
+	case strings.Contains(n, "rtx 4090"):
+		return DeviceRTX4090
+	case strings.Contains(n, "l40s"):
+		return DeviceL40S
+	case strings.Contains(n, "mi355x"):
+		return DeviceMI355X
+	case strings.Contains(n, "mi325x"):
+		return DeviceMI325X
+	case strings.Contains(n, "mi300x"):
+		return DeviceMI300X
+	case strings.Contains(n, "radeon") && strings.Contains(n, "r9700"):
+		return DeviceR9700
+	}
+	return ""
+}
+
 // Quantization strings used consistently across the catalog.
 const (
 	QuantBF16  = "BF16"
@@ -391,6 +436,9 @@ const (
 	imageVLLMROCmGemma       = "vllm/vllm-openai-rocm:gemma4"
 	imageSGLangQwen38        = "lmsysorg/sglang@sha256:506525a5907ea22c9d445afb7c03603959b912de034d86915cf17da814f1a124"
 	imageSGLangQwen38DFlash2 = "lmsysorg/sglang@sha256:616a3e97f45191af975896cfa644279096cb31bd408a071c2e99ca7209c3cafe"
+	// Official multi-arch SGLang nightly, validated by MiaAI-Lab on GB10.
+	// The index digest resolves the linux/arm64 child image on DGX Spark.
+	imageSGLangQwen38GB10DFlash2 = "lmsysorg/sglang@sha256:00205b89f74691f76a0ffbd6846376d9323971930a5d59bf63a65dadc7d67927"
 )
 
 // hfMountDefault is the default Hugging Face cache mount shared by inference

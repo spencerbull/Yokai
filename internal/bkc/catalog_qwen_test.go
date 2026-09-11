@@ -55,6 +55,52 @@ func TestLookupFindsQwen36NVFP4(t *testing.T) {
 	}
 }
 
+func TestLookupForDeviceFindsQwen38GB10DFlash2(t *testing.T) {
+	t.Parallel()
+
+	cfg, ok := LookupForDevice(WorkloadSGLang, "RadixArk/Qwen3.8-27B-NVFP4-BF16-LMHead", DeviceGB10, 100, 1)
+	if !ok {
+		t.Fatal("expected a GB10 Qwen3.8 SGLang BKC")
+	}
+	if cfg.ID != "qwen3-8-27b-nvfp4-bf16-lmhead-sglang-dflash2-gb10" {
+		t.Fatalf("expected the GB10 BKC, got %q", cfg.ID)
+	}
+	if cfg.Image != "lmsysorg/sglang@sha256:00205b89f74691f76a0ffbd6846376d9323971930a5d59bf63a65dadc7d67927" {
+		t.Fatalf("expected the Mia-pinned GB10 DFlash2 image, got %q", cfg.Image)
+	}
+	if cfg.Port != "8888" || cfg.MinGPUCount != 1 || cfg.MinVRAMGBPerGPU != 100 {
+		t.Fatalf("unexpected GB10 capacity metadata: %#v", cfg)
+	}
+	for _, want := range []string{
+		"--revision 009632fef96dd349150baa780c984e62e70e91fe",
+		"--context-length 262144",
+		"--mem-fraction-static 0.90",
+		"--max-running-requests 10",
+		"--mamba-full-memory-ratio 4.21",
+		"--max-mamba-cache-size 40",
+		"--mamba-radix-cache-strategy extra_buffer",
+		"--mamba-ssm-dtype bfloat16",
+		"--kv-cache-dtype fp8_e4m3",
+		"--chunked-prefill-size 8192",
+		"--disable-prefill-cuda-graph",
+		"--speculative-algorithm DFLASH",
+		"--speculative-draft-model-path z-lab/Qwen3.8-27B-DFlash2",
+		"--speculative-draft-model-revision 50307d4c4cde6860d4eee73e2547cd786fe8e8a4",
+		"--speculative-num-draft-tokens 8",
+		"--reasoning-parser qwen3",
+		"--tool-call-parser qwen3_coder",
+		"--sampling-defaults model",
+		"--enable-metrics",
+	} {
+		if !strings.Contains(cfg.ExtraArgs, want) {
+			t.Fatalf("expected %q in GB10 extra args, got %q", want, cfg.ExtraArgs)
+		}
+	}
+	if len(cfg.TargetDevices) != 1 || cfg.TargetDevices[0] != DeviceGB10 {
+		t.Fatalf("expected GB10-only affinity, got %#v", cfg.TargetDevices)
+	}
+}
+
 func TestLookupFindsQwen38BF16LMHeadSGLangDFlash2Default(t *testing.T) {
 	t.Parallel()
 

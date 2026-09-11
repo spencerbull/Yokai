@@ -155,6 +155,46 @@ func TestLookupForDeviceFallsBackWhenNothingFits(t *testing.T) {
 	}
 }
 
+func TestDeviceProfileFromGPU(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		mem  string
+		want string
+	}{
+		{"NVIDIA GB10", "dedicated", DeviceGB10},
+		{"NVIDIA DGX Spark", "dedicated", DeviceGB10},
+		{"NVIDIA DGX Spark GB10", "dedicated", DeviceGB10},
+		{"NVIDIA Jetson Thor", "unified", DeviceJetsonThor},
+		{"NVIDIA GeForce RTX 4090", "dedicated", DeviceRTX4090},
+		{"NVIDIA GeForce RTX 5090", "dedicated", DeviceRTX5090},
+		{"NVIDIA RTX PRO 6000 Blackwell", "dedicated", DeviceRTXPRO6000},
+		{"NVIDIA L40S", "dedicated", DeviceL40S},
+		{"NVIDIA A100-SXM4-80GB", "dedicated", DeviceA100_80},
+		{"NVIDIA H100 80GB HBM3", "dedicated", DeviceH100_80},
+		{"NVIDIA H200", "dedicated", DeviceH200},
+		{"NVIDIA B200", "dedicated", DeviceB200},
+		{"NVIDIA GB200", "dedicated", DeviceGB200},
+		{"AMD Instinct MI300X", "dedicated", DeviceMI300X},
+		{"Generic GPU", "dedicated", ""},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := DeviceProfileFromGPU(tc.mem, tc.name); got != tc.want {
+				t.Fatalf("DeviceProfileFromGPU(%q, %q) = %q, want %q", tc.mem, tc.name, got, tc.want)
+			}
+		})
+	}
+
+	// Unified memory without a recognizable name name still maps to GB10.
+	if got := DeviceProfileFromGPU("unified", "some gpu"); got != DeviceGB10 {
+		t.Fatalf("unified memory should map to %q, got %q", DeviceGB10, got)
+	}
+}
+
 func TestCatalogReturnsIndependentCopy(t *testing.T) {
 	t.Parallel()
 	snapshot := Catalog()
