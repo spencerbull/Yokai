@@ -69,6 +69,17 @@ func TestMergeModelsBestEffort(t *testing.T) {
 	if len(got) != 1 || got[0].ID != "b/v" {
 		t.Fatalf("expected the successful batch, got %+v", got)
 	}
+	// One success-empty pipeline + one failed pipeline -> success (empty result,
+	// not a failure).
+	got, err = mergeModelsBestEffort(
+		[][]hf.Model{{}, nil},
+		[]error{nil, errTextGen}, 30)
+	if err != nil {
+		t.Fatalf("successful empty pipeline should not surface the sibling failure, got %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected empty merged result, got %+v", got)
+	}
 	// Every pipeline fails -> return the first error.
 	_, err = mergeModelsBestEffort(
 		[][]hf.Model{nil, nil},

@@ -92,23 +92,21 @@ func (d *Daemon) searchModelsMerged(query string, filters []string, limit int) (
 	errs := make([]error, 0, len(filters))
 	for _, f := range filters {
 		models, err := hf.NewClient(d.currentHFToken()).SearchModelsWithOptions(query, hf.SearchOptions{Limit: limit, Filter: f})
-		if err != nil {
-			groups = append(groups, nil)
-			errs = append(errs, err)
-			continue
-		}
 		groups = append(groups, models)
+		errs = append(errs, err)
 	}
 	return mergeModelsBestEffort(groups, errs, limit)
 }
 
 // mergeModelsBestEffort merges per-pipeline groups, tolerating failed groups.
-// It returns the merged successful results (deduped, by likes, capped) unless
-// every pipeline failed, in which case it returns the first error.
+// errs is parallel to groups: nil marks a successful pipeline (including one
+// that returned zero matches), a non-nil error a failed pipeline. It returns
+// the merged successful results (deduped, by likes, capped) unless every
+// pipeline failed, in which case it returns the first error.
 func mergeModelsBestEffort(groups [][]hf.Model, errs []error, limit int) ([]hf.Model, error) {
 	anysuccess := false
-	for _, g := range groups {
-		if len(g) > 0 {
+	for _, err := range errs {
+		if err == nil {
 			anysuccess = true
 			break
 		}
