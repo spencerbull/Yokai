@@ -63,7 +63,7 @@ func Run(version string) error {
 	if err != nil {
 		return fmt.Errorf("resolve recipe store: %w", err)
 	}
-	d.recipeStore, err = recipes.OpenStore(recipePath)
+	d.recipeStore, err = recipes.OpenStoreWithDefault(recipePath)
 	if err != nil {
 		return fmt.Errorf("loading recipe store: %w", err)
 	}
