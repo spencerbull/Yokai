@@ -64,6 +64,68 @@ func init() {
 			Arch:            ArchBlackwell,
 		},
 
+		// MiaAI-Lab's DFlash2 production profile for the DGX Spark GB10.
+		// Kept separate from the RTX PRO 6000 BKC: this is an arm64 image and
+		// its Mamba/KV policy was measured on the 128 GB unified-memory system.
+		Config{
+			ID:       "qwen3-8-27b-nvfp4-bf16-lmhead-sglang-dflash2-gb10",
+			Name:     "Qwen3.8 27B NVFP4 BF16 lm_head + DFlash2 (SGLang GB10)",
+			Workload: WorkloadSGLang,
+			ModelID:  "RadixArk/Qwen3.8-27B-NVFP4-BF16-LMHead",
+			Image:    imageSGLangQwen38GB10DFlash2,
+			Port:     "8888",
+			ExtraArgs: strings.Join([]string{
+				"sglang serve",
+				"--trust-remote-code",
+				"--revision 009632fef96dd349150baa780c984e62e70e91fe",
+				"--served-model-name Qwen3.8-27B",
+				"--tp-size 1",
+				"--context-length 262144",
+				"--mem-fraction-static 0.90",
+				"--sleep-on-idle",
+				"--attention-backend flashinfer",
+				"--chunked-prefill-size 8192",
+				"--disable-prefill-cuda-graph",
+				"--kv-cache-dtype fp8_e4m3",
+				"--mamba-ssm-dtype bfloat16",
+				"--mamba-full-memory-ratio 4.21",
+				"--mamba-radix-cache-strategy extra_buffer",
+				"--max-mamba-cache-size 40",
+				"--max-running-requests 10",
+				"--speculative-algorithm DFLASH",
+				"--speculative-draft-model-path z-lab/Qwen3.8-27B-DFlash2",
+				"--speculative-draft-model-revision 50307d4c4cde6860d4eee73e2547cd786fe8e8a4",
+				"--speculative-num-draft-tokens 8",
+				"--reasoning-parser qwen3",
+				"--tool-call-parser qwen3_coder",
+				"--sampling-defaults model",
+				"--enable-metrics",
+				"--enable-cache-report",
+			}, " "),
+			Env: map[string]string{
+				"SGLANG_OPT_MAMBA_SKIP_DECODE_LOCK": "0",
+			},
+			Volumes: hfMountDefault,
+			Runtime: config.RuntimeOptions{
+				IPCMode: "host",
+				ShmSize: "32g",
+			},
+			Description: "Qwen3.8 27B NVFP4 with dense BF16 lm_head and DFlash2 on one DGX Spark GB10.",
+			Source:      "MiaAI-Lab/Qwen3.8-27B-SGLang-DGX-Spark@9fb18edf (GB10 DFlash2 recipe)",
+			Notes: []string{
+				"Uses Mia's Sep 9 multi-arch SGLang image with the zombie-request fix; the digest resolves arm64 on GB10.",
+				"Native 262,144-token context only: YaRN is incompatible with DFlash2 on this SGLang build.",
+				"GB10 tuning uses 0.90 static memory, 8,192-token prefill chunks, BF16 Mamba state, a 40-slot Mamba pool, and 10 concurrent requests.",
+				"DFlash2 requires extra_buffer on the validated GB10 image; do not substitute extra_buffer_lazy without a device-specific retest.",
+				"The target and draft revisions are immutable. This BKC intentionally has GB10-only affinity.",
+			},
+			TargetDevices:   []string{DeviceGB10},
+			MinVRAMGBPerGPU: 100,
+			MinGPUCount:     1,
+			Quantization:    QuantNVFP4,
+			Arch:            ArchBlackwell,
+		},
+
 		// Default production profile validated on Finn's single RTX PRO 6000
 		// Blackwell 96 GB. Retained as the packed-head rollback after the
 		// BF16 lm_head checkpoint became the preferred upstream target.

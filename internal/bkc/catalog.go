@@ -391,6 +391,9 @@ const (
 	imageVLLMROCmGemma       = "vllm/vllm-openai-rocm:gemma4"
 	imageSGLangQwen38        = "lmsysorg/sglang@sha256:506525a5907ea22c9d445afb7c03603959b912de034d86915cf17da814f1a124"
 	imageSGLangQwen38DFlash2 = "lmsysorg/sglang@sha256:616a3e97f45191af975896cfa644279096cb31bd408a071c2e99ca7209c3cafe"
+	// Official multi-arch SGLang nightly, validated by MiaAI-Lab on GB10.
+	// The index digest resolves the linux/arm64 child image on DGX Spark.
+	imageSGLangQwen38GB10DFlash2 = "lmsysorg/sglang@sha256:00205b89f74691f76a0ffbd6846376d9323971930a5d59bf63a65dadc7d67927"
 )
 
 // hfMountDefault is the default Hugging Face cache mount shared by inference
