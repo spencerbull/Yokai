@@ -1,4 +1,4 @@
-//go:build !linux
+//go:build !linux && !darwin
 
 package upgrade
 
@@ -10,6 +10,12 @@ import (
 // findDaemonPIDByPort is unsupported on this platform; rely on the PID file.
 func findDaemonPIDByPort(addr string) (int, bool) {
 	return 0, false
+}
+
+// daemonPIDLooksOwned is unsupported here (no /proc); fall back to the
+// by-port/health paths so a stale pidfile PID is never trusted.
+func daemonPIDLooksOwned(pid int, addr string) bool {
+	return false
 }
 
 // platformProcessAlive reports whether the given PID exists. On Windows

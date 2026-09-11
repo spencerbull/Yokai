@@ -76,6 +76,12 @@ func pidAlive(pid int) bool {
 	return platformProcessAlive(pid)
 }
 
+// statIndicatesZombie reports whether a ps/proc process-status token denotes a
+// zombie (process exited but not yet reaped).
+func statIndicatesZombie(stat string) bool {
+	return strings.Contains(stat, "Z")
+}
+
 // waitForExit blocks until pid is gone or the timeout elapses.
 func waitForExit(pid int, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
@@ -99,11 +105,13 @@ func restartRunningDaemon(currentBinaryPath string) error {
 
 	// A daemon may have written its PID file but not yet reached
 	// ListenAndServe (startup does config/Tailscale/store work after that), so
-	// health alone can miss a running daemon and we'd replace the binary under
-	// a process about to serve stale code. Resolve a live PID first and only
-	// take the no-op path when no process exists at all.
+	// health alone can miss a running daemon. Resolve a live PID first — but
+	// validate ownership so a stale pidfile left by a SIGKILL-crashed daemon
+	// (whose deferred removal never ran) is never trusted if the PID was
+	// recycled by an unrelated process.
 	livePID := readPidFile()
-	if livePID <= 0 || !pidAlive(livePID) {
+	if livePID <= 0 || !pidAlive(livePID) || !daemonPIDLooksOwned(livePID, addr) {
+		livePID = 0
 		if pid, ok := findDaemonPIDByPort(addr); ok {
 			livePID = pid
 		}

@@ -48,6 +48,35 @@ func platformTerminate(pid int) {
 	_ = syscall.Kill(pid, syscall.SIGTERM)
 }
 
+// daemonPIDLooksOwned reports whether pid is plausibly the yokai daemon: its
+// /proc/<pid>/cmdline contains the "daemon" subcommand, or it owns the daemon
+// listener. Validates a pidfile PID before signalling so a recycled PID from a
+// stale pidfile is never terminated.
+func daemonPIDLooksOwned(pid int, addr string) bool {
+	if isDaemonArgv(pid) {
+		return true
+	}
+	if p, ok := findDaemonPIDByPort(addr); ok {
+		return p == pid
+	}
+	return false
+}
+
+// isDaemonArgv reports whether the process argv includes the "daemon"
+// subcommand (the daemon is launched as "yokai daemon").
+func isDaemonArgv(pid int) bool {
+	data, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "cmdline"))
+	if err != nil {
+		return false
+	}
+	for _, token := range strings.Split(strings.TrimRight(string(data), "\x00"), "\x00") {
+		if token == "daemon" {
+			return true
+		}
+	}
+	return false
+}
+
 // findDaemonPIDByPort locates the PID listening on addr by walking /proc
 // socket inodes. It matches the configured address and family (IPv4 vs IPv6)
 // and only LISTEN (0A) sockets, so an unrelated process sharing the same

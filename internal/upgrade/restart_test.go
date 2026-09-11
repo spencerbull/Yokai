@@ -98,3 +98,20 @@ func TestMatchingListenInodesAddressAndStateFiltering(t *testing.T) {
 		t.Fatalf("any-address listen = %v, want 2 (non-LISTEN excluded)", got)
 	}
 }
+
+func TestStatIndicatesZombie(t *testing.T) {
+	for in, exp := range map[string]bool{
+		"R":    false,
+		"S":    false,
+		"S+":   false,
+		"R+":   false,
+		"Z":    true,
+		"Z+":   true,
+		"SL Z": true,
+		"":     false,
+	} {
+		if got := statIndicatesZombie(in); got != exp {
+			t.Errorf("statIndicatesZombie(%q) = %v, want %v", in, got, exp)
+		}
+	}
+}
