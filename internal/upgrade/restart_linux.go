@@ -9,7 +9,19 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 )
+
+// platformProcessAlive reports whether the given PID exists (signal-0 probe).
+func platformProcessAlive(pid int) bool {
+	err := syscall.Kill(pid, 0)
+	return err == nil || err == syscall.EPERM
+}
+
+// platformTerminate sends SIGTERM to pid.
+func platformTerminate(pid int) {
+	_ = syscall.Kill(pid, syscall.SIGTERM)
+}
 
 // findDaemonPIDByPort locates the PID listening on addr by walking /proc
 // socket inodes. It returns ok=false when the listener cannot be found.

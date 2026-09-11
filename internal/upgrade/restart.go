@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/spencerbull/yokai/internal/config"
@@ -74,8 +73,7 @@ func pidAlive(pid int) bool {
 	if pid <= 0 {
 		return false
 	}
-	err := syscall.Kill(pid, 0)
-	return err == nil || err == syscall.EPERM
+	return platformProcessAlive(pid)
 }
 
 // waitForExit blocks until pid is gone or the timeout elapses.
@@ -107,14 +105,14 @@ func restartRunningDaemon(currentBinaryPath string) error {
 
 	stopped := false
 	if pid := readPidFile(); pid > 0 && pidAlive(pid) {
-		_ = syscall.Kill(pid, syscall.SIGTERM)
+		platformTerminate(pid)
 		stopped = waitForExit(pid, 8*time.Second)
 	}
 	if !stopped {
 		// Fall back to locating the listener by port (covers daemons started
 		// before PID files existed).
 		if pid, ok := findDaemonPIDByPort(addr); ok {
-			_ = syscall.Kill(pid, syscall.SIGTERM)
+			platformTerminate(pid)
 			stopped = waitForExit(pid, 8*time.Second)
 		}
 	}
