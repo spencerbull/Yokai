@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -229,6 +230,51 @@ func TestDeploymentAgentOperationErrorClassification(t *testing.T) {
 				t.Fatalf("authorization sentinel mismatch: want=%v err=%v", test.wantAuth, got)
 			}
 		})
+	}
+}
+
+func TestAgentResponseErrorDecodesWorstCaseEscapedPullDiagnostic(t *testing.T) {
+	const deviceID = "spark-a"
+	diagnostic := strings.Repeat("<\x00", 4*1024)
+	if len(diagnostic) != 8*1024 {
+		t.Fatalf("diagnostic length = %d, want %d", len(diagnostic), 8*1024)
+	}
+	message := "docker pull failed: exit status 1 (" + diagnostic + ")"
+
+	var body bytes.Buffer
+	encoder := json.NewEncoder(&body)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(map[string]string{"error": "pull_failed", "message": message}); err != nil {
+		t.Fatal(err)
+	}
+	if body.Len() <= 32*1024 {
+		t.Fatalf("escaped envelope length = %d, want more than the former 32 KiB limit", body.Len())
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodPost || request.URL.Path != "/containers" {
+			t.Fatalf("unexpected deploy request: %s %s", request.Method, request.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		if _, err := w.Write(body.Bytes()); err != nil {
+			t.Errorf("write agent error: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	cfg := config.DefaultConfig()
+	cfg.Devices = []config.Device{{ID: deviceID}}
+	tunnels := NewTunnelPool(cfg)
+	tunnels.tunnels[deviceID] = &tunnel{deviceID: deviceID, localPort: server.Listener.Addr().(*net.TCPAddr).Port, connected: true}
+	aggregator := NewAggregator(cfg, tunnels)
+	_, err := aggregator.Deploy(DeployRequest{DeviceID: deviceID})
+	var responseErr *agentHTTPError
+	if !errors.As(err, &responseErr) {
+		t.Fatalf("error type = %T, want *agentHTTPError", err)
+	}
+	if responseErr.Code != "pull_failed" || responseErr.Message != message {
+		t.Fatalf("agent error was not decoded: code=%q message length=%d", responseErr.Code, len(responseErr.Message))
 	}
 }
 
