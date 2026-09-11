@@ -1,6 +1,8 @@
 package upgrade
 
 import (
+	"debug/buildinfo"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -16,7 +18,24 @@ import (
 const (
 	defaultDaemonAddr = "127.0.0.1:7473"
 	daemonPidFile     = "daemon.pid"
+	yokaiMainPackage  = "github.com/spencerbull/yokai/cmd/yokai"
 )
+
+func isYokaiBuild(info *buildinfo.BuildInfo) bool {
+	return info != nil && info.Path == yokaiMainPackage
+}
+
+func hasDaemonSubcommand(args []string) bool {
+	return len(args) >= 2 && args[1] == "daemon"
+}
+
+func commandLooksLikeYokaiDaemon(comm, args string) bool {
+	name := strings.TrimSuffix(strings.ToLower(filepath.Base(strings.TrimSpace(comm))), ".exe")
+	if name != "yokai" {
+		return false
+	}
+	return hasDaemonSubcommand(strings.Fields(args))
+}
 
 // daemonAddr resolves the daemon listen address from config, defaulting to the
 // standard loopback address when unset.
@@ -40,6 +59,33 @@ func daemonHealthy(addr string) bool {
 	}
 	defer func() { _ = resp.Body.Close() }()
 	return resp.StatusCode == http.StatusOK
+}
+
+// daemonPIDMatchesHealth reports whether pid is the process identifying itself
+// through the configured daemon listener. This gives platforms without /proc a
+// safe ownership check while still rejecting stale pidfiles and unrelated
+// health endpoints that do not implement Yokai's process identity response.
+func daemonPIDMatchesHealth(pid int, addr string) bool {
+	if pid <= 0 {
+		return false
+	}
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get("http://" + addr + "/health")
+	if err != nil {
+		return false
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return false
+	}
+	var health struct {
+		Status string `json:"status"`
+		PID    int    `json:"pid"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&health); err != nil {
+		return false
+	}
+	return health.Status == "ok" && health.PID > 0 && health.PID == pid
 }
 
 // waitForDaemon polls addr until it answers /health or the timeout elapses.
@@ -110,7 +156,8 @@ func restartRunningDaemon(currentBinaryPath string) error {
 	// (whose deferred removal never ran) is never trusted if the PID was
 	// recycled by an unrelated process.
 	livePID := readPidFile()
-	if livePID <= 0 || !pidAlive(livePID) || !daemonPIDLooksOwned(livePID, addr) {
+	pidFileOwned := livePID > 0 && ((pidAlive(livePID) && daemonPIDLooksOwned(livePID, addr)) || daemonPIDMatchesHealth(livePID, addr))
+	if !pidFileOwned {
 		livePID = 0
 		if pid, ok := findDaemonPIDByPort(addr); ok {
 			livePID = pid
