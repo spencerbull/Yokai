@@ -96,7 +96,20 @@ func restartRunningDaemon(currentBinaryPath string) error {
 	if err != nil {
 		return err
 	}
-	if !daemonHealthy(addr) {
+
+	// A daemon may have written its PID file but not yet reached
+	// ListenAndServe (startup does config/Tailscale/store work after that), so
+	// health alone can miss a running daemon and we'd replace the binary under
+	// a process about to serve stale code. Resolve a live PID first and only
+	// take the no-op path when no process exists at all.
+	livePID := readPidFile()
+	if livePID <= 0 || !pidAlive(livePID) {
+		if pid, ok := findDaemonPIDByPort(addr); ok {
+			livePID = pid
+		}
+	}
+
+	if livePID <= 0 && !daemonHealthy(addr) {
 		fmt.Println("No running daemon detected; nothing to restart.")
 		return nil
 	}
@@ -104,20 +117,12 @@ func restartRunningDaemon(currentBinaryPath string) error {
 	fmt.Println("Restarting daemon with the new version...")
 
 	stopped := false
-	if pid := readPidFile(); pid > 0 && pidAlive(pid) {
-		platformTerminate(pid)
-		stopped = waitForExit(pid, 8*time.Second)
+	if livePID > 0 {
+		platformTerminate(livePID)
+		stopped = waitForExit(livePID, 8*time.Second)
 	}
 	if !stopped {
-		// Fall back to locating the listener by port (covers daemons started
-		// before PID files existed).
-		if pid, ok := findDaemonPIDByPort(addr); ok {
-			platformTerminate(pid)
-			stopped = waitForExit(pid, 8*time.Second)
-		}
-	}
-	if !stopped {
-		return fmt.Errorf("a daemon is running but its process could not be located; stop it and run %q manually", currentBinaryPath)
+		return fmt.Errorf("a daemon is running but its process could not be located/stopped; stop it and run %q manually", currentBinaryPath)
 	}
 
 	if err := startDaemonProcess(currentBinaryPath); err != nil {
