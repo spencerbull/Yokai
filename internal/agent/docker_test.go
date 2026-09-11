@@ -1114,3 +1114,28 @@ func TestLogDetail(t *testing.T) {
 		t.Fatalf("logDetail = %q, want \": boom\"", got)
 	}
 }
+
+func TestBoundedBufferCapsRetainedBytes(t *testing.T) {
+	b := newBoundedBuffer(10)
+	big := strings.Repeat("x", 100)
+	if _, err := b.Write([]byte(big)); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	got := b.String()
+	if len(got) != 10 {
+		t.Fatalf("expected 10 retained bytes, got %d", len(got))
+	}
+	if got != big[len(big)-10:] {
+		t.Fatalf("expected last 10 bytes retained, got %q", got)
+	}
+	// Further writes keep the same cap.
+	if _, err := b.Write([]byte("abc")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if len(b.String()) != 10 {
+		t.Fatalf("expected cap to hold at 10, got %d", len(b.String()))
+	}
+	if !strings.HasSuffix(b.String(), "abc") {
+		t.Fatalf("expected tail to end in abc, got %q", b.String())
+	}
+}

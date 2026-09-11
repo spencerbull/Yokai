@@ -19,6 +19,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spencerbull/yokai/internal/config"
@@ -742,13 +743,20 @@ func pullImage(image string) error {
 func pullImageWithContext(ctx context.Context, image string) error {
 	start := time.Now()
 	cmd := exec.CommandContext(ctx, "docker", "pull", image)
-	out, err := cmd.CombinedOutput()
+	// Capture pull output through a bounded buffer: docker writes a lot of
+	// progress text, and we only need the tail for diagnostics. Streaming
+	// through a cap keeps agent memory flat for the whole RPC window instead
+	// of buffering every byte until the command exits.
+	out := newBoundedBuffer(8 << 10) // last 8 KiB
+	cmd.Stdout = out
+	cmd.Stderr = out
+	err := cmd.Run()
 	if err != nil {
 		if contextErr := ctx.Err(); contextErr != nil {
 			log.Printf("docker pull %s canceled after %s: %v", image, time.Since(start).Round(time.Millisecond), contextErr)
 			return fmt.Errorf("docker pull canceled: %w", contextErr)
 		}
-		detail := dockerOutputTail(out)
+		detail := dockerOutputTail([]byte(out.String()))
 		log.Printf("docker pull %s failed after %s: %v%s", image, time.Since(start).Round(time.Millisecond), err, logDetail(detail))
 		if detail != "" {
 			return fmt.Errorf("docker pull failed: %w (%s)", err, detail)
@@ -757,6 +765,40 @@ func pullImageWithContext(ctx context.Context, image string) error {
 	}
 	log.Printf("docker pull %s succeeded after %s", image, time.Since(start).Round(time.Millisecond))
 	return nil
+}
+
+// boundedBuffer is a byte-capacity ring buffer that retains only the most
+// recent max bytes written to it, so noisy subprocess output never accumulates
+// unbounded in agent memory.
+type boundedBuffer struct {
+	mu  sync.Mutex
+	max int
+	buf []byte
+}
+
+func newBoundedBuffer(max int) *boundedBuffer {
+	if max <= 0 {
+		max = 8 << 10
+	}
+	return &boundedBuffer{max: max}
+}
+
+func (b *boundedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.buf = append(b.buf, p...)
+	if len(b.buf) > b.max {
+		overflow := len(b.buf) - b.max
+		b.buf = append([]byte(nil), b.buf[overflow:]...)
+	}
+	return len(p), nil
+}
+
+// String returns the retained (bounded) contents.
+func (b *boundedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return string(b.buf)
 }
 
 // dockerOutputTail returns the last few non-empty lines of a command's output,
