@@ -38,6 +38,13 @@ func Run(version string) error {
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
+
+	// Record our PID so `yokai upgrade` can locate and restart this process
+	// after replacing the binary (see internal/upgrade). Removed on exit.
+	if err := WritePidFile(); err != nil {
+		log.Printf("warning: failed to write daemon pid file: %v", err)
+	}
+	defer RemovePidFile()
 	if applyCurrentTailscaleHostAliases(cfg) {
 		if err := config.Save(cfg); err != nil {
 			log.Printf("warning: failed to persist Tailscale DNS host aliases: %v", err)
