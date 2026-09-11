@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test"
 
 import type { DeployBKC, DeployForm } from "../../contracts/deploy"
+import { normalizeSettingsDocument } from "../../contracts/settings"
 import { DaemonRequestError, readDaemonError } from "../../services/daemon-client"
-import { buildClusterDeploymentRequest, buildDeployRequest, deploymentHistoryWarning, deploymentRecoveryNotice, validateClusterDeploymentForm } from "./useDeployController"
+import { buildClusterDeploymentRequest, buildDeployRequest, deploymentHistoryWarning, deploymentRecoveryNotice, updateHistory, validateClusterDeploymentForm } from "./useDeployController"
 
 const form: DeployForm = {
   deviceId: "spark-a",
@@ -103,5 +104,72 @@ describe("cluster deployment bindings", () => {
 	  generation: 1, previous_generation: 0, bindings: [], created_at: "2026-08-28T00:00:00Z", updated_at: "2026-08-28T00:01:00Z",
 	}
 	expect(deploymentHistoryWarning(deployment, new Error("disk full"))).toBe("Deployment dep-running is running; deploy history was not saved: disk full")
+  })
+})
+
+describe("updateHistory null-safety", () => {
+  const form: DeployForm = {
+    deviceId: "dev-a",
+    extraArgs: "",
+    image: "vllm/vllm-openai:latest",
+    model: "",
+    ggufVariant: "",
+    ggufFiles: [],
+    name: "",
+    port: "8000",
+    workload: "vllm",
+    headDeviceId: "",
+    headFabricAddress: "",
+    headServiceAddress: "",
+    workerDeviceId: "",
+    workerFabricAddress: "",
+    idempotencyKey: "",
+    localModelPath: "",
+    apiKey: "",
+    headObservedContainerId: "",
+    workerObservedContainerId: "",
+  }
+
+  test("tolerates a null history document (images/models null) without throwing", () => {
+    // Regression: a fresh daemon (no history.json) or a hand-edited file can
+    // marshal history as null / { images: null, models: null }, which broke the
+    // TUI deploy screen with `null is not iterable`.
+    const settings = { history: { images: null, models: null } }
+    expect(() => updateHistory(settings as never, form)).not.toThrow()
+    const result = updateHistory(settings as never, form)
+    expect(result).toEqual({ images: ["vllm/vllm-openai:latest"], models: [] })
+  })
+
+  test("tolerates a missing history field entirely", () => {
+    const settings = {}
+    expect(() => updateHistory(settings as never, form)).not.toThrow()
+    expect(updateHistory(settings as never, form)).toEqual({ images: ["vllm/vllm-openai:latest"], models: [] })
+  })
+
+  test("prepends to existing history and caps at 20", () => {
+    const settings = { history: { images: ["a", "b"], models: ["m1"] } }
+    const result = updateHistory(settings as never, { ...form, image: "latest", model: "m1" })
+    expect(result.images[0]).toBe("latest")
+    expect(result.images).toContain("a")
+    expect(result.models[0]).toBe("m1")
+  })
+})
+
+describe("normalizeSettingsDocument", () => {
+  test("coerces null history images/models to empty arrays", () => {
+    const out = normalizeSettingsDocument({ history: { images: null, models: null } } as never)
+    expect(out.history.images).toEqual([])
+    expect(out.history.models).toEqual([])
+  })
+
+  test("coerces a missing history field to empty arrays", () => {
+    const out = normalizeSettingsDocument({} as never)
+    expect(out.history).toEqual({ images: [], models: [] })
+  })
+
+  test("preserves existing history arrays", () => {
+    const out = normalizeSettingsDocument({ history: { images: ["a"], models: ["m"] } } as never)
+    expect(out.history.images).toEqual(["a"])
+    expect(out.history.models).toEqual(["m"])
   })
 })

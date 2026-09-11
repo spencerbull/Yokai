@@ -3,6 +3,7 @@ import { startTransition, useEffect, useMemo, useState } from "react"
 import type { DeploymentCreateRequest, DeploymentRecord, DeployBKC, DeployForm, GGUFVariant, HFModel, VLLMMemoryEstimate, WorkloadType } from "../../contracts/deploy"
 import type { DeviceRecord } from "../../contracts/fleet"
 import type { SettingsDocument } from "../../contracts/settings"
+import { normalizeSettingsDocument } from "../../contracts/settings"
 import { createDeployment, DaemonRequestError, deployService, getDeployBKCs, getDevices, getGGUFVariants, getHFModels, getSettings, getVLLMMemoryEstimate, putDeployHistory } from "../../services/daemon-client"
 
 type DeployStep = "workload" | "device" | "image" | "model" | "variant" | "config" | "review"
@@ -91,9 +92,9 @@ export function useDeployController(active: boolean, onComplete: (notice?: Deplo
         }
         startTransition(() => {
           setDevices(deviceResponse.devices)
-          setSettings(settingsDoc)
+          setSettings(normalizeSettingsDocument(settingsDoc))
           setStatus("ready")
-          setForm((current) => applyDefaults(current, settingsDoc))
+          setForm((current) => applyDefaults(current, normalizeSettingsDocument(settingsDoc)))
         })
       } catch (cause) {
         if (cancelled) {
@@ -952,9 +953,11 @@ function isExplicitServiceIPAddress(value: string) {
   return !input.startsWith("ff")
 }
 
-function updateHistory(settings: SettingsDocument, form: DeployForm) {
-  const images = [form.image.trim(), ...settings.history.images].filter(Boolean)
-  const models = form.workload === "comfyui" ? settings.history.models : [form.model.trim(), ...settings.history.models].filter(Boolean)
+export function updateHistory(settings: SettingsDocument, form: DeployForm) {
+  const prevImages = settings.history?.images ?? []
+  const prevModels = settings.history?.models ?? []
+  const images = [form.image.trim(), ...prevImages].filter(Boolean)
+  const models = form.workload === "comfyui" ? prevModels : [form.model.trim(), ...prevModels].filter(Boolean)
   return {
     images: dedupe(images).slice(0, 20),
     models: dedupe(models).slice(0, 20),

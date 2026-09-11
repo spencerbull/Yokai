@@ -69,3 +69,18 @@ export type IntegrationsConfigureResponse = {
     err?: string
   }>
 }
+
+// Normalize a settings document fetched from the daemon so that history
+// (images/models) is always an array. Some daemon versions marshal an absent
+// history.json to JSON null for these fields, which would crash TUI
+// render-time `.slice()` calls. Apply whenever storing a settings document.
+export function normalizeSettingsDocument(settings: SettingsDocument): SettingsDocument {
+  const history = settings.history ?? { images: [], models: [] }
+  return {
+    ...settings,
+    history: {
+      images: Array.isArray(history.images) ? history.images : [],
+      models: Array.isArray(history.models) ? history.models : [],
+    },
+  }
+}
