@@ -4,6 +4,7 @@ package upgrade
 
 import (
 	"bytes"
+	"debug/buildinfo"
 	"encoding/hex"
 	"fmt"
 	"net"
@@ -48,18 +49,22 @@ func platformTerminate(pid int) {
 	_ = syscall.Kill(pid, syscall.SIGTERM)
 }
 
-// daemonPIDLooksOwned reports whether pid is plausibly the yokai daemon: its
-// /proc/<pid>/cmdline contains the "daemon" subcommand, or it owns the daemon
-// listener. Validates a pidfile PID before signalling so a recycled PID from a
-// stale pidfile is never terminated.
+// daemonPIDLooksOwned reports whether pid owns the daemon listener or is a
+// Yokai executable running the daemon subcommand. Validates a pidfile PID
+// before signalling so a recycled PID from a stale pidfile is never terminated.
 func daemonPIDLooksOwned(pid int, addr string) bool {
-	if isDaemonArgv(pid) {
-		return true
-	}
 	if p, ok := findDaemonPIDByPort(addr); ok {
 		return p == pid
 	}
-	return false
+	return isYokaiExecutable(pid) && isDaemonArgv(pid)
+}
+
+// isYokaiExecutable verifies the module identity embedded in the process's Go
+// executable. Unlike argv[0] or comm, this cannot be supplied by an unrelated
+// process that happens to include "daemon" in its arguments.
+func isYokaiExecutable(pid int) bool {
+	info, err := buildinfo.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "exe"))
+	return err == nil && isYokaiBuild(info)
 }
 
 // isDaemonArgv reports whether the process argv includes the "daemon"

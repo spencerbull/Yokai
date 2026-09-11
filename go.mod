@@ -6,6 +6,7 @@ require (
 	github.com/pelletier/go-toml/v2 v2.2.3
 	github.com/tailscale/hujson v0.0.0-20260302212456-ecc657c15afd
 	golang.org/x/crypto v0.48.0
+	golang.org/x/sys v0.41.0
 )
 
 require (
@@ -184,7 +185,6 @@ require (
 	golang.org/x/exp/typeparams v0.0.0-20250210185358-939b2ce775ac // indirect
 	golang.org/x/mod v0.32.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect
-	golang.org/x/sys v0.41.0 // indirect
 	golang.org/x/text v0.34.0 // indirect
 	golang.org/x/tools v0.41.0 // indirect
 	golang.org/x/tools/go/expect v0.1.1-deprecated // indirect
