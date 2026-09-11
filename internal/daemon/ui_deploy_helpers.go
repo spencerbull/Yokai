@@ -70,7 +70,9 @@ type deviceMetricsPayload struct {
 }
 
 type deployGPU struct {
-	VRAMTotalMB int64 `json:"vram_total_mb"`
+	VRAMTotalMB int64  `json:"vram_total_mb"`
+	Name        string `json:"name,omitempty"`
+	MemoryType  string `json:"memory_type,omitempty"`
 }
 
 type liveDeviceMetricsPayload struct {
@@ -114,6 +116,17 @@ func (d *Daemon) handleDeployBKC(w http.ResponseWriter, r *http.Request) {
 			if gpus, err := d.fetchDeployGPUs(deviceID); err == nil && len(gpus) > 0 {
 				vramGB = smallestVRAMGB(gpus)
 				gpuCount = len(gpus)
+				// If the UI didn't pin a device profile, derive it from the live
+				// GPU(s) so a GB10/DGX Spark device reaches GB10-only configs
+				// (which would otherwise be skipped by VRAM-only matching).
+				if deviceProfile == "" {
+					for _, g := range gpus {
+						if p := bkc.DeviceProfileFromGPU(g.MemoryType, g.Name); p != "" {
+							deviceProfile = p
+							break
+						}
+					}
+				}
 			}
 		}
 		if picked, found := bkc.LookupForDevice(target, model, deviceProfile, vramGB, gpuCount); found {
