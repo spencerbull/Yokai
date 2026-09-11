@@ -740,14 +740,42 @@ func pullImage(image string) error {
 }
 
 func pullImageWithContext(ctx context.Context, image string) error {
+	start := time.Now()
 	cmd := exec.CommandContext(ctx, "docker", "pull", image)
-	if err := cmd.Run(); err != nil {
+	out, err := cmd.CombinedOutput()
+	if err != nil {
 		if contextErr := ctx.Err(); contextErr != nil {
+			log.Printf("docker pull %s canceled after %s: %v", image, time.Since(start).Round(time.Millisecond), contextErr)
 			return fmt.Errorf("docker pull canceled: %w", contextErr)
+		}
+		detail := dockerOutputTail(out)
+		log.Printf("docker pull %s failed after %s: %v%s", image, time.Since(start).Round(time.Millisecond), err, logDetail(detail))
+		if detail != "" {
+			return fmt.Errorf("docker pull failed: %w (%s)", err, detail)
 		}
 		return fmt.Errorf("docker pull failed: %w", err)
 	}
+	log.Printf("docker pull %s succeeded after %s", image, time.Since(start).Round(time.Millisecond))
 	return nil
+}
+
+// dockerOutputTail returns the last few non-empty lines of a command's output,
+// bounded, so the underlying docker error (e.g. a pull-rate-limit, network or
+// disk message) is surfaced in the returned error instead of just "exit status 1".
+func dockerOutputTail(out []byte) string {
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) > 8 {
+		lines = lines[len(lines)-8:]
+	}
+	return strings.Join(lines, "\n")
+}
+
+// logDetail formats an optional detail string for a log line.
+func logDetail(detail string) string {
+	if detail == "" {
+		return ""
+	}
+	return ": " + detail
 }
 
 // sanitizeName sanitizes a container name.

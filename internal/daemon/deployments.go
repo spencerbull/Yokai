@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"path/filepath"
@@ -619,6 +620,14 @@ func agentResponseError(response *http.Response) error {
 func deploymentAgentOperationError(op string, err error, clientErrorsAreConflicts bool) error {
 	if err == nil || deployments.ErrorKindOf(err) != "" {
 		return err
+	}
+	// Log remote operation failures with the agent's full message (which now
+	// includes captured docker stderr) so the underlying cause is inspectable
+	// in the daemon log instead of only the terse status surfaced to the TUI.
+	if responseErr, ok := err.(*agentHTTPError); ok && responseErr.Message != "" {
+		log.Printf("remote operation %q failed: %s", op, responseErr.Message)
+	} else {
+		log.Printf("remote operation %q failed: %v", op, err)
 	}
 	var responseErr *agentHTTPError
 	if errors.As(err, &responseErr) {
