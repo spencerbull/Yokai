@@ -1,11 +1,70 @@
 package daemon
 
 import (
+	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/spencerbull/yokai/internal/config"
 	"github.com/spencerbull/yokai/internal/hf"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
+
+func TestHandleHFModelsReturnsEmptyWhenSiblingPipelineFails(t *testing.T) {
+	originalTransport := http.DefaultTransport
+	var filters []string
+	http.DefaultTransport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		filter := request.URL.Query().Get("filter")
+		filters = append(filters, filter)
+		status := http.StatusOK
+		body := "[]"
+		if filter == "image-text-to-text" {
+			status = http.StatusServiceUnavailable
+			body = `{"error":"temporarily unavailable"}`
+		}
+		return &http.Response{
+			StatusCode: status,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(body)),
+			Request:    request,
+		}, nil
+	})
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	daemon := &Daemon{cfg: config.DefaultConfig()}
+	request := httptest.NewRequest(http.MethodGet, "/hf/models?query=qwen&workload=vllm", nil)
+	response := httptest.NewRecorder()
+
+	daemon.handleHFModels(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	var body struct {
+		Models []hf.Model `json:"models"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Models == nil {
+		t.Fatal("models = null, want []")
+	}
+	if len(body.Models) != 0 {
+		t.Fatalf("models = %+v, want empty", body.Models)
+	}
+	if len(filters) != 2 || filters[0] != "text-generation" || filters[1] != "image-text-to-text" {
+		t.Fatalf("filters = %v, want both pipeline searches", filters)
+	}
+}
 
 func TestMergeModelsByLikesDedupesAndSorts(t *testing.T) {
 	text := []hf.Model{
