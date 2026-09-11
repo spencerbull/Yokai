@@ -35,7 +35,7 @@ func LoadHistory() (*History, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return &History{}, nil
+			return emptyHistory(), nil
 		}
 		return nil, fmt.Errorf("reading history: %w", err)
 	}
@@ -45,7 +45,23 @@ func LoadHistory() (*History, error) {
 		return nil, fmt.Errorf("parsing history: %w", err)
 	}
 
+	// A history.json written with null/omitted slices (or hand-edited) would
+	// otherwise marshal back to JSON null, which breaks API consumers that
+	// expect arrays (e.g. the TUI deploy form). Normalize to empty slices.
+	if h.Images == nil {
+		h.Images = []string{}
+	}
+	if h.Models == nil {
+		h.Models = []string{}
+	}
+
 	return &h, nil
+}
+
+// emptyHistory returns a History with non-nil, empty slices so it always
+// serializes to JSON arrays ([]), never null.
+func emptyHistory() *History {
+	return &History{Images: []string{}, Models: []string{}}
 }
 
 // SaveHistory writes the history to disk atomically.

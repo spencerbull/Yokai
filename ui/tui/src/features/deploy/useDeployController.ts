@@ -952,9 +952,11 @@ function isExplicitServiceIPAddress(value: string) {
   return !input.startsWith("ff")
 }
 
-function updateHistory(settings: SettingsDocument, form: DeployForm) {
-  const images = [form.image.trim(), ...settings.history.images].filter(Boolean)
-  const models = form.workload === "comfyui" ? settings.history.models : [form.model.trim(), ...settings.history.models].filter(Boolean)
+export function updateHistory(settings: SettingsDocument, form: DeployForm) {
+  const prevImages = settings.history?.images ?? []
+  const prevModels = settings.history?.models ?? []
+  const images = [form.image.trim(), ...prevImages].filter(Boolean)
+  const models = form.workload === "comfyui" ? prevModels : [form.model.trim(), ...prevModels].filter(Boolean)
   return {
     images: dedupe(images).slice(0, 20),
     models: dedupe(models).slice(0, 20),
