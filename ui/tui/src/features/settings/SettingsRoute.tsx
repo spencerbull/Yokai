@@ -56,8 +56,8 @@ export function SettingsRoute(props: SettingsRouteProps) {
             </Card>
 
             <Card title="Deploy History">
-              <Line label="Images" value={settings.history.images.slice(0, 2).join(" · ") || "none"} marquee />
-              <Line label="Models" value={settings.history.models.slice(0, 2).join(" · ") || "none"} marquee />
+              <Line label="Images" value={(settings.history?.images ?? []).slice(0, 2).join(" · ") || "none"} marquee />
+              <Line label="Models" value={(settings.history?.models ?? []).slice(0, 2).join(" · ") || "none"} marquee />
               <ActionText keys="R" onSelect={props.controller.refresh}>Refresh settings</ActionText>
             </Card>
           </box>

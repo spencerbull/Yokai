@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 
 import type { DeployBKC, DeployForm } from "../../contracts/deploy"
+import { normalizeSettingsDocument } from "../../contracts/settings"
 import { DaemonRequestError, readDaemonError } from "../../services/daemon-client"
 import { buildClusterDeploymentRequest, buildDeployRequest, deploymentHistoryWarning, deploymentRecoveryNotice, updateHistory, validateClusterDeploymentForm } from "./useDeployController"
 
@@ -151,5 +152,24 @@ describe("updateHistory null-safety", () => {
     expect(result.images[0]).toBe("latest")
     expect(result.images).toContain("a")
     expect(result.models[0]).toBe("m1")
+  })
+})
+
+describe("normalizeSettingsDocument", () => {
+  test("coerces null history images/models to empty arrays", () => {
+    const out = normalizeSettingsDocument({ history: { images: null, models: null } } as never)
+    expect(out.history.images).toEqual([])
+    expect(out.history.models).toEqual([])
+  })
+
+  test("coerces a missing history field to empty arrays", () => {
+    const out = normalizeSettingsDocument({} as never)
+    expect(out.history).toEqual({ images: [], models: [] })
+  })
+
+  test("preserves existing history arrays", () => {
+    const out = normalizeSettingsDocument({ history: { images: ["a"], models: ["m"] } } as never)
+    expect(out.history.images).toEqual(["a"])
+    expect(out.history.models).toEqual(["m"])
   })
 })

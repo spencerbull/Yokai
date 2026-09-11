@@ -3,6 +3,7 @@ import { startTransition, useEffect, useMemo, useState } from "react"
 import type { DeploymentCreateRequest, DeploymentRecord, DeployBKC, DeployForm, GGUFVariant, HFModel, VLLMMemoryEstimate, WorkloadType } from "../../contracts/deploy"
 import type { DeviceRecord } from "../../contracts/fleet"
 import type { SettingsDocument } from "../../contracts/settings"
+import { normalizeSettingsDocument } from "../../contracts/settings"
 import { createDeployment, DaemonRequestError, deployService, getDeployBKCs, getDevices, getGGUFVariants, getHFModels, getSettings, getVLLMMemoryEstimate, putDeployHistory } from "../../services/daemon-client"
 
 type DeployStep = "workload" | "device" | "image" | "model" | "variant" | "config" | "review"
@@ -91,9 +92,9 @@ export function useDeployController(active: boolean, onComplete: (notice?: Deplo
         }
         startTransition(() => {
           setDevices(deviceResponse.devices)
-          setSettings(settingsDoc)
+          setSettings(normalizeSettingsDocument(settingsDoc))
           setStatus("ready")
-          setForm((current) => applyDefaults(current, settingsDoc))
+          setForm((current) => applyDefaults(current, normalizeSettingsDocument(settingsDoc)))
         })
       } catch (cause) {
         if (cancelled) {

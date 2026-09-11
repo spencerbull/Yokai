@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react"
 
 import type { SettingsDocument } from "../../contracts/settings"
+import { normalizeSettingsDocument } from "../../contracts/settings"
 import { configureIntegrations, getOpenAIEndpoints, getSettings, patchSettings, putHFToken, validateHFToken } from "../../services/daemon-client"
 import type { ThemeState } from "../../theme/types"
 
@@ -69,7 +70,7 @@ export function useSettingsController(active: boolean, theme: ThemeState) {
         if (cancelled) {
           return
         }
-        setSettings(settingsDoc)
+        setSettings(normalizeSettingsDocument(settingsDoc))
         setEndpoints(discoveredEndpoints)
         setStatus("ready")
       } catch (cause) {
@@ -231,7 +232,7 @@ export function useSettingsController(active: boolean, theme: ThemeState) {
     setPendingAction("refreshing settings")
     try {
       const [settingsDoc, discoveredEndpoints] = await Promise.all([getSettings(), getOpenAIEndpoints().catch(() => [])])
-      setSettings(settingsDoc)
+      setSettings(normalizeSettingsDocument(settingsDoc))
       setEndpoints(discoveredEndpoints)
       setStatus("ready")
     } catch (cause) {
@@ -284,7 +285,7 @@ export function useSettingsController(active: boolean, theme: ThemeState) {
           default_vllm_image: defaultsEditor.values.vllm.trim(),
         },
       })
-      setSettings(next)
+      setSettings(normalizeSettingsDocument(next))
       setDefaultsEditor(null)
       setNotice({ level: "success", message: "Saved deploy defaults" })
     } catch (cause) {

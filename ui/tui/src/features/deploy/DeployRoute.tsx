@@ -147,7 +147,7 @@ function DeviceStep(props: { controller: DeployController }) {
 
 function ImageStep(props: { controller: DeployController }) {
   const theme = useTheme()
-  const history = props.controller.settings.history.images.slice(0, 5)
+  const history = (props.controller.settings.history?.images ?? []).slice(0, 5)
 
   return (
     <box flexDirection="column" gap={1}>
@@ -166,7 +166,7 @@ function ImageStep(props: { controller: DeployController }) {
 
 function ModelStep(props: { controller: DeployController }) {
   const theme = useTheme()
-  const history = props.controller.settings.history.models.slice(0, 5)
+  const history = (props.controller.settings.history?.models ?? []).slice(0, 5)
   if (props.controller.form.workload === "comfyui") {
     return <text fg={theme.colors.textMuted}>ComfyUI does not require model selection. Press Enter to continue.</text>
   }
