@@ -46,11 +46,33 @@ builds:
       - --minify
       - --bytecode
 
+  - id: yokai-mcp
+    main: ./cmd/yokai-mcp
+    binary: yokai-mcp
+    env:
+      - CGO_ENABLED=0 # Static binary for easier distribution
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      # Match yokai: bun cannot build the TUI sidecar for Windows ARM64.
+      # Keep the binary count identical per platform so the shared archive
+      # does not trip goreleaser's different-binary-count validation.
+      - goos: windows
+        goarch: arm64
+    ldflags:    
+      - -s -w -X main.version={{.Version}} -X main.buildTime={{.Date}}
+
 archives:
   - formats:
       - tar.gz
     ids:
       - yokai
+      - yokai-mcp
       - yokai-tui
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     format_overrides:
