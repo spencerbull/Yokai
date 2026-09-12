@@ -1081,3 +1081,61 @@ func TestContainerOperationsIntegration(t *testing.T) {
 	err = removeContainer(testContainerID)
 	t.Logf("removeContainer on non-existent container: %v", err)
 }
+
+func TestDockerOutputTail(t *testing.T) {
+	if got := dockerOutputTail([]byte("")); got != "" {
+		t.Fatalf("empty output = %q, want empty", got)
+	}
+	in := "line1\nline2\nline3"
+	if got := dockerOutputTail([]byte(in)); got != in {
+		t.Fatalf("short output mangled: %q", got)
+	}
+	var many []string
+	for i := 0; i < 20; i++ {
+		many = append(many, "l"+string(rune('a'+i%26)))
+	}
+	gotLines := strings.Split(dockerOutputTail([]byte(strings.Join(many, "\n"))), "\n")
+	if len(gotLines) != 8 {
+		t.Fatalf("expected 8 lines, got %d", len(gotLines))
+	}
+	if gotLines[0] != many[12] {
+		t.Fatalf("expected first tail line %q, got %q", many[12], gotLines[0])
+	}
+	if gotLines[7] != many[19] {
+		t.Fatalf("expected last tail line %q, got %q", many[19], gotLines[7])
+	}
+}
+
+func TestLogDetail(t *testing.T) {
+	if got := logDetail(""); got != "" {
+		t.Fatalf("empty detail = %q, want empty", got)
+	}
+	if got := logDetail("boom"); got != ": boom" {
+		t.Fatalf("logDetail = %q, want \": boom\"", got)
+	}
+}
+
+func TestBoundedBufferCapsRetainedBytes(t *testing.T) {
+	b := newBoundedBuffer(10)
+	big := strings.Repeat("x", 100)
+	if _, err := b.Write([]byte(big)); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	got := b.String()
+	if len(got) != 10 {
+		t.Fatalf("expected 10 retained bytes, got %d", len(got))
+	}
+	if got != big[len(big)-10:] {
+		t.Fatalf("expected last 10 bytes retained, got %q", got)
+	}
+	// Further writes keep the same cap.
+	if _, err := b.Write([]byte("abc")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if len(b.String()) != 10 {
+		t.Fatalf("expected cap to hold at 10, got %d", len(b.String()))
+	}
+	if !strings.HasSuffix(b.String(), "abc") {
+		t.Fatalf("expected tail to end in abc, got %q", b.String())
+	}
+}
