@@ -20,6 +20,7 @@ TUI_DIR ?= ui/tui
 build:
 	@test -n "$(GO)" || (echo "go is required; install Go or make sure mise is available" && exit 1)
 	$(GO) build $(LDFLAGS) -o bin/$(BINARY_NAME) ./cmd/yokai
+	$(GO) build $(LDFLAGS) -o bin/$(BINARY_NAME)-mcp ./cmd/yokai-mcp
 
 run: build
 	./bin/$(BINARY_NAME)
