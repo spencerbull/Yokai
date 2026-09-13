@@ -180,6 +180,7 @@ func (d *Daemon) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"status":  "ok",
 		"version": d.version,
 		"devices": deviceCount,
+		"pid":     os.Getpid(),
 	})
 }
 

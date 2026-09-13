@@ -5,6 +5,7 @@ package upgrade
 import (
 	"os/exec"
 	"strconv"
+	"strings"
 	"syscall"
 )
 
@@ -31,10 +32,20 @@ func findDaemonPIDByPort(addr string) (int, bool) {
 	return 0, false
 }
 
-// daemonPIDLooksOwned is unsupported on Darwin (no /proc cmdline); fall back to
-// the by-port/health paths, so a stale pidfile PID is never trusted blindly.
+// daemonPIDLooksOwned verifies the kernel process name and command line through
+// ps. This supports daemons predating the health PID while rejecting stale
+// pidfiles that now refer to an unrelated process.
 func daemonPIDLooksOwned(pid int, addr string) bool {
-	return false
+	pidArg := strconv.Itoa(pid)
+	comm, err := exec.Command("ps", "-o", "ucomm=", "-p", pidArg).Output()
+	if err != nil {
+		return false
+	}
+	args, err := exec.Command("ps", "-ww", "-o", "args=", "-p", pidArg).Output()
+	if err != nil {
+		return false
+	}
+	return commandLooksLikeYokaiDaemon(strings.TrimSpace(string(comm)), strings.TrimSpace(string(args)))
 }
 
 // darwinZombie reports whether pid is a zombie by inspecting its ps stat field

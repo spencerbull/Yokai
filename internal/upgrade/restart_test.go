@@ -1,9 +1,13 @@
 package upgrade
 
 import (
+	"debug/buildinfo"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -30,6 +34,87 @@ func TestReadPidFileMissing(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	if got := readPidFile(); got != 0 {
 		t.Fatalf("expected 0 for missing pid file, got %d", got)
+	}
+}
+
+func TestDaemonPIDMatchesHealthIdentity(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"ok","pid":4242}`))
+	}))
+	t.Cleanup(server.Close)
+	addr := strings.TrimPrefix(server.URL, "http://")
+
+	if !daemonPIDMatchesHealth(4242, addr) {
+		t.Fatal("pid reported by the healthy daemon was not accepted")
+	}
+	if daemonPIDMatchesHealth(4243, addr) {
+		t.Fatal("pid not reported by the healthy daemon was accepted")
+	}
+}
+
+func TestDaemonPIDMatchesHealthRejectsUntrustedResponses(t *testing.T) {
+	for _, body := range []string{
+		`{"status":"ok"}`,
+		`{"status":"ok","pid":0}`,
+		`{"status":"other","pid":4242}`,
+		`not json`,
+	} {
+		t.Run(body, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(body))
+			}))
+			t.Cleanup(server.Close)
+
+			if daemonPIDMatchesHealth(4242, strings.TrimPrefix(server.URL, "http://")) {
+				t.Fatalf("untrusted health response %q was accepted", body)
+			}
+		})
+	}
+}
+
+func TestYokaiBuildIdentityRequiresMainPackage(t *testing.T) {
+	if !isYokaiBuild(&buildinfo.BuildInfo{Path: yokaiMainPackage}) {
+		t.Fatal("Yokai main package build identity was rejected")
+	}
+	if isYokaiBuild(&buildinfo.BuildInfo{Path: "example.com/other/cmd/tool"}) {
+		t.Fatal("unrelated Go executable build identity was accepted")
+	}
+}
+
+func TestCommandLooksLikeYokaiDaemon(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		comm string
+		args string
+		want bool
+	}{
+		{name: "daemon", comm: "yokai", args: "/usr/local/bin/yokai daemon", want: true},
+		{name: "daemon executable path", comm: "/usr/local/bin/yokai", args: "/usr/local/bin/yokai daemon", want: true},
+		{name: "unrelated executable", comm: "python3", args: "python3 worker.py daemon", want: false},
+		{name: "other Yokai command", comm: "yokai", args: "/usr/local/bin/yokai status", want: false},
+		{name: "daemon as later argument", comm: "yokai", args: "/usr/local/bin/yokai status daemon", want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := commandLooksLikeYokaiDaemon(test.comm, test.args); got != test.want {
+				t.Fatalf("commandLooksLikeYokaiDaemon(%q, %q) = %v, want %v", test.comm, test.args, got, test.want)
+			}
+		})
+	}
+}
+
+func TestDaemonSubcommandRequiresSecondArgument(t *testing.T) {
+	if !hasDaemonSubcommand([]string{`C:\Program Files\Yokai\yokai.exe`, "daemon"}) {
+		t.Fatal("daemon subcommand was rejected")
+	}
+	for _, args := range [][]string{
+		{`C:\Program Files\Yokai\yokai.exe`},
+		{`C:\Program Files\Yokai\yokai.exe`, "status", "daemon"},
+		{"python.exe", "script.py", "daemon"},
+	} {
+		if hasDaemonSubcommand(args) {
+			t.Fatalf("non-daemon command %q was accepted", args)
+		}
 	}
 }
 
