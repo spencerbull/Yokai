@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test"
 import type { DeployBKC, DeployForm } from "../../contracts/deploy"
 import { normalizeSettingsDocument } from "../../contracts/settings"
 import { DaemonRequestError, readDaemonError } from "../../services/daemon-client"
-import { buildClusterDeploymentRequest, buildDeployRequest, deploymentHistoryWarning, deploymentRecoveryNotice, updateHistory, validateClusterDeploymentForm } from "./useDeployController"
+import { buildClusterDeploymentRequest, buildDeployRequest, deploymentHistoryWarning, deploymentRecoveryNotice, nextConfigField, updateHistory, validateClusterDeploymentForm } from "./useDeployController"
 
 const form: DeployForm = {
   deviceId: "spark-a",
@@ -17,9 +17,15 @@ const form: DeployForm = {
   workload: "sglang",
   headDeviceId: "spark-a",
   headFabricAddress: "192.168.201.1",
+  headFabricInterface: "",
+  headFabricHCA: "",
+  headFabricGIDIndex: "",
   headServiceAddress: "100.96.0.20",
   workerDeviceId: "spark-b",
   workerFabricAddress: "192.168.201.2",
+  workerFabricInterface: "",
+  workerFabricHCA: "",
+  workerFabricGIDIndex: "",
   idempotencyKey: "glm53-canary-1",
   localModelPath: "/srv/models/glm53-snapshot",
   apiKey: "-transient-secret",
@@ -56,6 +62,34 @@ const bkc: DeployBKC = {
   },
 }
 
+const fabricBKC: DeployBKC = {
+  ...bkc,
+  id: "qwen-like-fabric-required",
+  name: "Qwen-like fabric-required BKC",
+  workload: "vllm",
+  model_id: "example/Qwen-Fabric-Required",
+  port: "8888",
+  multi_device: {
+    ...bkc.multi_device!,
+    backend: "vllm_multi_node",
+    service_port: 8888,
+    requires_fabric_config: true,
+  },
+}
+
+const fabricForm: DeployForm = {
+  ...form,
+  workload: "vllm",
+  model: fabricBKC.model_id,
+  port: "8888",
+  headFabricInterface: "enp1s0f0np0",
+  headFabricHCA: "rocep1s0f0",
+  headFabricGIDIndex: "3",
+  workerFabricInterface: "enp1s0f1np1",
+  workerFabricHCA: "rocep1s0f1",
+  workerFabricGIDIndex: "4",
+}
+
 describe("cluster deployment bindings", () => {
   test("builds exact head and worker bindings with optional snapshot", () => {
     expect(validateClusterDeploymentForm(form, bkc)).toBeNull()
@@ -69,6 +103,68 @@ describe("cluster deployment bindings", () => {
       local_model_path: "/srv/models/glm53-snapshot",
 	  api_key: "-transient-secret",
     })
+  })
+
+  test("serializes explicit per-role fabric settings for fabric-required BKCs", () => {
+    expect(validateClusterDeploymentForm(fabricForm, fabricBKC)).toBeNull()
+    expect(buildClusterDeploymentRequest(fabricForm, fabricBKC)).toEqual({
+      bkc_id: fabricBKC.id,
+      idempotency_key: "glm53-canary-1",
+      bindings: [
+        {
+          role: "head",
+          device_id: "spark-a",
+          fabric_address: "192.168.201.1",
+          fabric_interface: "enp1s0f0np0",
+          fabric_hca: "rocep1s0f0",
+          fabric_gid_index: 3,
+          service_address: "100.96.0.20",
+          service_port: 8888,
+          observed_container_id: "head-old-container",
+        },
+        {
+          role: "worker",
+          device_id: "spark-b",
+          fabric_address: "192.168.201.2",
+          fabric_interface: "enp1s0f1np1",
+          fabric_hca: "rocep1s0f1",
+          fabric_gid_index: 4,
+          observed_container_id: "1234567890ab",
+        },
+      ],
+      local_model_path: "/srv/models/glm53-snapshot",
+      api_key: "-transient-secret",
+    })
+  })
+
+  test("reports each missing fabric-required value before submitting", () => {
+    const requiredCases: Array<[keyof DeployForm, string]> = [
+      ["headFabricInterface", "Head fabric interface is required"],
+      ["headFabricHCA", "Head fabric HCA is required"],
+      ["headFabricGIDIndex", "Head fabric GID index is required"],
+      ["workerFabricInterface", "Worker fabric interface is required"],
+      ["workerFabricHCA", "Worker fabric HCA is required"],
+      ["workerFabricGIDIndex", "Worker fabric GID index is required"],
+    ]
+    for (const [field, message] of requiredCases) {
+      expect(validateClusterDeploymentForm({ ...fabricForm, [field]: "" }, fabricBKC)).toBe(message)
+    }
+  })
+
+  test("requires fabric GID indices to be integers in the backend's 0-255 range", () => {
+    expect(validateClusterDeploymentForm({ ...fabricForm, headFabricGIDIndex: "3.5" }, fabricBKC)).toBe("Head fabric GID index must be an integer between 0 and 255")
+    expect(validateClusterDeploymentForm({ ...fabricForm, headFabricGIDIndex: "-1" }, fabricBKC)).toBe("Head fabric GID index must be an integer between 0 and 255")
+    expect(validateClusterDeploymentForm({ ...fabricForm, workerFabricGIDIndex: "256" }, fabricBKC)).toBe("Worker fabric GID index must be an integer between 0 and 255")
+    expect(validateClusterDeploymentForm({ ...fabricForm, headFabricGIDIndex: "0", workerFabricGIDIndex: "255" }, fabricBKC)).toBeNull()
+  })
+
+  test("includes fabric controls in keyboard focus only when the BKC requires them", () => {
+    expect(nextConfigField("headFabric", "vllm", fabricBKC, 1)).toBe("headFabricInterface")
+    expect(nextConfigField("headFabricInterface", "vllm", fabricBKC, 1)).toBe("headFabricHCA")
+    expect(nextConfigField("headFabricHCA", "vllm", fabricBKC, 1)).toBe("headFabricGIDIndex")
+    expect(nextConfigField("workerFabric", "vllm", fabricBKC, 1)).toBe("workerFabricInterface")
+    expect(nextConfigField("headFabric", "sglang", bkc, 1)).toBe("headService")
+    expect(nextConfigField("workerFabric", "sglang", bkc, 1)).toBe("workerObserved")
   })
 
   test("rejects duplicate devices and legacy single-device routing", () => {
@@ -120,9 +216,15 @@ describe("updateHistory null-safety", () => {
     workload: "vllm",
     headDeviceId: "",
     headFabricAddress: "",
+    headFabricInterface: "",
+    headFabricHCA: "",
+    headFabricGIDIndex: "",
     headServiceAddress: "",
     workerDeviceId: "",
     workerFabricAddress: "",
+    workerFabricInterface: "",
+    workerFabricHCA: "",
+    workerFabricGIDIndex: "",
     idempotencyKey: "",
     localModelPath: "",
     apiKey: "",
