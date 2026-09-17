@@ -142,6 +142,13 @@ type MultiDeviceDeployment struct {
 	RendezvousPort       int                       `json:"rendezvous_port"`
 	ServicePort          int                       `json:"service_port"`
 	ModelRevision        string                    `json:"model_revision"`
+	ServedModelName      string                    `json:"served_model_name,omitempty"`
+	SourceRevision       string                    `json:"source_revision,omitempty"`
+	RequiresLocalModel   bool                      `json:"requires_local_model,omitempty"`
+	RequiresFabricConfig bool                      `json:"requires_fabric_config,omitempty"`
+	CommonArgs           []string                  `json:"common_args,omitempty"`
+	RoleArgs             map[string][]string       `json:"role_args,omitempty"`
+	LaunchOrder          []string                  `json:"launch_order,omitempty"`
 	RuntimePatches       []MultiDeviceRuntimePatch `json:"runtime_patches,omitempty"`
 	Roles                []MultiDeviceRole         `json:"roles"`
 	RequiredCapabilities []string                  `json:"required_capabilities"`
@@ -234,11 +241,25 @@ func cloneMultiDeviceConfig(cfg Config) Config {
 		return cfg
 	}
 	metadata := *cfg.MultiDevice
+	metadata.CommonArgs = append([]string(nil), cfg.MultiDevice.CommonArgs...)
+	metadata.RoleArgs = cloneStringSliceMap(cfg.MultiDevice.RoleArgs)
+	metadata.LaunchOrder = append([]string(nil), cfg.MultiDevice.LaunchOrder...)
 	metadata.RuntimePatches = append([]MultiDeviceRuntimePatch(nil), cfg.MultiDevice.RuntimePatches...)
 	metadata.Roles = append([]MultiDeviceRole(nil), cfg.MultiDevice.Roles...)
 	metadata.RequiredCapabilities = append([]string(nil), cfg.MultiDevice.RequiredCapabilities...)
 	cfg.MultiDevice = &metadata
 	return cfg
+}
+
+func cloneStringSliceMap(src map[string][]string) map[string][]string {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[string][]string, len(src))
+	for key, value := range src {
+		dst[key] = append([]string(nil), value...)
+	}
+	return dst
 }
 
 func cloneStringMap(src map[string]string) map[string]string {

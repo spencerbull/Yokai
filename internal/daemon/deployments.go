@@ -3,6 +3,7 @@ package daemon
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +19,7 @@ import (
 	"github.com/spencerbull/yokai/internal/bkc"
 	"github.com/spencerbull/yokai/internal/config"
 	"github.com/spencerbull/yokai/internal/deployments"
+	"github.com/spencerbull/yokai/internal/launchauth"
 )
 
 func deploymentsPath() (string, error) {
@@ -204,6 +206,7 @@ type daemonDeploymentOperations struct {
 
 type agentHealth struct {
 	Status       string   `json:"status"`
+	DeviceID     string   `json:"device_id"`
 	Capabilities []string `json:"capabilities"`
 }
 
@@ -226,21 +229,22 @@ type agentContainer struct {
 }
 
 type deploymentLaunchPayload struct {
-	Image       string                `json:"image"`
-	Name        string                `json:"name"`
-	Model       string                `json:"model"`
-	Ports       map[string]string     `json:"ports"`
-	Env         map[string]string     `json:"env"`
-	GPUIDs      string                `json:"gpu_ids"`
-	ExtraArgs   string                `json:"extra_args"`
-	Args        []string              `json:"args,omitempty"`
-	Volumes     map[string]string     `json:"volumes"`
-	Runtime     config.RuntimeOptions `json:"runtime"`
-	SkipPull    bool                  `json:"skip_pull"`
-	Labels      map[string]string     `json:"labels"`
-	NetworkMode string                `json:"network_mode"`
-	Devices     []string              `json:"devices"`
-	CapAdd      []string              `json:"cap_add"`
+	Image               string                `json:"image"`
+	Name                string                `json:"name"`
+	Model               string                `json:"model"`
+	Ports               map[string]string     `json:"ports"`
+	Env                 map[string]string     `json:"env"`
+	GPUIDs              string                `json:"gpu_ids"`
+	ExtraArgs           string                `json:"extra_args"`
+	Args                []string              `json:"args,omitempty"`
+	Volumes             map[string]string     `json:"volumes"`
+	Runtime             config.RuntimeOptions `json:"runtime"`
+	SkipPull            bool                  `json:"skip_pull"`
+	Labels              map[string]string     `json:"labels"`
+	NetworkMode         string                `json:"network_mode"`
+	Devices             []string              `json:"devices"`
+	CapAdd              []string              `json:"cap_add"`
+	LaunchAuthorization string                `json:"launch_authorization,omitempty"`
 }
 
 func (ops *daemonDeploymentOperations) Preflight(ctx context.Context, request deployments.PreflightRequest, requiredCapabilities, targetDevices []string) error {
@@ -264,6 +268,9 @@ func (ops *daemonDeploymentOperations) Preflight(ctx context.Context, request de
 	if health.Status != "ok" {
 		return deployments.WrapError(deployments.ErrorUnavailable, "agent health", fmt.Errorf("agent health is %q", health.Status))
 	}
+	if request.BKCID == bkc.Qwen38FlashNextNVFP4DualGB10ID && health.DeviceID != binding.DeviceID {
+		return deployments.WrapError(deployments.ErrorConflict, "agent device identity", fmt.Errorf("agent configured device identity %q does not match target %q", health.DeviceID, binding.DeviceID))
+	}
 	available := make(map[string]struct{}, len(health.Capabilities))
 	for _, capability := range health.Capabilities {
 		available[capability] = struct{}{}
@@ -285,6 +292,10 @@ func (ops *daemonDeploymentOperations) Preflight(ctx context.Context, request de
 	}
 	payload := struct {
 		FabricAddress     string `json:"fabric_address"`
+		FabricInterface   string `json:"fabric_interface,omitempty"`
+		FabricHCA         string `json:"fabric_hca,omitempty"`
+		FabricGIDIndex    *int   `json:"fabric_gid_index,omitempty"`
+		RequireFabric     bool   `json:"require_fabric_config,omitempty"`
 		ServiceAddress    string `json:"service_address,omitempty"`
 		ServicePort       int    `json:"service_port"`
 		RendezvousPort    int    `json:"rendezvous_port"`
@@ -292,8 +303,10 @@ func (ops *daemonDeploymentOperations) Preflight(ctx context.Context, request de
 		ObservedContainer string `json:"observed_container_id,omitempty"`
 		CandidateName     string `json:"candidate_name"`
 		LocalModelPath    string `json:"local_model_path,omitempty"`
-	}{binding.FabricAddress, binding.ServiceAddress, request.ServicePort, request.RendezvousPort, request.Head, binding.ObservedContainerID, request.CandidateName, request.LocalModelPath}
-	if err := ops.postJSON(ctx, binding.DeviceID, "/deployments/preflight", payload, nil, 30*time.Second); err != nil {
+		BKCID             string `json:"bkc_id,omitempty"`
+		ModelRevision     string `json:"model_revision,omitempty"`
+	}{binding.FabricAddress, binding.FabricInterface, binding.FabricHCA, binding.FabricGIDIndex, request.BKCID == bkc.Qwen38FlashNextNVFP4DualGB10ID, binding.ServiceAddress, request.ServicePort, request.RendezvousPort, request.Head, binding.ObservedContainerID, request.CandidateName, request.LocalModelPath, request.BKCID, request.ModelRevision}
+	if err := ops.postJSON(ctx, binding.DeviceID, "/deployments/preflight", payload, nil, deployments.DefaultDeploymentPreflightRPCTimeout); err != nil {
 		return classifyAgentPreflightError(err)
 	}
 	return nil
@@ -414,6 +427,13 @@ func (ops *daemonDeploymentOperations) Launch(ctx context.Context, binding deplo
 		Volumes: candidate.Volumes, Runtime: candidate.Runtime, SkipPull: true, Labels: candidate.Labels,
 		NetworkMode: candidate.NetworkMode, Devices: candidate.Devices, CapAdd: candidate.CapAdd,
 	}
+	if candidate.Labels["io.yokai.bkc.id"] == bkc.Qwen38FlashNextNVFP4DualGB10ID {
+		authorization, err := ops.signQwenLaunchAuthorization(binding.DeviceID, payload)
+		if err != nil {
+			return deployments.ObservedContainer{}, deployments.WrapError(deployments.ErrorConflict, "authorize candidate launch", err)
+		}
+		payload.LaunchAuthorization = authorization
+	}
 	var response struct {
 		ID     string `json:"id"`
 		Status string `json:"status"`
@@ -424,6 +444,35 @@ func (ops *daemonDeploymentOperations) Launch(ctx context.Context, binding deplo
 		return deployments.ObservedContainer{}, deploymentAgentOperationError("launch candidate", err, false)
 	}
 	return deployments.ObservedContainer{ID: response.ID, Name: candidate.Name, Status: response.Status, Ownership: deployments.OwnershipManaged}, nil
+}
+
+func (ops *daemonDeploymentOperations) signQwenLaunchAuthorization(targetDeviceID string, payload deploymentLaunchPayload) (string, error) {
+	privateKey := ops.daemon.coordinatorSigningKey
+	if len(privateKey) != ed25519.PrivateKeySize {
+		return "", fmt.Errorf("coordinator signing key is not configured")
+	}
+	generation, err := strconv.Atoi(payload.Labels["io.yokai.deployment.generation"])
+	if err != nil || generation <= 0 {
+		return "", fmt.Errorf("candidate generation is invalid")
+	}
+	request := launchAuthorizationPayload(payload)
+	claims, err := launchauth.NewClaims(time.Now(), request, targetDeviceID,
+		payload.Labels["io.yokai.deployment.id"], generation, payload.Name, payload.Labels["io.yokai.deployment.role"],
+		payload.Labels["io.yokai.bkc.id"], payload.Labels["io.yokai.model.revision"],
+		payload.Labels["io.yokai.source.revision"], payload.Labels["io.yokai.image.digest"])
+	if err != nil {
+		return "", err
+	}
+	return launchauth.Sign(privateKey, claims)
+}
+
+func launchAuthorizationPayload(payload deploymentLaunchPayload) launchauth.Request {
+	return launchauth.Request{
+		Image: payload.Image, Name: payload.Name, Model: payload.Model, Ports: payload.Ports, Env: payload.Env,
+		GPUIDs: payload.GPUIDs, ExtraArgs: payload.ExtraArgs, Args: payload.Args, Volumes: payload.Volumes,
+		Runtime: payload.Runtime, SkipPull: payload.SkipPull, Labels: payload.Labels, NetworkMode: payload.NetworkMode,
+		Devices: payload.Devices, CapAdd: payload.CapAdd,
+	}
 }
 
 func detachedDeploymentLaunchContext(parent context.Context) (context.Context, context.CancelFunc) {

@@ -8,9 +8,10 @@ import (
 )
 
 const (
-	ConfigVersion = 1
-	ConfigDirName = "yokai"
-	ConfigFile    = "config.json"
+	ConfigVersion             = 1
+	ConfigDirName             = "yokai"
+	ConfigFile                = "config.json"
+	CoordinatorSigningKeyFile = "coordinator-signing-key.json"
 )
 
 type Config struct {
@@ -135,6 +136,15 @@ func ConfigPath() (string, error) {
 		return "", err
 	}
 	return filepath.Join(dir, ConfigFile), nil
+}
+
+// CoordinatorSigningKeyPath returns the private signing-key path, separate from config.json and ordinary agent API bearer tokens.
+func CoordinatorSigningKeyPath() (string, error) {
+	dir, err := ConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, CoordinatorSigningKeyFile), nil
 }
 
 // Load reads the config from disk. Returns default config if file doesn't exist.

@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -17,19 +18,21 @@ import (
 	"github.com/spencerbull/yokai/internal/bkc"
 	"github.com/spencerbull/yokai/internal/config"
 	"github.com/spencerbull/yokai/internal/deployments"
+	"github.com/spencerbull/yokai/internal/launchauth"
 )
 
 // Daemon is the local background service that maintains SSH tunnels,
 // polls agents for metrics, and exposes a REST API for the TUI.
 type Daemon struct {
-	cfg              *config.Config
-	tunnels          *TunnelPool
-	aggregator       *Aggregator
-	version          string
-	mu               sync.RWMutex
-	server           *http.Server
-	deploymentStore  *deployments.Store
-	deploymentEngine *deployments.Engine
+	cfg                   *config.Config
+	tunnels               *TunnelPool
+	aggregator            *Aggregator
+	version               string
+	mu                    sync.RWMutex
+	server                *http.Server
+	deploymentStore       *deployments.Store
+	deploymentEngine      *deployments.Engine
+	coordinatorSigningKey ed25519.PrivateKey
 }
 
 // Run starts the daemon and blocks until interrupted.
@@ -38,13 +41,21 @@ func Run(version string) error {
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
-
 	// Record our PID so `yokai upgrade` can locate and restart this process
 	// after replacing the binary (see internal/upgrade). Removed on exit.
 	if err := WritePidFile(); err != nil {
 		log.Printf("warning: failed to write daemon pid file: %v", err)
 	}
 	defer RemovePidFile()
+
+	coordinatorKeyPath, err := config.CoordinatorSigningKeyPath()
+	if err != nil {
+		return fmt.Errorf("resolve coordinator signing key: %w", err)
+	}
+	coordinatorSigningKey, err := launchauth.LoadOrCreateSigningKey(coordinatorKeyPath)
+	if err != nil {
+		return fmt.Errorf("load coordinator signing key: %w", err)
+	}
 	if applyCurrentTailscaleHostAliases(cfg) {
 		if err := config.Save(cfg); err != nil {
 			log.Printf("warning: failed to persist Tailscale DNS host aliases: %v", err)
@@ -52,8 +63,9 @@ func Run(version string) error {
 	}
 
 	d := &Daemon{
-		cfg:     cfg,
-		version: version,
+		cfg:                   cfg,
+		version:               version,
+		coordinatorSigningKey: coordinatorSigningKey,
 	}
 	deploymentPath, err := deploymentsPath()
 	if err != nil {

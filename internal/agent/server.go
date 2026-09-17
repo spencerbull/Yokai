@@ -3,6 +3,7 @@ package agent
 import (
 	"bufio"
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,8 +19,10 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/spencerbull/yokai/internal/bkc"
 	"github.com/spencerbull/yokai/internal/deployments"
 	"github.com/spencerbull/yokai/internal/docker"
+	"github.com/spencerbull/yokai/internal/launchauth"
 )
 
 var startTime = time.Now()
@@ -27,10 +30,15 @@ var systemAgentConfigPath = "/etc/yokai/agent.json"
 
 // authConfig holds the bearer token for API authentication.
 type authConfig struct {
-	Token string `json:"token"`
+	Token                string `json:"token"`
+	DeviceID             string `json:"device_id,omitempty"`
+	CoordinatorPublicKey string `json:"coordinator_public_key,omitempty"`
 }
 
 var authToken string
+var agentDeviceID string
+var coordinatorVerificationKey ed25519.PublicKey
+var launchAuthorizationReplayStore *launchauth.ReplayStore
 var catalog *docker.Catalog
 
 // Run starts the agent HTTP server on the given port.
@@ -73,6 +81,9 @@ func Run(port string, version string) error {
 // loadAuthToken loads the bearer token from agent config paths.
 func loadAuthToken() {
 	authToken = ""
+	agentDeviceID = ""
+	coordinatorVerificationKey = nil
+	launchAuthorizationReplayStore = nil
 
 	var configPaths []string
 	if p := os.Getenv("YOKAI_AGENT_CONFIG"); p != "" {
@@ -96,6 +107,25 @@ func loadAuthToken() {
 		}
 
 		authToken = config.Token
+		if config.DeviceID != strings.TrimSpace(config.DeviceID) {
+			log.Printf("Invalid device identity at %s: leading or trailing whitespace is not allowed", configPath)
+		} else {
+			agentDeviceID = config.DeviceID
+		}
+		if config.CoordinatorPublicKey != "" {
+			publicKey, keyErr := launchauth.DecodePublicKey(config.CoordinatorPublicKey)
+			if keyErr != nil {
+				log.Printf("Invalid coordinator public key at %s: %v", configPath, keyErr)
+			} else {
+				replayStore := launchauth.NewReplayStore(configPath)
+				if replayErr := replayStore.Prepare(); replayErr != nil {
+					log.Printf("Invalid coordinator replay store at %s: %v", configPath, replayErr)
+				} else {
+					coordinatorVerificationKey = publicKey
+					launchAuthorizationReplayStore = replayStore
+				}
+			}
+		}
 		log.Printf("Loaded auth token from %s", configPath)
 		return
 	}
@@ -142,10 +172,26 @@ func handleHealth(version string) http.HandlerFunc {
 			"version":        version,
 			"uptime_seconds": int(time.Since(startTime).Seconds()),
 			"hostname":       hostname,
-			"capabilities":   append([]string(nil), AgentCapabilities...),
+			"device_id":      agentDeviceID,
+			"capabilities":   currentAgentCapabilities(),
 		}
 		writeJSON(w, http.StatusOK, resp)
 	}
+}
+
+func currentAgentCapabilities() []string {
+	capabilities := append([]string(nil), AgentCapabilities...)
+	if coordinatedLaunchAuthorizationAvailable() {
+		capabilities = append(capabilities, bkc.Qwen38LaunchAuthorizationCapability)
+	}
+	return capabilities
+}
+
+func coordinatedLaunchAuthorizationAvailable() bool {
+	if strings.TrimSpace(agentDeviceID) == "" || len(coordinatorVerificationKey) != ed25519.PublicKeySize || launchAuthorizationReplayStore == nil {
+		return false
+	}
+	return launchAuthorizationReplayStore.Prepare() == nil
 }
 
 func handleSystemInfo(version string) http.HandlerFunc {
@@ -342,6 +388,18 @@ func handleContainerDeployWithLaunchTimeout(w http.ResponseWriter, r *http.Reque
 	}
 	if req.Labels[LabelOwnership] == "" {
 		req.Labels[LabelOwnership] = OwnershipManaged
+	}
+	if err := authorizeCoordinatedQwenLaunch(req, time.Now(), coordinatorVerificationKey, agentDeviceID, launchAuthorizationReplayStore); err != nil {
+		status, code := http.StatusForbidden, "coordinator_authorization_invalid"
+		if errors.Is(err, errCoordinatorAuthorizationUnavailable) {
+			status, code = http.StatusServiceUnavailable, "coordinator_authorization_unavailable"
+		} else if errors.Is(err, launchauth.ErrReplay) {
+			status, code = http.StatusConflict, "coordinator_authorization_replayed"
+		} else if errors.Is(err, errUnexpectedLaunchAuthorization) {
+			status, code = http.StatusBadRequest, "unexpected_launch_authorization"
+		}
+		writeError(w, status, code, err.Error())
+		return
 	}
 
 	// Register coordinated ownership before any Docker/image command. Those
@@ -602,12 +660,17 @@ func handleDeploymentMemberLogTail(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "deployment_launch_in_progress", "candidate launch has not settled")
 		return
 	}
-	if _, err := deploymentMemberProvenance(r); err != nil {
+	labels, err := deploymentMemberProvenance(r)
+	if err != nil {
 		if errors.Is(err, errContainerIdentityNotFound) {
 			writeError(w, http.StatusNotFound, "container_not_found", "deployment member is absent")
 			return
 		}
 		writeError(w, http.StatusConflict, "deployment_member_mismatch", err.Error())
+		return
+	}
+	if labels[LabelBKCID] == bkc.Qwen38FlashNextNVFP4DualGB10ID && labels[LabelRole] == bkc.MultiDeviceRoleHead {
+		writeError(w, http.StatusConflict, "qwen_rank_zero_logs_unavailable", "Qwen3.8 rank-0 logs cannot be returned because its process retains the API key")
 		return
 	}
 	var request struct {
@@ -686,6 +749,9 @@ func handleContainerLogs(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if id == "" {
 		writeError(w, http.StatusBadRequest, "missing_id", "Container ID is required")
+		return
+	}
+	if rejectGenericGroupedLogs(w, r.Context(), id) {
 		return
 	}
 
@@ -802,6 +868,27 @@ func handleContainerLogs(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+}
+
+func rejectGenericGroupedLogs(w http.ResponseWriter, ctx context.Context, id string) bool {
+	_, _, labels, err := inspectContainerIdentityWithContext(ctx, id)
+	if err != nil {
+		if errors.Is(err, errContainerIdentityNotFound) {
+			writeError(w, http.StatusNotFound, "container_not_found", "Container not found")
+		} else {
+			writeError(w, http.StatusServiceUnavailable, "container_identity_unavailable", "container identity could not be verified safely")
+		}
+		return true
+	}
+	if labels[LabelBKCID] == bkc.Qwen38FlashNextNVFP4DualGB10ID && labels[LabelRole] == bkc.MultiDeviceRoleHead {
+		writeError(w, http.StatusConflict, "qwen_rank_zero_logs_unavailable", "Qwen3.8 rank-0 logs cannot be returned because its process retains the API key")
+		return true
+	}
+	if labels[LabelDeploymentID] == "" {
+		return false
+	}
+	writeError(w, http.StatusConflict, "grouped_deployment_required", "deployment-managed container logs are available only through the bounded deployment-member diagnostic path")
+	return true
 }
 
 func handleImagePull(w http.ResponseWriter, r *http.Request) {

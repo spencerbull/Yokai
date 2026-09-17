@@ -109,7 +109,7 @@ Bootstrap generates:
 
 Stored in:
   config.json (user machine): devices[].agent_token
-  /etc/yokai/agent.json (target): { "token": "..." }
+  /etc/yokai/agent.json (target): { "token": "...", "device_id": "gaming-rig", "coordinator_public_key": "..." }
 
 Every request to agent:
   Authorization: Bearer <agent_token>

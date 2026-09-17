@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/spencerbull/yokai/internal/bkc"
 	"github.com/spencerbull/yokai/internal/config"
 	"github.com/spencerbull/yokai/internal/deployments"
 )
@@ -41,13 +42,15 @@ func RunDeployments(args []string) {
 }
 
 type deploymentCreateFlags struct {
-	bkcID, key                   string
-	headDevice, headFabric       string
-	headServiceAddress           string
-	headServicePort              string
-	workerDevice, workerFabric   string
-	headObserved, workerObserved string
-	apiKeyEnv, localModelPath    string
+	bkcID, key                                              string
+	headDevice, headFabric                                  string
+	headFabricInterface, headFabricHCA, headFabricGID       string
+	headServiceAddress                                      string
+	headServicePort                                         string
+	workerDevice, workerFabric                              string
+	workerFabricInterface, workerFabricHCA, workerFabricGID string
+	headObserved, workerObserved                            string
+	apiKeyEnv, localModelPath                               string
 }
 
 func runDeploymentsCreate(args []string) {
@@ -57,10 +60,16 @@ func runDeploymentsCreate(args []string) {
 	fs.StringVar(&values.key, "idempotency-key", "", "stable idempotency key")
 	fs.StringVar(&values.headDevice, "head-device", "", "rank-0 device id")
 	fs.StringVar(&values.headFabric, "head-fabric", "", "rank-0 fabric IP")
+	fs.StringVar(&values.headFabricInterface, "head-fabric-interface", "", "rank-0 fabric network interface")
+	fs.StringVar(&values.headFabricHCA, "head-fabric-hca", "", "rank-0 InfiniBand HCA name (without NCCL's leading =)")
+	fs.StringVar(&values.headFabricGID, "head-fabric-gid-index", "", "rank-0 RoCE GID index")
 	fs.StringVar(&values.headServiceAddress, "head-service-address", "", "rank-0 client/monitor IP")
-	fs.StringVar(&values.headServicePort, "head-service-port", "", "rank-0 client/monitor port (8000 for GLM-5.3)")
+	fs.StringVar(&values.headServicePort, "head-service-port", "", "rank-0 client/monitor port (recipe-specific)")
 	fs.StringVar(&values.workerDevice, "worker-device", "", "rank-1 device id")
 	fs.StringVar(&values.workerFabric, "worker-fabric", "", "rank-1 fabric IP")
+	fs.StringVar(&values.workerFabricInterface, "worker-fabric-interface", "", "rank-1 fabric network interface")
+	fs.StringVar(&values.workerFabricHCA, "worker-fabric-hca", "", "rank-1 InfiniBand HCA name (without NCCL's leading =)")
+	fs.StringVar(&values.workerFabricGID, "worker-fabric-gid-index", "", "rank-1 RoCE GID index")
 	fs.StringVar(&values.headObserved, "head-observed-container", "", "explicit old rank-0 container id to stop/restart")
 	fs.StringVar(&values.workerObserved, "worker-observed-container", "", "explicit old rank-1 container id to stop/restart")
 	fs.StringVar(&values.apiKeyEnv, "api-key-env", "", "environment variable containing the request-time API key")
@@ -119,13 +128,37 @@ func buildDeploymentCreateRequest(values deploymentCreateFlags, getenv func(stri
 	if apiKey == "" {
 		return deployments.CreateRequest{}, fmt.Errorf("environment variable %s is empty", values.apiKeyEnv)
 	}
+	headGID, workerGID := 0, 0
+	if values.bkcID == bkc.Qwen38FlashNextNVFP4DualGB10ID {
+		for name, value := range map[string]string{"--head-fabric-interface": values.headFabricInterface, "--head-fabric-hca": values.headFabricHCA, "--head-fabric-gid-index": values.headFabricGID, "--worker-fabric-interface": values.workerFabricInterface, "--worker-fabric-hca": values.workerFabricHCA, "--worker-fabric-gid-index": values.workerFabricGID} {
+			if strings.TrimSpace(value) == "" {
+				return deployments.CreateRequest{}, fmt.Errorf("%s is required for %s", name, values.bkcID)
+			}
+		}
+		var parseErr error
+		headGID, parseErr = strconv.Atoi(values.headFabricGID)
+		if parseErr != nil || headGID < 0 || headGID > 255 {
+			return deployments.CreateRequest{}, fmt.Errorf("head fabric GID index must be between 0 and 255")
+		}
+		workerGID, parseErr = strconv.Atoi(values.workerFabricGID)
+		if parseErr != nil || workerGID < 0 || workerGID > 255 {
+			return deployments.CreateRequest{}, fmt.Errorf("worker fabric GID index must be between 0 and 255")
+		}
+	}
 	return deployments.CreateRequest{
 		BKCID: values.bkcID, IdempotencyKey: values.key, APIKey: apiKey, LocalModelPath: values.localModelPath,
 		Bindings: []deployments.Binding{
-			{Role: "head", DeviceID: values.headDevice, FabricAddress: values.headFabric, ServiceAddress: values.headServiceAddress, ServicePort: servicePort, ObservedContainerID: values.headObserved},
-			{Role: "worker", DeviceID: values.workerDevice, FabricAddress: values.workerFabric, ObservedContainerID: values.workerObserved},
+			{Role: "head", DeviceID: values.headDevice, FabricAddress: values.headFabric, FabricInterface: values.headFabricInterface, FabricHCA: values.headFabricHCA, FabricGIDIndex: fabricGIDPointer(values.bkcID, headGID), ServiceAddress: values.headServiceAddress, ServicePort: servicePort, ObservedContainerID: values.headObserved},
+			{Role: "worker", DeviceID: values.workerDevice, FabricAddress: values.workerFabric, FabricInterface: values.workerFabricInterface, FabricHCA: values.workerFabricHCA, FabricGIDIndex: fabricGIDPointer(values.bkcID, workerGID), ObservedContainerID: values.workerObserved},
 		},
 	}, nil
+}
+
+func fabricGIDPointer(bkcID string, value int) *int {
+	if bkcID != bkc.Qwen38FlashNextNVFP4DualGB10ID {
+		return nil
+	}
+	return &value
 }
 
 func runDeploymentsList(args []string) {

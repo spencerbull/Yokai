@@ -27,3 +27,7 @@ This directory contains multi-level architecture documentation for yokai, a TUI 
 - **L8** defines the additive coordinated-deployment transaction and its secret/ownership boundaries
 
 All diagrams are rendered in markdown using ASCII art — no external tools required.
+
+## Qwen coordinator bootstrap invariant
+
+Each Qwen-capable agent must be bootstrapped with its stable coordinator-side device ID and the coordinator public verification key in `agent.json`. The daemon signs the exact deployment binding device ID, and the agent compares that signed target with its local configured identity before replay consumption or Docker/image work. Re-run `yokai devices bootstrap <device-id>` after adding this authorization version, changing a device ID, or rotating the coordinator signing key; a binary-only upgrade intentionally leaves the Qwen capability unavailable when identity, verifier, or replay state is absent.

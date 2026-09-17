@@ -1,6 +1,7 @@
 package ssh
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -319,7 +320,23 @@ func sudoPrefix(useSudo bool) string {
 	return ""
 }
 
-func deploySystemService(client remoteRunner, tmpUploadPath, agentToken string) error {
+func agentConfigJSON(agentToken, deviceID, coordinatorPublicKey string) (string, error) {
+	data, err := json.MarshalIndent(struct {
+		Token                string `json:"token"`
+		DeviceID             string `json:"device_id"`
+		CoordinatorPublicKey string `json:"coordinator_public_key"`
+	}{agentToken, deviceID, coordinatorPublicKey}, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("marshal agent config: %w", err)
+	}
+	return string(data), nil
+}
+
+func shellSingleQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
+}
+
+func deploySystemService(client remoteRunner, tmpUploadPath, agentToken, deviceID, coordinatorPublicKey string) error {
 	// Avoid conflicts on :7474 if a stale user-level service exists.
 	_, _ = client.Exec("systemctl --user disable --now yokai-agent 2>/dev/null || true")
 
@@ -336,11 +353,15 @@ func deploySystemService(client remoteRunner, tmpUploadPath, agentToken string) 
 		return fmt.Errorf("running %q: %w — stderr: %s", installCmd, err, strings.TrimSpace(installOut))
 	}
 
-	writeTokenCmd := fmt.Sprintf(`%ssh -c 'mkdir -p /etc/yokai && cat > /etc/yokai/agent.json << "EOF"
-{
-  "token": "%s"
-}
-EOF'`, sudoPrefix(useSudo), agentToken)
+	configJSON, err := agentConfigJSON(agentToken, deviceID, coordinatorPublicKey)
+	if err != nil {
+		return err
+	}
+	writeConfigScript := fmt.Sprintf(`mkdir -p /etc/yokai && chmod 0700 /etc/yokai && cat > /etc/yokai/agent.json << "EOF"
+%s
+EOF
+chmod 0600 /etc/yokai/agent.json`, configJSON)
+	writeTokenCmd := fmt.Sprintf("%ssh -c %s", sudoPrefix(useSudo), shellSingleQuote(writeConfigScript))
 	if tokenOut, err := client.Exec(writeTokenCmd); err != nil {
 		return fmt.Errorf("writing /etc/yokai/agent.json: %w — stderr: %s", err, strings.TrimSpace(tokenOut))
 	}
@@ -363,7 +384,7 @@ EOF'`, sudoPrefix(useSudo), agentToken)
 	return nil
 }
 
-func deployUserService(client remoteRunner, tmpUploadPath, agentToken string) error {
+func deployUserService(client remoteRunner, tmpUploadPath, agentToken, deviceID, coordinatorPublicKey string) error {
 	homeDir := getRemoteHome(client)
 	remoteBinDir := homeDir + "/.local/bin"
 	remoteBinPath := remoteBinDir + "/yokai"
@@ -392,13 +413,15 @@ func deployUserService(client remoteRunner, tmpUploadPath, agentToken string) er
 	}
 
 	// Create config directory and write agent config
+	configJSON, err := agentConfigJSON(agentToken, deviceID, coordinatorPublicKey)
+	if err != nil {
+		return err
+	}
 	configCmds := []string{
 		fmt.Sprintf("mkdir -p %s", remoteConfigDir),
-		fmt.Sprintf(`cat > %s/agent.json << 'EOF'
-{
-  "token": "%s"
-}
-EOF`, remoteConfigDir, agentToken),
+		fmt.Sprintf("chmod 0700 %s", remoteConfigDir),
+		fmt.Sprintf("cat > %s/agent.json << 'EOF'\n%s\nEOF", remoteConfigDir, configJSON),
+		fmt.Sprintf("chmod 0600 %s/agent.json", remoteConfigDir),
 	}
 	for _, cmd := range configCmds {
 		if cmdOut, err := client.Exec(cmd); err != nil {
@@ -468,7 +491,13 @@ WantedBy=default.target
 	return nil
 }
 
-func deployAgent(client remoteRunner, localBinaryPath string, agentToken string) error {
+func deployAgent(client remoteRunner, localBinaryPath, agentToken, deviceID, coordinatorPublicKey string) error {
+	if strings.TrimSpace(deviceID) == "" || deviceID != strings.TrimSpace(deviceID) {
+		return fmt.Errorf("stable agent device identity is required")
+	}
+	if strings.TrimSpace(coordinatorPublicKey) == "" {
+		return fmt.Errorf("coordinator public key is required")
+	}
 	tmpUploadPath := "/tmp/yokai.new"
 
 	// Upload binary to /tmp first, then install according to service mode.
@@ -477,16 +506,16 @@ func deployAgent(client remoteRunner, localBinaryPath string, agentToken string)
 	}
 
 	if hasSystemService(client) {
-		return deploySystemService(client, tmpUploadPath, agentToken)
+		return deploySystemService(client, tmpUploadPath, agentToken, deviceID, coordinatorPublicKey)
 	}
 
-	return deployUserService(client, tmpUploadPath, agentToken)
+	return deployUserService(client, tmpUploadPath, agentToken, deviceID, coordinatorPublicKey)
 }
 
 // DeployAgent uploads the yokai binary and installs it as a user-level or
 // existing system-level service depending on what is already present.
-func DeployAgent(client *Client, localBinaryPath string, agentToken string) error {
-	return deployAgent(client, localBinaryPath, agentToken)
+func DeployAgent(client *Client, localBinaryPath, agentToken, deviceID, coordinatorPublicKey string) error {
+	return deployAgent(client, localBinaryPath, agentToken, deviceID, coordinatorPublicKey)
 }
 
 // getUserName returns the remote username.
