@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,6 +21,17 @@ import (
 	"github.com/spencerbull/yokai/internal/deployments"
 	"github.com/spencerbull/yokai/internal/launchauth"
 )
+
+type cancelOnFlushRecorder struct {
+	*httptest.ResponseRecorder
+	cancel context.CancelFunc
+	once   sync.Once
+}
+
+func (recorder *cancelOnFlushRecorder) Flush() {
+	recorder.ResponseRecorder.Flush()
+	recorder.once.Do(recorder.cancel)
+}
 
 // requireTestAuth creates a test-specific auth middleware that doesn't use global state
 func requireTestAuth(expectedToken string) func(http.HandlerFunc) http.HandlerFunc {
@@ -1002,6 +1014,7 @@ func TestContainerDeployRejectsFabricatedCoordinatedQwenLabelsBeforeDockerMutati
 }
 
 func TestGenericContainerLogsRemainAvailableForNonGroupedContainer(t *testing.T) {
+	const lineCount = 2048
 	binDir := t.TempDir()
 	dockerPath := filepath.Join(binDir, "docker")
 	script := `#!/bin/sh
@@ -1012,11 +1025,12 @@ if [ "$1" = inspect ]; then
   exit 0
 fi
 if [ "$1" = logs ] && [ "$2" = -f ] && [ "$3" = --tail ] && [ "$4" = 100 ] && [ "$5" = legacy-service ]; then
-  printf '%s\n' 'ordinary log line'
-	printf '%s\n' 'ordinary error line' >&2
-	sleep 0.1
-	printf '%s\n' 'final log line'
-	printf '%s\n' 'final error line' >&2
+	i=0
+	while [ "$i" -lt 2048 ]; do
+		printf 'stdout-%04d\n' "$i"
+		printf 'stderr-%04d\n' "$i" >&2
+		i=$((i + 1))
+	done
   exit 0
 fi
 exit 9
@@ -1030,13 +1044,61 @@ exit 9
 	recorder := httptest.NewRecorder()
 	handleContainerLogs(recorder, request)
 	body := recorder.Body.String()
-	for _, line := range []string{"ordinary log line", "[stderr] ordinary error line", "final log line", "[stderr] final error line"} {
-		if !strings.Contains(body, line) {
-			t.Fatalf("non-grouped generic logs did not drain %q: status=%d body=%s", line, recorder.Code, body)
-		}
+	if got := strings.Count(body, "data: stdout-"); got != lineCount {
+		t.Fatalf("non-grouped generic logs drained %d/%d stdout lines", got, lineCount)
+	}
+	if got := strings.Count(body, "data: [stderr] stderr-"); got != lineCount {
+		t.Fatalf("non-grouped generic logs drained %d/%d stderr lines", got, lineCount)
+	}
+	if strings.Contains(body, "scanner error:") {
+		t.Fatalf("non-grouped generic logs reported a scanner error")
 	}
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("non-grouped generic logs failed: status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestGenericContainerLogsCancellationStopsStreamAndWaitsForReaders(t *testing.T) {
+	binDir := t.TempDir()
+	dockerPath := filepath.Join(binDir, "docker")
+	script := `#!/bin/sh
+if [ "$1" = inspect ]; then
+  printf '%s\n' '"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"'
+  printf '%s\n' '"/legacy-service"'
+  printf '%s\n' '{"io.yokai.managed":"true","io.yokai.ownership":"managed"}'
+  exit 0
+fi
+if [ "$1" = logs ] && [ "$2" = -f ] && [ "$3" = --tail ] && [ "$4" = 100 ] && [ "$5" = legacy-service ]; then
+	printf '%s\n' 'ready'
+	while :; do :; done
+fi
+exit 9
+`
+	if err := os.WriteFile(dockerPath, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	request := httptest.NewRequest(http.MethodGet, "/containers/legacy-service/logs", nil).WithContext(ctx)
+	request.SetPathValue("id", "legacy-service")
+	recorder := &cancelOnFlushRecorder{ResponseRecorder: httptest.NewRecorder(), cancel: cancel}
+	done := make(chan struct{})
+	go func() {
+		handleContainerLogs(recorder, request)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("generic log handler did not stop after request cancellation")
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, "data: ready\n\n") {
+		t.Fatalf("generic log stream did not deliver the line before cancellation: %q", body)
+	}
+	if strings.Contains(body, "scanner error:") {
+		t.Fatalf("generic log stream reported cancellation as a scanner error: %q", body)
 	}
 }
 
