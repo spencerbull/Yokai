@@ -245,6 +245,107 @@ func TestQwenPreflightRejectsAgentWithWrongOrMissingConfiguredDeviceIdentity(t *
 	}
 }
 
+func TestQwenPreflightRejectsStaleOrMissingCoordinatorVerifierFingerprint(t *testing.T) {
+	_, coordinatorKey, err := launchauth.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stalePublicKey, _, err := launchauth.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleFingerprint, err := launchauth.PublicKeyFingerprint(stalePublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, reportedFingerprint := range []string{"", staleFingerprint} {
+		t.Run(fmt.Sprintf("reported_%q", reportedFingerprint), func(t *testing.T) {
+			requests := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+				requests++
+				switch request.URL.Path {
+				case "/health":
+					writeJSON(w, http.StatusOK, map[string]any{
+						"status": "ok", "device_id": "spark-a",
+						"capabilities": []string{bkc.Qwen38LaunchAuthorizationCapability},
+					})
+				case "/system/info":
+					writeJSON(w, http.StatusOK, map[string]any{
+						"gpus":                             []map[string]string{{"name": "NVIDIA GB10"}},
+						"coordinator_verifier_fingerprint": reportedFingerprint,
+					})
+				default:
+					t.Fatalf("preflight continued to deployment mutation path: %s", request.URL.Path)
+				}
+			}))
+			defer server.Close()
+
+			port := server.Listener.Addr().(*net.TCPAddr).Port
+			cfg := config.DefaultConfig()
+			cfg.Devices = []config.Device{{ID: "spark-a"}}
+			tunnels := NewTunnelPool(cfg)
+			tunnels.tunnels["spark-a"] = &tunnel{deviceID: "spark-a", localPort: port, connected: true}
+			ops := &daemonDeploymentOperations{daemon: &Daemon{cfg: cfg, tunnels: tunnels, aggregator: NewAggregator(cfg, tunnels), coordinatorSigningKey: coordinatorKey}}
+			err := ops.Preflight(context.Background(), deployments.PreflightRequest{
+				Binding: deployments.Binding{DeviceID: "spark-a"}, BKCID: bkc.Qwen38FlashNextNVFP4DualGB10ID,
+			}, []string{bkc.Qwen38LaunchAuthorizationCapability}, []string{bkc.DeviceGB10})
+			if err == nil || !strings.Contains(err.Error(), "coordinator verifier fingerprint") {
+				t.Fatalf("stale/missing agent verifier fingerprint did not fail Qwen preflight: %v", err)
+			}
+			if requests != 2 {
+				t.Fatalf("preflight made %d requests before rejecting verifier mismatch", requests)
+			}
+		})
+	}
+}
+
+func TestQwenPreflightAcceptsMatchingCoordinatorVerifierFingerprint(t *testing.T) {
+	publicKey, coordinatorKey, err := launchauth.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fingerprint, err := launchauth.PublicKeyFingerprint(publicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		requests++
+		switch request.URL.Path {
+		case "/health":
+			writeJSON(w, http.StatusOK, map[string]any{
+				"status": "ok", "device_id": "spark-a",
+				"capabilities": []string{bkc.Qwen38LaunchAuthorizationCapability},
+			})
+		case "/system/info":
+			writeJSON(w, http.StatusOK, map[string]any{
+				"gpus":                             []map[string]string{{"name": "NVIDIA GB10"}},
+				"coordinator_verifier_fingerprint": fingerprint,
+			})
+		case "/deployments/preflight":
+			writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		default:
+			t.Fatalf("unexpected preflight request: %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	port := server.Listener.Addr().(*net.TCPAddr).Port
+	cfg := config.DefaultConfig()
+	cfg.Devices = []config.Device{{ID: "spark-a"}}
+	tunnels := NewTunnelPool(cfg)
+	tunnels.tunnels["spark-a"] = &tunnel{deviceID: "spark-a", localPort: port, connected: true}
+	ops := &daemonDeploymentOperations{daemon: &Daemon{cfg: cfg, tunnels: tunnels, aggregator: NewAggregator(cfg, tunnels), coordinatorSigningKey: coordinatorKey}}
+	if err := ops.Preflight(context.Background(), deployments.PreflightRequest{
+		Binding: deployments.Binding{DeviceID: "spark-a"}, BKCID: bkc.Qwen38FlashNextNVFP4DualGB10ID,
+	}, []string{bkc.Qwen38LaunchAuthorizationCapability}, []string{bkc.DeviceGB10}); err != nil {
+		t.Fatalf("matching coordinator verifier fingerprint failed Qwen preflight: %v", err)
+	}
+	if requests != 3 {
+		t.Fatalf("matching verifier preflight made %d requests, want 3", requests)
+	}
+}
+
 func TestDeploymentAgentOperationErrorClassification(t *testing.T) {
 	for _, test := range []struct {
 		name           string
