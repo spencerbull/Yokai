@@ -445,7 +445,7 @@ func TestDeployAgentSystemServiceRequiresSudo(t *testing.T) {
 		{contains: "sudo -n true", out: "sudo: a password is required", err: errors.New("exit status 1")},
 	}}
 
-	err := deployAgent(fake, "/tmp/local-yokai", "token-123")
+	err := deployAgent(fake, "/tmp/local-yokai", "token-123", "spark-a", "coordinator-public-key")
 	if err == nil {
 		t.Fatal("expected error when sudo is unavailable")
 	}
@@ -454,6 +454,19 @@ func TestDeployAgentSystemServiceRequiresSudo(t *testing.T) {
 	}
 	if hasExecuted(fake.cmds, "install -m 0755 /tmp/yokai.new") {
 		t.Fatal("should not attempt system install when sudo check fails")
+	}
+}
+
+func TestDeployAgentRequiresStableDeviceIdentity(t *testing.T) {
+	t.Parallel()
+
+	fake := &fakeRemoteClient{}
+	err := deployAgent(fake, "/tmp/local-yokai", "token-123", "", "coordinator-public-key")
+	if err == nil || !strings.Contains(err.Error(), "device identity is required") {
+		t.Fatalf("missing device identity did not fail closed: %v", err)
+	}
+	if len(fake.uploads) != 0 {
+		t.Fatal("agent upload started without a stable device identity")
 	}
 }
 
@@ -468,7 +481,7 @@ func TestDeployAgentSystemServiceUpdatesEtcToken(t *testing.T) {
 		{contains: "curl -sf -H 'Authorization: Bearer token-abc'", out: "", err: nil},
 	}}
 
-	err := deployAgent(fake, "/tmp/local-yokai", "token-abc")
+	err := deployAgent(fake, "/tmp/local-yokai", "token-abc", "spark-a", "coordinator-public-key")
 	if err != nil {
 		t.Fatalf("deployAgent returned error: %v", err)
 	}
@@ -492,6 +505,15 @@ func TestDeployAgentSystemServiceUpdatesEtcToken(t *testing.T) {
 	if !hasExecuted(fake.cmds, "\"token\": \"token-abc\"") {
 		t.Fatal("expected token content in /etc token write command")
 	}
+	if !hasExecuted(fake.cmds, "\"coordinator_public_key\": \"coordinator-public-key\"") {
+		t.Fatal("expected coordinator public key in /etc agent config")
+	}
+	if !hasExecuted(fake.cmds, "\"device_id\": \"spark-a\"") {
+		t.Fatal("expected stable device identity in /etc agent config")
+	}
+	if !hasExecuted(fake.cmds, "chmod 0700 /etc/yokai") || !hasExecuted(fake.cmds, "chmod 0600 /etc/yokai/agent.json") {
+		t.Fatal("expected private permissions for the system agent authorization state")
+	}
 	if !hasExecuted(fake.cmds, "sudo -n systemctl restart yokai-agent") {
 		t.Fatal("expected system service restart command")
 	}
@@ -508,7 +530,7 @@ func TestDeployAgentSystemServiceVerifiesConfiguredPort(t *testing.T) {
 		{contains: "curl -sf -H 'Authorization: Bearer token-port' http://127.0.0.1:9191/system/info >/dev/null", out: "", err: nil},
 	}}
 
-	if err := deployAgent(fake, "/tmp/local-yokai", "token-port"); err != nil {
+	if err := deployAgent(fake, "/tmp/local-yokai", "token-port", "spark-a", "coordinator-public-key"); err != nil {
 		t.Fatalf("deployAgent returned error: %v", err)
 	}
 
@@ -531,13 +553,22 @@ func TestDeployAgentUserServiceSetsExplicitConfigPath(t *testing.T) {
 		{contains: "curl -sf -H 'Authorization: Bearer token-user'", out: "", err: nil},
 	}}
 
-	err := deployAgent(fake, "/tmp/local-yokai", "token-user")
+	err := deployAgent(fake, "/tmp/local-yokai", "token-user", "spark-a", "coordinator-public-key")
 	if err != nil {
 		t.Fatalf("deployAgent returned error: %v", err)
 	}
 
 	if !hasExecuted(fake.cmds, "Environment=YOKAI_AGENT_CONFIG=/home/testuser/.config/yokai/agent.json") {
 		t.Fatal("expected user systemd unit to include YOKAI_AGENT_CONFIG")
+	}
+	if !hasExecuted(fake.cmds, "\"coordinator_public_key\": \"coordinator-public-key\"") {
+		t.Fatal("expected coordinator public key in user agent config")
+	}
+	if !hasExecuted(fake.cmds, "\"device_id\": \"spark-a\"") {
+		t.Fatal("expected stable device identity in user agent config")
+	}
+	if !hasExecuted(fake.cmds, "chmod 0700 /home/testuser/.config/yokai") || !hasExecuted(fake.cmds, "chmod 0600 /home/testuser/.config/yokai/agent.json") {
+		t.Fatal("expected private permissions for the user agent authorization state")
 	}
 	if !hasExecuted(fake.cmds, "systemctl --user restart yokai-agent") {
 		t.Fatal("expected user service restart")

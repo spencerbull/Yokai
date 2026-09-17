@@ -7,7 +7,7 @@ import { normalizeSettingsDocument } from "../../contracts/settings"
 import { createDeployment, DaemonRequestError, deployService, getDeployBKCs, getDevices, getGGUFVariants, getHFModels, getSettings, getVLLMMemoryEstimate, putDeployHistory } from "../../services/daemon-client"
 
 type DeployStep = "workload" | "device" | "image" | "model" | "variant" | "config" | "review"
-type ConfigField = "port" | "extraArgs" | "bkcAction" | "contextLength" | "overheadGB" | "hfmemCalculate" | "hfmemApply" | "headDevice" | "headFabric" | "headService" | "headObserved" | "workerDevice" | "workerFabric" | "workerObserved" | "idempotencyKey" | "localModelPath" | "apiKey"
+type ConfigField = "port" | "extraArgs" | "bkcAction" | "contextLength" | "overheadGB" | "hfmemCalculate" | "hfmemApply" | "headDevice" | "headFabric" | "headFabricInterface" | "headFabricHCA" | "headFabricGIDIndex" | "headService" | "headObserved" | "workerDevice" | "workerFabric" | "workerFabricInterface" | "workerFabricHCA" | "workerFabricGIDIndex" | "workerObserved" | "idempotencyKey" | "localModelPath" | "apiKey"
 type ReviewAction = "back" | "deploy"
 
 type DeployNotice = {
@@ -550,7 +550,7 @@ export function useDeployController(active: boolean, onComplete: (notice?: Deplo
         }
         return true
       case "tab":
-        setConfigField((current) => nextConfigField(current, form.workload, Boolean(activeBKC?.multi_device), key.shift ? -1 : 1))
+        setConfigField((current) => nextConfigField(current, form.workload, activeBKC, key.shift ? -1 : 1))
         return true
       case "b":
         if (bkc) {
@@ -803,9 +803,15 @@ function emptyForm(): DeployForm {
     workload: "vllm",
     headDeviceId: "",
     headFabricAddress: "",
+    headFabricInterface: "",
+    headFabricHCA: "",
+    headFabricGIDIndex: "",
     headServiceAddress: "",
     workerDeviceId: "",
     workerFabricAddress: "",
+    workerFabricInterface: "",
+    workerFabricHCA: "",
+    workerFabricGIDIndex: "",
     idempotencyKey: "",
     localModelPath: "",
     apiKey: "",
@@ -915,8 +921,22 @@ export function buildClusterDeploymentRequest(form: DeployForm, bkc: DeployBKC):
     bkc_id: bkc.id,
     idempotency_key: form.idempotencyKey.trim(),
     bindings: [
-	  { role: "head", device_id: form.headDeviceId.trim(), fabric_address: form.headFabricAddress.trim(), service_address: form.headServiceAddress.trim(), service_port: bkc.multi_device.service_port, observed_container_id: form.headObservedContainerId.trim() || undefined },
-	  { role: "worker", device_id: form.workerDeviceId.trim(), fabric_address: form.workerFabricAddress.trim(), observed_container_id: form.workerObservedContainerId.trim() || undefined },
+      {
+        role: "head",
+        device_id: form.headDeviceId.trim(),
+        fabric_address: form.headFabricAddress.trim(),
+        ...fabricBindingFields(form, "head", bkc.multi_device.requires_fabric_config),
+        service_address: form.headServiceAddress.trim(),
+        service_port: bkc.multi_device.service_port,
+        observed_container_id: form.headObservedContainerId.trim() || undefined,
+      },
+      {
+        role: "worker",
+        device_id: form.workerDeviceId.trim(),
+        fabric_address: form.workerFabricAddress.trim(),
+        ...fabricBindingFields(form, "worker", bkc.multi_device.requires_fabric_config),
+        observed_container_id: form.workerObservedContainerId.trim() || undefined,
+      },
     ],
     local_model_path: form.localModelPath.trim() || undefined,
     api_key: form.apiKey,
@@ -932,8 +952,14 @@ export function validateClusterDeploymentForm(form: DeployForm, bkc: DeployBKC) 
   if (!isExplicitServiceIPAddress(form.headServiceAddress)) return "Head service address must be an explicit non-loopback IP"
   if (form.headServiceAddress.trim() === form.headFabricAddress.trim() || form.headServiceAddress.trim() === form.workerFabricAddress.trim()) return "Head service address must be distinct from private fabric addresses"
   if (bkc.multi_device.service_port < 1 || bkc.multi_device.service_port > 65535 || bkc.port !== String(bkc.multi_device.service_port)) return "BKC head client/monitor port metadata is inconsistent"
+  if (bkc.multi_device.requires_fabric_config) {
+    const headFabricValidation = validateFabricBinding(form, "head")
+    if (headFabricValidation) return headFabricValidation
+    const workerFabricValidation = validateFabricBinding(form, "worker")
+    if (workerFabricValidation) return workerFabricValidation
+  }
   if (!form.idempotencyKey.trim()) return "Idempotency key is required"
-	if (!form.apiKey) return "API key is required"
+  if (!form.apiKey) return "API key is required"
   if (form.localModelPath.trim() && !form.localModelPath.trim().startsWith("/")) return "Local model path must be absolute"
   return null
 }
@@ -983,14 +1009,66 @@ export function deploymentRecoveryNotice(deployment: DeploymentRecord) {
   return `Deployment ${deployment.id} is ${deployment.state}.${rollback} Open its dashboard record to inspect or retry recovery.`
 }
 
-function nextConfigField(current: ConfigField, workload: WorkloadType, cluster: boolean, delta: number) {
-  const fields: ConfigField[] = cluster
-    ? ["bkcAction", "headDevice", "headFabric", "headService", "headObserved", "workerDevice", "workerFabric", "workerObserved", "idempotencyKey", "localModelPath", "apiKey"]
+export function nextConfigField(current: ConfigField, workload: WorkloadType, activeBKC: DeployBKC | null, delta: number) {
+  const fabricFields = Boolean(activeBKC?.multi_device?.requires_fabric_config)
+  const fields: ConfigField[] = activeBKC?.multi_device
+    ? [
+        "bkcAction",
+        "headDevice",
+        "headFabric",
+        ...(fabricFields ? ["headFabricInterface", "headFabricHCA", "headFabricGIDIndex"] as ConfigField[] : []),
+        "headService",
+        "headObserved",
+        "workerDevice",
+        "workerFabric",
+        ...(fabricFields ? ["workerFabricInterface", "workerFabricHCA", "workerFabricGIDIndex"] as ConfigField[] : []),
+        "workerObserved",
+        "idempotencyKey",
+        "localModelPath",
+        "apiKey",
+      ]
     : workload === "vllm"
     ? ["port", "extraArgs", "bkcAction", "contextLength", "overheadGB", "hfmemCalculate", "hfmemApply"]
     : ["port", "extraArgs", "bkcAction"]
   const index = fields.findIndex((field) => field === current)
   return fields[(index + delta + fields.length) % fields.length]
+}
+
+function validateFabricBinding(form: DeployForm, role: "head" | "worker") {
+  const label = role === "head" ? "Head" : "Worker"
+  const fabricInterface = role === "head" ? form.headFabricInterface : form.workerFabricInterface
+  const fabricHCA = role === "head" ? form.headFabricHCA : form.workerFabricHCA
+  const fabricGIDIndex = role === "head" ? form.headFabricGIDIndex : form.workerFabricGIDIndex
+  if (!fabricInterface.trim()) return `${label} fabric interface is required`
+  if (!fabricHCA.trim()) return `${label} fabric HCA is required`
+  if (!fabricGIDIndex.trim()) return `${label} fabric GID index is required`
+  if (!isFabricName(fabricInterface)) return `${label} fabric interface must be 1-64 letters, numbers, or ._:- characters`
+  if (!isFabricName(fabricHCA)) return `${label} fabric HCA must be 1-64 letters, numbers, or ._:- characters`
+  if (!isFabricGIDIndex(fabricGIDIndex)) return `${label} fabric GID index must be an integer between 0 and 255`
+  return null
+}
+
+function fabricBindingFields(form: DeployForm, role: "head" | "worker", required?: boolean) {
+  if (!required) return {}
+  const fabricInterface = role === "head" ? form.headFabricInterface : form.workerFabricInterface
+  const fabricHCA = role === "head" ? form.headFabricHCA : form.workerFabricHCA
+  const fabricGIDIndex = role === "head" ? form.headFabricGIDIndex : form.workerFabricGIDIndex
+  return {
+    fabric_interface: fabricInterface.trim(),
+    fabric_hca: fabricHCA.trim(),
+    fabric_gid_index: Number(fabricGIDIndex.trim()),
+  }
+}
+
+function isFabricName(value: string) {
+  return /^[A-Za-z0-9_.:-]{1,64}$/.test(value.trim())
+}
+
+function isFabricGIDIndex(value: string) {
+  const input = value.trim()
+  if (!/^\d+$/.test(input)) return false
+  const parsed = Number(input)
+  return Number.isInteger(parsed) && parsed >= 0 && parsed <= 255
 }
 
 function applyVLLMFlags(extraArgs: string, estimate: VLLMMemoryEstimate) {

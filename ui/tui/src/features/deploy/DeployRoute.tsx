@@ -62,6 +62,8 @@ export function DeployRoute(props: DeployRouteProps) {
           <Line label={props.controller.isClusterBKC ? "Head" : "Device"} value={props.controller.isClusterBKC ? props.controller.form.headDeviceId || "-" : props.controller.form.deviceId || "-"} />
           {props.controller.isClusterBKC ? <Line label="Worker" value={props.controller.form.workerDeviceId || "-"} /> : null}
           {props.controller.isClusterBKC ? <Line label="Fabric" value={`${props.controller.form.headFabricAddress || "-"} / ${props.controller.form.workerFabricAddress || "-"}`} /> : null}
+          {props.controller.activeBKC?.multi_device?.requires_fabric_config ? <Line label="Head fabric device" value={`${props.controller.form.headFabricInterface || "-"} / ${props.controller.form.headFabricHCA || "-"} / GID ${props.controller.form.headFabricGIDIndex || "-"}`} /> : null}
+          {props.controller.activeBKC?.multi_device?.requires_fabric_config ? <Line label="Worker fabric device" value={`${props.controller.form.workerFabricInterface || "-"} / ${props.controller.form.workerFabricHCA || "-"} / GID ${props.controller.form.workerFabricGIDIndex || "-"}`} /> : null}
           {props.controller.isClusterBKC ? <Line label="Head API" value={`${props.controller.form.headServiceAddress || "-"}:${props.controller.activeBKC?.multi_device?.service_port ?? "-"}`} /> : null}
           <Line label="Image" value={props.controller.form.image || "-"} />
           <Line label="Model" value={props.controller.form.workload === "comfyui" ? "n/a" : props.controller.form.model || "-"} />
@@ -312,6 +314,22 @@ function ConfigStep(props: { controller: DeployController }) {
               <input value={props.controller.form.headFabricAddress} onInput={(value) => props.controller.setValue("headFabricAddress", value)} focused={props.controller.configField === "headFabric"} width={20} backgroundColor={theme.colors.panel} textColor={theme.colors.text} focusedTextColor={theme.colors.text} focusedBackgroundColor={theme.colors.panel} cursorColor={theme.colors.accent} placeholder="192.168.201.1" />
             </Field>
           </box>
+          {props.controller.activeBKC.multi_device.requires_fabric_config ? (
+            <>
+              <box flexDirection="row" gap={1}>
+                <Field label="Head fabric interface" active={props.controller.configField === "headFabricInterface"}>
+                  <input value={props.controller.form.headFabricInterface} onInput={(value) => props.controller.setValue("headFabricInterface", value)} focused={props.controller.configField === "headFabricInterface"} width={22} backgroundColor={theme.colors.panel} textColor={theme.colors.text} focusedTextColor={theme.colors.text} focusedBackgroundColor={theme.colors.panel} cursorColor={theme.colors.accent} placeholder="interface name" />
+                </Field>
+                <Field label="Head fabric HCA" active={props.controller.configField === "headFabricHCA"}>
+                  <input value={props.controller.form.headFabricHCA} onInput={(value) => props.controller.setValue("headFabricHCA", value)} focused={props.controller.configField === "headFabricHCA"} width={22} backgroundColor={theme.colors.panel} textColor={theme.colors.text} focusedTextColor={theme.colors.text} focusedBackgroundColor={theme.colors.panel} cursorColor={theme.colors.accent} placeholder="HCA name" />
+                </Field>
+                <Field label="Head GID" active={props.controller.configField === "headFabricGIDIndex"}>
+                  <input value={props.controller.form.headFabricGIDIndex} onInput={(value) => props.controller.setValue("headFabricGIDIndex", value)} focused={props.controller.configField === "headFabricGIDIndex"} width={7} backgroundColor={theme.colors.panel} textColor={theme.colors.text} focusedTextColor={theme.colors.text} focusedBackgroundColor={theme.colors.panel} cursorColor={theme.colors.accent} placeholder="0-255" />
+                </Field>
+              </box>
+              <text fg={theme.colors.textSubtle}>Head interface, HCA, and RoCE GID index must match the selected host's fabric binding.</text>
+            </>
+          ) : null}
           <Field label="Head client/monitor IP (Tailnet or routable IP)" active={props.controller.configField === "headService"}>
             <input value={props.controller.form.headServiceAddress} onInput={(value) => props.controller.setValue("headServiceAddress", value)} focused={props.controller.configField === "headService"} width={28} backgroundColor={theme.colors.panel} textColor={theme.colors.text} focusedTextColor={theme.colors.text} focusedBackgroundColor={theme.colors.panel} cursorColor={theme.colors.accent} placeholder="100.x.y.z" />
           </Field>
@@ -327,6 +345,22 @@ function ConfigStep(props: { controller: DeployController }) {
               <input value={props.controller.form.workerFabricAddress} onInput={(value) => props.controller.setValue("workerFabricAddress", value)} focused={props.controller.configField === "workerFabric"} width={20} backgroundColor={theme.colors.panel} textColor={theme.colors.text} focusedTextColor={theme.colors.text} focusedBackgroundColor={theme.colors.panel} cursorColor={theme.colors.accent} placeholder="192.168.201.2" />
             </Field>
           </box>
+          {props.controller.activeBKC.multi_device.requires_fabric_config ? (
+            <>
+              <box flexDirection="row" gap={1}>
+                <Field label="Worker fabric interface" active={props.controller.configField === "workerFabricInterface"}>
+                  <input value={props.controller.form.workerFabricInterface} onInput={(value) => props.controller.setValue("workerFabricInterface", value)} focused={props.controller.configField === "workerFabricInterface"} width={22} backgroundColor={theme.colors.panel} textColor={theme.colors.text} focusedTextColor={theme.colors.text} focusedBackgroundColor={theme.colors.panel} cursorColor={theme.colors.accent} placeholder="interface name" />
+                </Field>
+                <Field label="Worker fabric HCA" active={props.controller.configField === "workerFabricHCA"}>
+                  <input value={props.controller.form.workerFabricHCA} onInput={(value) => props.controller.setValue("workerFabricHCA", value)} focused={props.controller.configField === "workerFabricHCA"} width={22} backgroundColor={theme.colors.panel} textColor={theme.colors.text} focusedTextColor={theme.colors.text} focusedBackgroundColor={theme.colors.panel} cursorColor={theme.colors.accent} placeholder="HCA name" />
+                </Field>
+                <Field label="Worker GID" active={props.controller.configField === "workerFabricGIDIndex"}>
+                  <input value={props.controller.form.workerFabricGIDIndex} onInput={(value) => props.controller.setValue("workerFabricGIDIndex", value)} focused={props.controller.configField === "workerFabricGIDIndex"} width={7} backgroundColor={theme.colors.panel} textColor={theme.colors.text} focusedTextColor={theme.colors.text} focusedBackgroundColor={theme.colors.panel} cursorColor={theme.colors.accent} placeholder="0-255" />
+                </Field>
+              </box>
+              <text fg={theme.colors.textSubtle}>Worker interface, HCA, and RoCE GID index must match the selected host's fabric binding.</text>
+            </>
+          ) : null}
 		  <Field label="Observed old worker container (exact name or >=12-char ID prefix)" active={props.controller.configField === "workerObserved"}>
 			<input value={props.controller.form.workerObservedContainerId} onInput={(value) => props.controller.setValue("workerObservedContainerId", value)} focused={props.controller.configField === "workerObserved"} width={52} backgroundColor={theme.colors.panel} textColor={theme.colors.text} focusedTextColor={theme.colors.text} focusedBackgroundColor={theme.colors.panel} cursorColor={theme.colors.accent} placeholder="deepseek-worker or 12+ ID chars" />
 		  </Field>
@@ -337,7 +371,7 @@ function ConfigStep(props: { controller: DeployController }) {
             <input value={props.controller.form.localModelPath} onInput={(value) => props.controller.setValue("localModelPath", value)} focused={props.controller.configField === "localModelPath"} width={52} backgroundColor={theme.colors.panel} textColor={theme.colors.text} focusedTextColor={theme.colors.text} focusedBackgroundColor={theme.colors.panel} cursorColor={theme.colors.accent} placeholder="/srv/models/glm53-snapshot" />
           </Field>
           <text fg={theme.colors.textSubtle}>An explicit local path is mounted read-only at /models/yokai-deployment on both nodes. It must already exist on each device.</text>
-		  <Field label="Rank-0 SGLang API key (masked; omitted from Yokai store)" active={props.controller.configField === "apiKey"}>
+		  <Field label="Rank-0 API key (masked; omitted from Yokai store)" active={props.controller.configField === "apiKey"}>
 			<input value={props.controller.form.apiKey} onInput={(value) => props.controller.setValue("apiKey", value)} focused={props.controller.configField === "apiKey"} password width={52} backgroundColor={theme.colors.panel} textColor={theme.colors.text} focusedTextColor={theme.colors.text} focusedBackgroundColor={theme.colors.panel} cursorColor={theme.colors.accent} placeholder="Docker command retains original; required again for Start" />
 		  </Field>
         </box>

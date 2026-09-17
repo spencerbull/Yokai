@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,7 @@ import (
 	"github.com/spencerbull/yokai/internal/bkc"
 	"github.com/spencerbull/yokai/internal/config"
 	"github.com/spencerbull/yokai/internal/deployments"
+	"github.com/spencerbull/yokai/internal/launchauth"
 )
 
 func TestDeploymentResponsesRedactInternalHashAndExposeStoppedGroups(t *testing.T) {
@@ -207,6 +209,143 @@ func TestDeviceIsGB10RejectsSpoofedTag(t *testing.T) {
 	}
 }
 
+func TestQwenPreflightRejectsAgentWithWrongOrMissingConfiguredDeviceIdentity(t *testing.T) {
+	for _, reportedDeviceID := range []string{"", "spark-b"} {
+		t.Run(fmt.Sprintf("reported_%q", reportedDeviceID), func(t *testing.T) {
+			requests := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+				requests++
+				if request.URL.Path != "/health" {
+					t.Fatalf("preflight continued past mismatched agent identity: %s", request.URL.Path)
+				}
+				writeJSON(w, http.StatusOK, map[string]any{
+					"status": "ok", "device_id": reportedDeviceID,
+					"capabilities": []string{bkc.Qwen38LaunchAuthorizationCapability},
+				})
+			}))
+			defer server.Close()
+
+			const expectedDeviceID = "spark-a"
+			port := server.Listener.Addr().(*net.TCPAddr).Port
+			cfg := config.DefaultConfig()
+			cfg.Devices = []config.Device{{ID: expectedDeviceID}}
+			tunnels := NewTunnelPool(cfg)
+			tunnels.tunnels[expectedDeviceID] = &tunnel{deviceID: expectedDeviceID, localPort: port, connected: true}
+			ops := &daemonDeploymentOperations{daemon: &Daemon{cfg: cfg, tunnels: tunnels, aggregator: NewAggregator(cfg, tunnels)}}
+			err := ops.Preflight(context.Background(), deployments.PreflightRequest{
+				Binding: deployments.Binding{DeviceID: expectedDeviceID}, BKCID: bkc.Qwen38FlashNextNVFP4DualGB10ID,
+			}, []string{bkc.Qwen38LaunchAuthorizationCapability}, []string{bkc.DeviceGB10})
+			if err == nil || !strings.Contains(err.Error(), "configured device identity") {
+				t.Fatalf("mismatched agent identity did not fail Qwen preflight: %v", err)
+			}
+			if requests != 1 {
+				t.Fatalf("preflight made %d requests after identity mismatch", requests)
+			}
+		})
+	}
+}
+
+func TestQwenPreflightRejectsStaleOrMissingCoordinatorVerifierFingerprint(t *testing.T) {
+	_, coordinatorKey, err := launchauth.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stalePublicKey, _, err := launchauth.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleFingerprint, err := launchauth.PublicKeyFingerprint(stalePublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, reportedFingerprint := range []string{"", staleFingerprint} {
+		t.Run(fmt.Sprintf("reported_%q", reportedFingerprint), func(t *testing.T) {
+			requests := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+				requests++
+				switch request.URL.Path {
+				case "/health":
+					writeJSON(w, http.StatusOK, map[string]any{
+						"status": "ok", "device_id": "spark-a",
+						"capabilities": []string{bkc.Qwen38LaunchAuthorizationCapability},
+					})
+				case "/system/info":
+					writeJSON(w, http.StatusOK, map[string]any{
+						"gpus":                             []map[string]string{{"name": "NVIDIA GB10"}},
+						"coordinator_verifier_fingerprint": reportedFingerprint,
+					})
+				default:
+					t.Fatalf("preflight continued to deployment mutation path: %s", request.URL.Path)
+				}
+			}))
+			defer server.Close()
+
+			port := server.Listener.Addr().(*net.TCPAddr).Port
+			cfg := config.DefaultConfig()
+			cfg.Devices = []config.Device{{ID: "spark-a"}}
+			tunnels := NewTunnelPool(cfg)
+			tunnels.tunnels["spark-a"] = &tunnel{deviceID: "spark-a", localPort: port, connected: true}
+			ops := &daemonDeploymentOperations{daemon: &Daemon{cfg: cfg, tunnels: tunnels, aggregator: NewAggregator(cfg, tunnels), coordinatorSigningKey: coordinatorKey}}
+			err := ops.Preflight(context.Background(), deployments.PreflightRequest{
+				Binding: deployments.Binding{DeviceID: "spark-a"}, BKCID: bkc.Qwen38FlashNextNVFP4DualGB10ID,
+			}, []string{bkc.Qwen38LaunchAuthorizationCapability}, []string{bkc.DeviceGB10})
+			if err == nil || !strings.Contains(err.Error(), "coordinator verifier fingerprint") {
+				t.Fatalf("stale/missing agent verifier fingerprint did not fail Qwen preflight: %v", err)
+			}
+			if requests != 2 {
+				t.Fatalf("preflight made %d requests before rejecting verifier mismatch", requests)
+			}
+		})
+	}
+}
+
+func TestQwenPreflightAcceptsMatchingCoordinatorVerifierFingerprint(t *testing.T) {
+	publicKey, coordinatorKey, err := launchauth.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fingerprint, err := launchauth.PublicKeyFingerprint(publicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		requests++
+		switch request.URL.Path {
+		case "/health":
+			writeJSON(w, http.StatusOK, map[string]any{
+				"status": "ok", "device_id": "spark-a",
+				"capabilities": []string{bkc.Qwen38LaunchAuthorizationCapability},
+			})
+		case "/system/info":
+			writeJSON(w, http.StatusOK, map[string]any{
+				"gpus":                             []map[string]string{{"name": "NVIDIA GB10"}},
+				"coordinator_verifier_fingerprint": fingerprint,
+			})
+		case "/deployments/preflight":
+			writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		default:
+			t.Fatalf("unexpected preflight request: %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	port := server.Listener.Addr().(*net.TCPAddr).Port
+	cfg := config.DefaultConfig()
+	cfg.Devices = []config.Device{{ID: "spark-a"}}
+	tunnels := NewTunnelPool(cfg)
+	tunnels.tunnels["spark-a"] = &tunnel{deviceID: "spark-a", localPort: port, connected: true}
+	ops := &daemonDeploymentOperations{daemon: &Daemon{cfg: cfg, tunnels: tunnels, aggregator: NewAggregator(cfg, tunnels), coordinatorSigningKey: coordinatorKey}}
+	if err := ops.Preflight(context.Background(), deployments.PreflightRequest{
+		Binding: deployments.Binding{DeviceID: "spark-a"}, BKCID: bkc.Qwen38FlashNextNVFP4DualGB10ID,
+	}, []string{bkc.Qwen38LaunchAuthorizationCapability}, []string{bkc.DeviceGB10}); err != nil {
+		t.Fatalf("matching coordinator verifier fingerprint failed Qwen preflight: %v", err)
+	}
+	if requests != 3 {
+		t.Fatalf("matching verifier preflight made %d requests, want 3", requests)
+	}
+}
+
 func TestDeploymentAgentOperationErrorClassification(t *testing.T) {
 	for _, test := range []struct {
 		name           string
@@ -368,6 +507,41 @@ func TestDeploymentLaunchPayloadKeepsSecretInOneStructuredRankZeroArg(t *testing
 	}
 	if strings.Contains(string(data), "hf_token") {
 		t.Fatalf("coordinated local-snapshot launch transported an unnecessary HF token: %s", data)
+	}
+}
+
+func TestDaemonSignsExactQwenLaunchWithoutStoringAPIKey(t *testing.T) {
+	const secret = "sentinel-qwen-api-key"
+	publicKey, privateKey, err := launchauth.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := deploymentLaunchPayload{
+		Image: bkc.Qwen38FlashNextNVFP4Image, Name: "yokai-deployment-dep-sign-g3-head", Model: bkc.Qwen38FlashNextContainerModel,
+		Ports: map[string]string{"8888": "8888"}, Args: []string{"serve", "--api-key=" + secret}, SkipPull: true,
+		Labels: map[string]string{
+			"io.yokai.deployment.id": "dep-sign", "io.yokai.deployment.generation": "3", "io.yokai.deployment.role": "head",
+			"io.yokai.bkc.id": bkc.Qwen38FlashNextNVFP4DualGB10ID, "io.yokai.model.revision": bkc.Qwen38FlashNextNVFP4Revision,
+			"io.yokai.source.revision": bkc.Qwen38FlashNextSourceRevision, "io.yokai.image.digest": bkc.Qwen38FlashNextNVFP4ImageDigest,
+		},
+	}
+	ops := &daemonDeploymentOperations{daemon: &Daemon{coordinatorSigningKey: privateKey}}
+	token, err := ops.signQwenLaunchAuthorization("spark-a", payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(token, secret) {
+		t.Fatal("signed launch authorization contains the API key")
+	}
+	claims, err := launchauth.Verify(publicKey, token, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claims.TargetDeviceID != "spark-a" || claims.DeploymentID != "dep-sign" || claims.Generation != 3 || claims.CandidateName != payload.Name || claims.Role != "head" || claims.BKCID != bkc.Qwen38FlashNextNVFP4DualGB10ID {
+		t.Fatalf("authorization does not carry exact candidate identity: %#v", claims)
+	}
+	if claims.Model != payload.Model || claims.ModelRevision != bkc.Qwen38FlashNextNVFP4Revision || claims.SourceRevision != bkc.Qwen38FlashNextSourceRevision || claims.Image != payload.Image || claims.ImageDigest != bkc.Qwen38FlashNextNVFP4ImageDigest {
+		t.Fatalf("authorization does not carry exact candidate provenance: %#v", claims)
 	}
 }
 
