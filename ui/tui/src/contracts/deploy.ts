@@ -21,9 +21,15 @@ export type DeployForm = {
   workload: WorkloadType
   headDeviceId: string
   headFabricAddress: string
+  headFabricInterface: string
+  headFabricHCA: string
+  headFabricGIDIndex: string
   headServiceAddress: string
   workerDeviceId: string
   workerFabricAddress: string
+  workerFabricInterface: string
+  workerFabricHCA: string
+  workerFabricGIDIndex: string
   idempotencyKey: string
   localModelPath: string
   apiKey: string
@@ -109,11 +115,12 @@ export type DeployBKC = {
 export type MultiDeviceMetadata = {
   world_size: number
   tp_size: number
-  backend: "torch_distributed"
+  backend: "torch_distributed" | "vllm_multi_node"
   gpus_per_node: number
   rendezvous_port: number
   service_port: number
   model_revision: string
+  requires_fabric_config?: boolean
   runtime_patches?: RuntimePatchMetadata[]
   roles: Array<{ name: "head" | "worker"; rank: number; api: boolean }>
   required_capabilities: string[]
@@ -135,6 +142,9 @@ export type DeploymentBinding = {
   role: "head" | "worker"
   device_id: string
   fabric_address: string
+  fabric_interface?: string
+  fabric_hca?: string
+  fabric_gid_index?: number
   service_address?: string
   service_port?: number
   observed_container_id?: string

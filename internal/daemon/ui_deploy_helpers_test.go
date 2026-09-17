@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 )
 
@@ -83,5 +84,30 @@ func TestHandleDeployBKCFiltersSiblingsWithDifferentHardwareAffinity(t *testing.
 	}
 	if len(response.Configs) != 1 {
 		t.Fatalf("expected incompatible GB10 and Jetson Thor siblings to be filtered, got %#v", response.Configs)
+	}
+}
+
+func TestHandleDeployBKCCarriesFabricRequirement(t *testing.T) {
+	t.Parallel()
+
+	d := &Daemon{}
+	model := url.QueryEscape("nvidia/Qwen3.8-Flash-Next-NVFP4")
+	req := httptest.NewRequest(http.MethodGet, "/deploy/bkc?workload=vllm&model="+model, nil)
+	recorder := httptest.NewRecorder()
+
+	d.handleDeployBKC(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), `"requires_fabric_config"`) {
+		t.Fatalf("expected snake_case fabric requirement in daemon JSON: %s", recorder.Body.String())
+	}
+	var response deployBKCResponse
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.Config == nil || response.Config.MultiDevice == nil || !response.Config.MultiDevice.RequiresFabricConfig {
+		t.Fatalf("expected fabric-required metadata, got %#v", response.Config)
 	}
 }
