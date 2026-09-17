@@ -16,6 +16,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -801,11 +802,12 @@ func handleContainerLogs(w http.ResponseWriter, r *http.Request) {
 		line string
 	}
 	logCh := make(chan logEvent, 64)
-	scanDone := make(chan struct{}, 2)
+	var scanners sync.WaitGroup
+	scanners.Add(2)
 
 	startScan := func(reader io.Reader, prefix string) {
 		go func() {
-			defer func() { scanDone <- struct{}{} }()
+			defer scanners.Done()
 			scanner := bufio.NewScanner(reader)
 			scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 			for scanner.Scan() {
@@ -831,10 +833,9 @@ func handleContainerLogs(w http.ResponseWriter, r *http.Request) {
 	startScan(stdout, "")
 	startScan(stderr, "[stderr] ")
 
-	waitDone := make(chan struct{})
 	go func() {
-		_ = cmd.Wait()
-		close(waitDone)
+		scanners.Wait()
+		close(logCh)
 	}()
 
 	writeEvent := func(event logEvent) {
@@ -845,11 +846,9 @@ func handleContainerLogs(w http.ResponseWriter, r *http.Request) {
 		flusher.Flush()
 	}
 
-	completedScans := 0
-	waitCompleted := false
 	canceled := false
 	contextDone := r.Context().Done()
-	for completedScans < 2 || !waitCompleted {
+	for {
 		select {
 		case <-contextDone:
 			canceled = true
@@ -859,22 +858,19 @@ func handleContainerLogs(w http.ResponseWriter, r *http.Request) {
 					log.Printf("failed to kill docker logs process: %v", err)
 				}
 			}
-		case event := <-logCh:
+			for _, pipe := range []io.Closer{stdout, stderr} {
+				if err := pipe.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
+					log.Printf("failed to close docker logs pipe: %v", err)
+				}
+			}
+		case event, ok := <-logCh:
+			if !ok {
+				_ = cmd.Wait()
+				return
+			}
 			if !canceled {
 				writeEvent(event)
 			}
-		case <-scanDone:
-			completedScans++
-		case <-waitDone:
-			waitCompleted = true
-			waitDone = nil
-		}
-	}
-
-	close(logCh)
-	for event := range logCh {
-		if !canceled {
-			writeEvent(event)
 		}
 	}
 }
