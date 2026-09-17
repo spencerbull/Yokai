@@ -352,7 +352,7 @@ func readBoundedFile(path string, limit int64) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	data, err := io.ReadAll(io.LimitReader(file, limit+1))
 	if err != nil {
 		return nil, err
@@ -598,7 +598,7 @@ func verifyQwen38SnapshotObjectDigest(path string, object qwen38SnapshotObject) 
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	return verifyQwen38SnapshotObjectFile(file, object)
 }
 
