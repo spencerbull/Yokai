@@ -967,7 +967,10 @@ if [ "$1" = inspect ]; then
 fi
 if [ "$1" = logs ] && [ "$2" = -f ] && [ "$3" = --tail ] && [ "$4" = 100 ] && [ "$5" = legacy-service ]; then
   printf '%s\n' 'ordinary log line'
-	  sleep 0.1
+	printf '%s\n' 'ordinary error line' >&2
+	sleep 0.1
+	printf '%s\n' 'final log line'
+	printf '%s\n' 'final error line' >&2
   exit 0
 fi
 exit 9
@@ -980,7 +983,13 @@ exit 9
 	request.SetPathValue("id", "legacy-service")
 	recorder := httptest.NewRecorder()
 	handleContainerLogs(recorder, request)
-	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "ordinary log line") {
+	body := recorder.Body.String()
+	for _, line := range []string{"ordinary log line", "[stderr] ordinary error line", "final log line", "[stderr] final error line"} {
+		if !strings.Contains(body, line) {
+			t.Fatalf("non-grouped generic logs did not drain %q: status=%d body=%s", line, recorder.Code, body)
+		}
+	}
+	if recorder.Code != http.StatusOK {
 		t.Fatalf("non-grouped generic logs failed: status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 }

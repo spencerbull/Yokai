@@ -822,50 +822,50 @@ func handleContainerLogs(w http.ResponseWriter, r *http.Request) {
 	startScan(stdout, "")
 	startScan(stderr, "[stderr] ")
 
-	// Wait for command to finish or client disconnect
-	done := make(chan error, 1)
+	waitDone := make(chan struct{})
 	go func() {
-		done <- cmd.Wait()
+		_ = cmd.Wait()
+		close(waitDone)
 	}()
-	completedScans := 0
 
-	select {
-	case <-r.Context().Done():
-		if cmd.Process != nil {
-			if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
-				log.Printf("failed to kill docker logs process: %v", err)
-			}
+	writeEvent := func(event logEvent) {
+		if event.line == "" {
+			return
 		}
-		return
-	default:
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", event.line)
+		flusher.Flush()
 	}
 
-	for {
+	completedScans := 0
+	waitCompleted := false
+	canceled := false
+	contextDone := r.Context().Done()
+	for completedScans < 2 || !waitCompleted {
 		select {
-		case <-r.Context().Done():
+		case <-contextDone:
+			canceled = true
+			contextDone = nil
 			if cmd.Process != nil {
 				if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
 					log.Printf("failed to kill docker logs process: %v", err)
 				}
 			}
-			return
 		case event := <-logCh:
-			if event.line != "" {
-				_, _ = fmt.Fprintf(w, "data: %s\n\n", event.line)
-				flusher.Flush()
+			if !canceled {
+				writeEvent(event)
 			}
 		case <-scanDone:
 			completedScans++
-			if completedScans == 2 {
-				if cmd.ProcessState == nil || !cmd.ProcessState.Exited() {
-					<-done
-				}
-				return
-			}
-		case <-done:
-			if completedScans >= 2 {
-				return
-			}
+		case <-waitDone:
+			waitCompleted = true
+			waitDone = nil
+		}
+	}
+
+	close(logCh)
+	for event := range logCh {
+		if !canceled {
+			writeEvent(event)
 		}
 	}
 }
