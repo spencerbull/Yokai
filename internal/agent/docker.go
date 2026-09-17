@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"sort"
@@ -767,17 +768,21 @@ func restartContainer(idOrName string) error {
 }
 
 type restartContainerDeps struct {
-	inspect        func(context.Context, string) (string, string, map[string]string, error)
-	qwenAdmission  func(context.Context) (func(), error)
-	computeTenants func(context.Context) ([]gpuComputeTenant, error)
-	restart        func(context.Context, string) error
+	inspect          func(context.Context, string) (string, string, map[string]string, error)
+	qwenSnapshotPath func(context.Context, string) (string, error)
+	validateSnapshot func(string, string) error
+	qwenAdmission    func(context.Context) (func(), error)
+	computeTenants   func(context.Context) ([]gpuComputeTenant, error)
+	restart          func(context.Context, string) error
 }
 
 var liveRestartContainerDeps = restartContainerDeps{
-	inspect:        inspectContainerIdentityWithContext,
-	qwenAdmission:  func(ctx context.Context) (func(), error) { return qwenGPUAdmission.acquire(ctx) },
-	computeTenants: inspectGPUComputeTenants,
-	restart:        runDockerRestartWithContext,
+	inspect:          inspectContainerIdentityWithContext,
+	qwenSnapshotPath: inspectQwen38SnapshotPathWithContext,
+	validateSnapshot: validatePinnedQwenSnapshot,
+	qwenAdmission:    func(ctx context.Context) (func(), error) { return qwenGPUAdmission.acquire(ctx) },
+	computeTenants:   inspectGPUComputeTenants,
+	restart:          runDockerRestartWithContext,
 }
 
 func restartContainerWithContext(ctx context.Context, idOrName string) error {
@@ -795,11 +800,21 @@ func restartContainerWithDeps(ctx context.Context, idOrName string, deps restart
 		if role != bkc.MultiDeviceRoleHead && role != bkc.MultiDeviceRoleWorker {
 			return fmt.Errorf("refuse Qwen3.8 restart with invalid deployment role")
 		}
+		if labels[LabelModelRevision] != bkc.Qwen38FlashNextNVFP4Revision {
+			return fmt.Errorf("refuse Qwen3.8 restart without pinned model revision")
+		}
 		releaseAdmission, err := deps.qwenAdmission(ctx)
 		if err != nil {
 			return fmt.Errorf("wait for Qwen3.8 GPU admission before restart: %w", err)
 		}
 		defer releaseAdmission()
+		snapshotPath, err := deps.qwenSnapshotPath(ctx, id)
+		if err != nil {
+			return fmt.Errorf("inspect pinned Qwen3.8 snapshot before restart: %w", err)
+		}
+		if err := deps.validateSnapshot(snapshotPath, labels[LabelModelRevision]); err != nil {
+			return fmt.Errorf("verify pinned Qwen3.8 snapshot before restart: %w", err)
+		}
 		tenants, err := deps.computeTenants(ctx)
 		if err != nil {
 			return fmt.Errorf("verify idle GPU immediately before Qwen3.8 restart: %w", err)
@@ -810,6 +825,40 @@ func restartContainerWithDeps(ctx context.Context, idOrName string, deps restart
 		restartTarget = id
 	}
 	return deps.restart(ctx, restartTarget)
+}
+
+func inspectQwen38SnapshotPathWithContext(ctx context.Context, id string) (string, error) {
+	output, err := exec.CommandContext(ctx, "docker", "inspect", "--format={{json .Mounts}}", id).CombinedOutput()
+	if err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return "", fmt.Errorf("docker inspect canceled: %w", contextErr)
+		}
+		return "", fmt.Errorf("docker inspect mounts failed: %w", err)
+	}
+	var mounts []struct {
+		Type        string `json:"Type"`
+		Source      string `json:"Source"`
+		Destination string `json:"Destination"`
+		RW          bool   `json:"RW"`
+	}
+	if err := json.Unmarshal(output, &mounts); err != nil {
+		return "", fmt.Errorf("decode docker container mounts: %w", err)
+	}
+	var repositoryRoot string
+	for _, mount := range mounts {
+		if mount.Destination != bkc.Qwen38FlashNextContainerRoot {
+			continue
+		}
+		clean := filepath.Clean(mount.Source)
+		if repositoryRoot != "" || mount.Type != "bind" || mount.RW || !filepath.IsAbs(clean) || clean == string(filepath.Separator) || filepath.Base(clean) != bkc.Qwen38FlashNextHFCacheDirectory {
+			return "", fmt.Errorf("container does not have one exact read-only pinned Hugging Face repository mount")
+		}
+		repositoryRoot = clean
+	}
+	if repositoryRoot == "" {
+		return "", fmt.Errorf("container is missing the pinned Hugging Face repository mount")
+	}
+	return filepath.Join(repositoryRoot, "snapshots", bkc.Qwen38FlashNextNVFP4Revision), nil
 }
 
 func runDockerRestartWithContext(ctx context.Context, idOrName string) error {

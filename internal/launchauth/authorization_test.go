@@ -1,6 +1,7 @@
 package launchauth
 
 import (
+	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -173,6 +174,21 @@ func TestSigningKeyFileIsStableAndPrivate(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0600 {
 		t.Fatalf("signing key mode is %o, want 600", info.Mode().Perm())
+	}
+}
+
+func TestPublicKeyFingerprintIsStableAndRejectsInvalidKeys(t *testing.T) {
+	publicKey := ed25519.PublicKey(make([]byte, ed25519.PublicKeySize))
+	fingerprint, err := PublicKeyFingerprint(publicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = "sha256:66687aadf862bd776c8fc18b8e9f8e20089714856ee233b3902a591d0d5f2925"
+	if fingerprint != want {
+		t.Fatalf("public-key fingerprint=%q want %q", fingerprint, want)
+	}
+	if _, err := PublicKeyFingerprint(publicKey[:ed25519.PublicKeySize-1]); err == nil {
+		t.Fatal("invalid Ed25519 public key produced a fingerprint")
 	}
 }
 

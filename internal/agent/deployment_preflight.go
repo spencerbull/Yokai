@@ -223,42 +223,38 @@ func validateDeploymentPreflight(ctx context.Context, request deploymentPrefligh
 			return preflightConflict(err.Error())
 		}
 	}
-	serviceAddress := request.FabricAddress
 	if request.Head {
-		serviceAddress = request.ServiceAddress
-	}
-	available, err := deps.portAvailable(serviceAddress, request.ServicePort)
-	if err != nil {
-		return &preflightProblem{status: http.StatusServiceUnavailable, code: "port_check_unavailable", err: err}
-	}
-	if !available {
-		if request.ObservedContainer == "" {
-			return preflightConflict(fmt.Sprintf("service port %d is occupied", request.ServicePort))
-		}
-		owned, err := deps.containerOwns(request.ObservedContainer, serviceAddress, request.ServicePort)
-		if err != nil {
-			return &preflightProblem{status: http.StatusServiceUnavailable, code: "port_owner_unavailable", err: err}
-		}
-		if !owned {
-			return preflightConflict(fmt.Sprintf("service port %d is not owned by the explicitly observed container", request.ServicePort))
-		}
-	}
-	if request.Head {
-		available, err := deps.portAvailable(request.FabricAddress, request.RendezvousPort)
+		available, err := deps.portAvailable(request.ServiceAddress, request.ServicePort)
 		if err != nil {
 			return &preflightProblem{status: http.StatusServiceUnavailable, code: "port_check_unavailable", err: err}
 		}
 		if !available {
 			if request.ObservedContainer == "" {
-				return preflightConflict(fmt.Sprintf("rendezvous port %d is occupied", request.RendezvousPort))
+				return preflightConflict(fmt.Sprintf("service port %d is occupied", request.ServicePort))
 			}
-			owned, ownerErr := deps.containerOwns(request.ObservedContainer, request.FabricAddress, request.RendezvousPort)
-			if ownerErr != nil {
-				return &preflightProblem{status: http.StatusServiceUnavailable, code: "port_owner_unavailable", err: ownerErr}
+			owned, err := deps.containerOwns(request.ObservedContainer, request.ServiceAddress, request.ServicePort)
+			if err != nil {
+				return &preflightProblem{status: http.StatusServiceUnavailable, code: "port_owner_unavailable", err: err}
 			}
 			if !owned {
-				return preflightConflict(fmt.Sprintf("rendezvous port %d is not owned by the explicitly observed container", request.RendezvousPort))
+				return preflightConflict(fmt.Sprintf("service port %d is not owned by the explicitly observed container", request.ServicePort))
 			}
+		}
+	}
+	available, err := deps.portAvailable(request.FabricAddress, request.RendezvousPort)
+	if err != nil {
+		return &preflightProblem{status: http.StatusServiceUnavailable, code: "port_check_unavailable", err: err}
+	}
+	if !available {
+		if request.ObservedContainer == "" {
+			return preflightConflict(fmt.Sprintf("rendezvous port %d is occupied", request.RendezvousPort))
+		}
+		owned, ownerErr := deps.containerOwns(request.ObservedContainer, request.FabricAddress, request.RendezvousPort)
+		if ownerErr != nil {
+			return &preflightProblem{status: http.StatusServiceUnavailable, code: "port_owner_unavailable", err: ownerErr}
+		}
+		if !owned {
+			return preflightConflict(fmt.Sprintf("rendezvous port %d is not owned by the explicitly observed container", request.RendezvousPort))
 		}
 	}
 	return nil

@@ -211,7 +211,8 @@ type agentHealth struct {
 }
 
 type agentSystemInfo struct {
-	GPUs []struct {
+	CoordinatorVerifierFingerprint string `json:"coordinator_verifier_fingerprint"`
+	GPUs                           []struct {
 		Name string `json:"name"`
 	} `json:"gpus"`
 }
@@ -283,6 +284,18 @@ func (ops *daemonDeploymentOperations) Preflight(ctx context.Context, request de
 	var info agentSystemInfo
 	if err := ops.getJSON(ctx, binding.DeviceID, "/system/info", &info); err != nil {
 		return classifyAgentPreflightDependency("agent system info", err)
+	}
+	if request.BKCID == bkc.Qwen38FlashNextNVFP4DualGB10ID {
+		if len(d.coordinatorSigningKey) != ed25519.PrivateKeySize {
+			return deployments.WrapError(deployments.ErrorUnavailable, "coordinator verifier fingerprint", fmt.Errorf("coordinator signing key is not configured"))
+		}
+		expectedFingerprint, err := launchauth.PublicKeyFingerprint(d.coordinatorSigningKey.Public().(ed25519.PublicKey))
+		if err != nil {
+			return deployments.WrapError(deployments.ErrorUnavailable, "coordinator verifier fingerprint", err)
+		}
+		if info.CoordinatorVerifierFingerprint != expectedFingerprint {
+			return deployments.WrapError(deployments.ErrorConflict, "coordinator verifier fingerprint", fmt.Errorf("agent verifier does not match the coordinator signing key; bootstrap the agent again"))
+		}
 	}
 	if len(info.GPUs) != 1 {
 		return deployments.WrapError(deployments.ErrorConflict, "agent GPU capability", fmt.Errorf("device %s must expose exactly one GPU, got %d", binding.DeviceID, len(info.GPUs)))

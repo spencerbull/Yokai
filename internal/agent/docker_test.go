@@ -480,9 +480,11 @@ func TestQwenRestartAdmissionSerializesHeadAndWorker(t *testing.T) {
 			restartCalled := make(chan error, 1)
 			deps := restartContainerDeps{
 				inspect: func(context.Context, string) (string, string, map[string]string, error) {
-					return strings.Repeat("a", 64), "qwen-rank", map[string]string{LabelBKCID: bkc.Qwen38FlashNextNVFP4DualGB10ID, LabelRole: role}, nil
+					return strings.Repeat("a", 64), "qwen-rank", map[string]string{LabelBKCID: bkc.Qwen38FlashNextNVFP4DualGB10ID, LabelRole: role, LabelModelRevision: bkc.Qwen38FlashNextNVFP4Revision}, nil
 				},
-				qwenAdmission: admission.acquire,
+				qwenSnapshotPath: func(context.Context, string) (string, error) { return "/cache/snapshot", nil },
+				validateSnapshot: func(string, string) error { return nil },
+				qwenAdmission:    admission.acquire,
 				computeTenants: func(context.Context) ([]gpuComputeTenant, error) {
 					tenantCheck <- struct{}{}
 					return nil, nil
@@ -543,11 +545,13 @@ func TestQwenRestartFailsClosedOnTenantRejectionAndInspectionErrors(t *testing.T
 			restarted := false
 			deps := restartContainerDeps{
 				inspect: func(context.Context, string) (string, string, map[string]string, error) {
-					return strings.Repeat("a", 64), "qwen-head", map[string]string{LabelBKCID: bkc.Qwen38FlashNextNVFP4DualGB10ID, LabelRole: bkc.MultiDeviceRoleHead}, nil
+					return strings.Repeat("a", 64), "qwen-head", map[string]string{LabelBKCID: bkc.Qwen38FlashNextNVFP4DualGB10ID, LabelRole: bkc.MultiDeviceRoleHead, LabelModelRevision: bkc.Qwen38FlashNextNVFP4Revision}, nil
 				},
-				qwenAdmission:  func(context.Context) (func(), error) { return func() {}, nil },
-				computeTenants: test.tenants,
-				restart:        func(context.Context, string) error { restarted = true; return nil },
+				qwenSnapshotPath: func(context.Context, string) (string, error) { return "/cache/snapshot", nil },
+				validateSnapshot: func(string, string) error { return nil },
+				qwenAdmission:    func(context.Context) (func(), error) { return func() {}, nil },
+				computeTenants:   test.tenants,
+				restart:          func(context.Context, string) error { restarted = true; return nil },
 			}
 			err := restartContainerWithDeps(context.Background(), "qwen-head", deps)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
@@ -560,12 +564,58 @@ func TestQwenRestartFailsClosedOnTenantRejectionAndInspectionErrors(t *testing.T
 	}
 }
 
+func TestQwenRestartRejectsSnapshotTamperedAfterStopBeforeDockerMutation(t *testing.T) {
+	snapshot := t.TempDir()
+	model := filepath.Join(snapshot, "model.safetensors")
+	if err := os.WriteFile(model, []byte("trusted-model"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(model, []byte("tampered-model"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	restarted := false
+	deps := restartContainerDeps{
+		inspect: func(context.Context, string) (string, string, map[string]string, error) {
+			return strings.Repeat("a", 64), "qwen-worker", map[string]string{
+				LabelBKCID:         bkc.Qwen38FlashNextNVFP4DualGB10ID,
+				LabelRole:          bkc.MultiDeviceRoleWorker,
+				LabelModelRevision: bkc.Qwen38FlashNextNVFP4Revision,
+			}, nil
+		},
+		qwenSnapshotPath: func(context.Context, string) (string, error) { return snapshot, nil },
+		validateSnapshot: func(path, revision string) error {
+			if path != snapshot || revision != bkc.Qwen38FlashNextNVFP4Revision {
+				t.Fatalf("unexpected snapshot verification input path=%q revision=%q", path, revision)
+			}
+			data, err := os.ReadFile(model)
+			if err != nil {
+				return err
+			}
+			if string(data) != "trusted-model" {
+				return errors.New("pinned snapshot object model.safetensors hash mismatch")
+			}
+			return nil
+		},
+		qwenAdmission:  func(context.Context) (func(), error) { return func() {}, nil },
+		computeTenants: func(context.Context) ([]gpuComputeTenant, error) { return nil, nil },
+		restart:        func(context.Context, string) error { restarted = true; return nil },
+	}
+	err := restartContainerWithDeps(context.Background(), "qwen-worker", deps)
+	if err == nil || !strings.Contains(err.Error(), "pinned Qwen3.8 snapshot") {
+		t.Fatalf("tampered stopped Qwen snapshot was not rejected: %v", err)
+	}
+	if restarted {
+		t.Fatal("docker restart ran after stopped Qwen snapshot was tampered")
+	}
+}
+
 func TestQwenRestartFailsClosedWhenAdmissionIsUnavailable(t *testing.T) {
 	tenantCheckCalled := false
 	restarted := false
 	deps := restartContainerDeps{
 		inspect: func(context.Context, string) (string, string, map[string]string, error) {
-			return strings.Repeat("a", 64), "qwen-worker", map[string]string{LabelBKCID: bkc.Qwen38FlashNextNVFP4DualGB10ID, LabelRole: bkc.MultiDeviceRoleWorker}, nil
+			return strings.Repeat("a", 64), "qwen-worker", map[string]string{LabelBKCID: bkc.Qwen38FlashNextNVFP4DualGB10ID, LabelRole: bkc.MultiDeviceRoleWorker, LabelModelRevision: bkc.Qwen38FlashNextNVFP4Revision}, nil
 		},
 		qwenAdmission:  func(context.Context) (func(), error) { return nil, errors.New("admission unavailable") },
 		computeTenants: func(context.Context) ([]gpuComputeTenant, error) { tenantCheckCalled = true; return nil, nil },

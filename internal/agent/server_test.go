@@ -150,6 +150,52 @@ func TestHealthAdvertisesQwenAuthorizationOnlyWhenVerifierIsConfigured(t *testin
 	}
 }
 
+func TestAuthenticatedSystemInfoExposesOnlyCoordinatorVerifierFingerprint(t *testing.T) {
+	publicKey, privateKey, err := launchauth.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalPublicKey := coordinatorVerificationKey
+	defer func() { coordinatorVerificationKey = originalPublicKey }()
+	coordinatorVerificationKey = publicKey
+
+	mux := setupTestServer("test-version", "agent-secret")
+	unauthorized := httptest.NewRequest(http.MethodGet, "/system/info", nil)
+	unauthorizedRecorder := httptest.NewRecorder()
+	mux.ServeHTTP(unauthorizedRecorder, unauthorized)
+	if unauthorizedRecorder.Code != http.StatusUnauthorized {
+		t.Fatalf("system info exposed verifier metadata without authentication: status=%d", unauthorizedRecorder.Code)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/system/info", nil)
+	request.Header.Set("Authorization", "Bearer agent-secret")
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("authenticated system info failed: status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var response map[string]any
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	want, err := launchauth.PublicKeyFingerprint(publicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := response["coordinator_verifier_fingerprint"]; got != want {
+		t.Fatalf("system info verifier fingerprint=%v want %q", got, want)
+	}
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"agent-secret", launchauth.EncodePublicKey(publicKey), launchauth.EncodePrivateKey(privateKey)} {
+		if strings.Contains(string(encoded), secret) {
+			t.Fatalf("system info leaked verifier/token material: %s", encoded)
+		}
+	}
+}
+
 func containsCapability(capabilities []string, expected string) bool {
 	for _, capability := range capabilities {
 		if capability == expected {

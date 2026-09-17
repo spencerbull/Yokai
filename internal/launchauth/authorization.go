@@ -199,6 +199,15 @@ func DecodePublicKey(encoded string) (ed25519.PublicKey, error) {
 	return ed25519.PublicKey(decoded), nil
 }
 
+// PublicKeyFingerprint returns a stable non-secret identifier for an Ed25519 verifier key.
+func PublicKeyFingerprint(publicKey ed25519.PublicKey) (string, error) {
+	if len(publicKey) != ed25519.PublicKeySize {
+		return "", fmt.Errorf("coordinator public key is invalid")
+	}
+	digest := sha256.Sum256(publicKey)
+	return "sha256:" + hex.EncodeToString(digest[:]), nil
+}
+
 func EncodePrivateKey(privateKey ed25519.PrivateKey) string {
 	return base64.RawStdEncoding.EncodeToString(privateKey)
 }

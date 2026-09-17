@@ -75,17 +75,19 @@ func TestDeploymentPreflightValidatesLocalPathAddressesAndPorts(t *testing.T) {
 
 func TestDeploymentPreflightRequiresObservedContainerToOwnOccupiedServicePort(t *testing.T) {
 	request := deploymentPreflightRequest{
-		FabricAddress: "192.168.201.2", ServicePort: 8000, RendezvousPort: 25000,
-		CandidateName: "yokai-deployment-test-worker", ObservedContainer: "1234567890ab",
+		FabricAddress: "192.168.201.2", ServiceAddress: "100.96.0.20", ServicePort: 8000, RendezvousPort: 25000,
+		Head: true, CandidateName: "yokai-deployment-test-head", ObservedContainer: "1234567890ab",
 	}
 	owned := false
 	deps := deploymentPreflightDeps{
-		interfaceAddrs: func() ([]net.Addr, error) { return []net.Addr{testAddr("192.168.201.2/24")}, nil },
-		stat:           os.Stat, open: os.Open,
+		interfaceAddrs: func() ([]net.Addr, error) {
+			return []net.Addr{testAddr("192.168.201.2/24"), testAddr("100.96.0.20/32")}, nil
+		},
+		stat: os.Stat, open: os.Open,
 		listContainers: func(string) ([]Container, error) { return nil, nil },
-		portAvailable:  func(string, int) (bool, error) { return false, nil },
+		portAvailable:  func(_ string, port int) (bool, error) { return port == 25000, nil },
 		containerOwns: func(id, address string, port int) (bool, error) {
-			return owned && id == "1234567890ab" && address == "192.168.201.2" && port == 8000, nil
+			return owned && id == "1234567890ab" && address == "100.96.0.20" && port == 8000, nil
 		},
 	}
 	if err := validateDeploymentPreflight(context.Background(), request, deps); err == nil {
@@ -94,6 +96,62 @@ func TestDeploymentPreflightRequiresObservedContainerToOwnOccupiedServicePort(t 
 	owned = true
 	if err := validateDeploymentPreflight(context.Background(), request, deps); err != nil {
 		t.Fatalf("explicitly owned service port was rejected: %v", err)
+	}
+}
+
+func TestWorkerPreflightValidatesOnlyRendezvousPort(t *testing.T) {
+	request := deploymentPreflightRequest{
+		FabricAddress: "192.168.201.2", ServicePort: 8888, RendezvousPort: 50000,
+		CandidateName: "yokai-deployment-test-worker",
+	}
+	available := true
+	owned := false
+	var portChecks []string
+	var ownershipChecks []string
+	deps := deploymentPreflightDeps{
+		interfaceAddrs: func() ([]net.Addr, error) { return []net.Addr{testAddr("192.168.201.2/24")}, nil },
+		stat:           os.Stat, open: os.Open,
+		listContainers: func(string) ([]Container, error) { return nil, nil },
+		portAvailable: func(address string, port int) (bool, error) {
+			portChecks = append(portChecks, fmt.Sprintf("%s:%d", address, port))
+			return available, nil
+		},
+		containerOwns: func(id, address string, port int) (bool, error) {
+			ownershipChecks = append(ownershipChecks, fmt.Sprintf("%s@%s:%d", id, address, port))
+			return owned, nil
+		},
+	}
+
+	if err := validateDeploymentPreflight(context.Background(), request, deps); err != nil {
+		t.Fatalf("worker with available rendezvous port failed preflight: %v", err)
+	}
+	if len(portChecks) != 1 || portChecks[0] != "192.168.201.2:50000" {
+		t.Fatalf("worker port checks = %v, want only its fabric rendezvous address and port", portChecks)
+	}
+
+	available = false
+	portChecks = nil
+	if err := validateDeploymentPreflight(context.Background(), request, deps); err == nil || !strings.Contains(err.Error(), "rendezvous port 50000 is occupied") {
+		t.Fatalf("worker accepted occupied rendezvous port without observed ownership: %v", err)
+	}
+	if len(portChecks) != 1 || portChecks[0] != "192.168.201.2:50000" {
+		t.Fatalf("worker occupied-port checks = %v, want only its fabric rendezvous address and port", portChecks)
+	}
+	if len(ownershipChecks) != 0 {
+		t.Fatalf("worker checked ownership without an explicitly observed container: %v", ownershipChecks)
+	}
+
+	request.ObservedContainer = "1234567890ab"
+	if err := validateDeploymentPreflight(context.Background(), request, deps); err == nil || !strings.Contains(err.Error(), "rendezvous port 50000 is not owned") {
+		t.Fatalf("worker accepted occupied rendezvous port owned by another process: %v", err)
+	}
+	if len(ownershipChecks) != 1 || ownershipChecks[0] != "1234567890ab@192.168.201.2:50000" {
+		t.Fatalf("worker ownership checks = %v, want observed container on its fabric rendezvous address and port", ownershipChecks)
+	}
+
+	owned = true
+	if err := validateDeploymentPreflight(context.Background(), request, deps); err != nil {
+		t.Fatalf("worker rejected rendezvous port owned by the explicitly observed container: %v", err)
 	}
 }
 

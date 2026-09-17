@@ -194,6 +194,14 @@ func coordinatedLaunchAuthorizationAvailable() bool {
 	return launchAuthorizationReplayStore.Prepare() == nil
 }
 
+func coordinatorVerifierFingerprint() string {
+	fingerprint, err := launchauth.PublicKeyFingerprint(coordinatorVerificationKey)
+	if err != nil {
+		return ""
+	}
+	return fingerprint
+}
+
 func handleSystemInfo(version string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		hostname, _ := os.Hostname()
@@ -220,16 +228,17 @@ func handleSystemInfo(version string) http.HandlerFunc {
 		diskInfo := getTotalDisk()
 
 		resp := map[string]interface{}{
-			"hostname": hostname,
-			"os":       osInfo,
-			"kernel":   kernelVersion,
-			"arch":     runtime.GOARCH,
-			"cpu":      cpuInfo,
-			"gpus":     gpuInfo,
-			"docker":   dockerInfo,
-			"ram":      ramInfo,
-			"disk":     diskInfo,
-			"version":  version,
+			"hostname":                         hostname,
+			"os":                               osInfo,
+			"kernel":                           kernelVersion,
+			"arch":                             runtime.GOARCH,
+			"cpu":                              cpuInfo,
+			"gpus":                             gpuInfo,
+			"docker":                           dockerInfo,
+			"ram":                              ramInfo,
+			"disk":                             diskInfo,
+			"version":                          version,
+			"coordinator_verifier_fingerprint": coordinatorVerifierFingerprint(),
 		}
 		writeJSON(w, http.StatusOK, resp)
 	}
