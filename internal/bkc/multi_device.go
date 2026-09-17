@@ -12,6 +12,7 @@ const (
 	GLM53FlashNVFP4Image              = "lmsysorg/sglang@sha256:73f9294b78e38d8cc297bfed16daec8ac192b126a2d1fb9055e259a632c68f00"
 	GLM53FlashNVFP4ImageDigest        = "73f9294b78e38d8cc297bfed16daec8ac192b126a2d1fb9055e259a632c68f00"
 	MultiDeviceBackendTorch           = "torch_distributed"
+	MultiDeviceBackendVLLM            = "vllm_multi_node"
 	MultiDeviceRoleHead               = "head"
 	MultiDeviceRoleWorker             = "worker"
 	MultiDeviceRoleRankPlaceholder    = "{ROLE_RANK}"
@@ -33,6 +34,16 @@ const (
 	GLM53FlashDSAGB10TilePatchNewSHA  = "3150ec691843c84bb5db9ed5bf763c4da03842fde4666489e107bf7a9fcddd7b"
 	GLM53FlashTileSharedMemoryBytes   = 100352
 )
+
+// RuntimePatchSetLabel derives the immutable composite label carried into the
+// agent. The agent accepts only patch sets compiled into the matching BKC.
+func RuntimePatchSetLabel(patches []MultiDeviceRuntimePatch) string {
+	labels := make([]string, len(patches))
+	for index, patch := range patches {
+		labels[index] = patch.Label
+	}
+	return strings.Join(labels, "+")
+}
 
 var glm53FlashRuntimePatches = []MultiDeviceRuntimePatch{
 	{
@@ -56,11 +67,7 @@ var glm53FlashRuntimePatches = []MultiDeviceRuntimePatch{
 // GLM53FlashRuntimePatchSetLabel derives the composite Docker label from the
 // ordered patch definitions that the BKC actually carries.
 func GLM53FlashRuntimePatchSetLabel() string {
-	labels := make([]string, len(glm53FlashRuntimePatches))
-	for index, patch := range glm53FlashRuntimePatches {
-		labels[index] = patch.Label
-	}
-	return strings.Join(labels, "+")
+	return RuntimePatchSetLabel(glm53FlashRuntimePatches)
 }
 
 var multiDeviceCapabilities = []string{
@@ -92,15 +99,16 @@ var glm53FabricEnv = map[string]string{
 }
 
 // ValidateMultiDeviceRecipe fails closed if a coordinated recipe is internally
-// inconsistent. The pinned GLM recipe receives additional provenance and flag
-// checks so catalog drift cannot mutate devices.
+// inconsistent. Pinned recipes receive additional provenance and flag checks
+// so catalog drift cannot mutate devices.
 func ValidateMultiDeviceRecipe(cfg Config) error {
 	md := cfg.MultiDevice
 	if md == nil {
 		return fmt.Errorf("bkc %s is not a multi-device recipe", cfg.ID)
 	}
-	if cfg.Workload != WorkloadSGLang || md.Backend != MultiDeviceBackendTorch {
-		return fmt.Errorf("bkc %s requires SGLang torch distributed", cfg.ID)
+	if (cfg.Workload != WorkloadSGLang || md.Backend != MultiDeviceBackendTorch) &&
+		(cfg.Workload != WorkloadVLLM || md.Backend != MultiDeviceBackendVLLM) {
+		return fmt.Errorf("bkc %s has an unsupported coordinated runtime", cfg.ID)
 	}
 	// These dimensions are correctness-bearing for the GB10 DSA override: the
 	// 32/1/128 tile fits the shared-memory budget only with TP=2.
@@ -115,6 +123,12 @@ func ValidateMultiDeviceRecipe(cfg Config) error {
 	}
 	if len(md.Roles) != 2 || md.Roles[0] != (MultiDeviceRole{Name: MultiDeviceRoleHead, Rank: 0, API: true}) || md.Roles[1] != (MultiDeviceRole{Name: MultiDeviceRoleWorker, Rank: 1, API: false}) {
 		return fmt.Errorf("bkc %s must define ordered head and worker roles", cfg.ID)
+	}
+	if len(md.LaunchOrder) != 0 && !sameRoleSet(md.LaunchOrder, []string{MultiDeviceRoleHead, MultiDeviceRoleWorker}) {
+		return fmt.Errorf("bkc %s launch order must contain head and worker exactly once", cfg.ID)
+	}
+	if cfg.ID == Qwen38FlashNextNVFP4DualGB10ID {
+		return validateQwen38FlashNextRecipe(cfg)
 	}
 	if cfg.ID != GLM53FlashNVFP4DualGB10ID {
 		if len(md.RuntimePatches) != 0 {
@@ -187,6 +201,25 @@ func ValidateMultiDeviceRecipe(cfg Config) error {
 		return fmt.Errorf("bkc %s must not enable MTP or speculative decoding", cfg.ID)
 	}
 	return nil
+}
+
+func sameRoleSet(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	seen := make(map[string]bool, len(left))
+	for _, value := range left {
+		if seen[value] {
+			return false
+		}
+		seen[value] = true
+	}
+	for _, value := range right {
+		if !seen[value] {
+			return false
+		}
+	}
+	return true
 }
 
 func equalStrings(left, right []string) bool {

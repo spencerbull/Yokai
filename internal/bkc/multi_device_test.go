@@ -111,19 +111,21 @@ func TestPinnedRecipeValidationFailsClosedOnDrift(t *testing.T) {
 	}
 }
 
-func TestOnlyPinnedGLMRecipeCarriesRuntimePatch(t *testing.T) {
-	carriers := 0
+func TestOnlyPinnedCoordinatedRecipesCarryRuntimePatches(t *testing.T) {
+	carriers := make(map[string]bool)
 	for _, cfg := range Catalog() {
 		if cfg.MultiDevice == nil || len(cfg.MultiDevice.RuntimePatches) == 0 {
 			continue
 		}
-		carriers++
-		if cfg.ID != GLM53FlashNVFP4DualGB10ID || !equalRuntimePatches(cfg.MultiDevice.RuntimePatches, glm53FlashRuntimePatches) {
+		carriers[cfg.ID] = true
+		valid := cfg.ID == GLM53FlashNVFP4DualGB10ID && equalRuntimePatches(cfg.MultiDevice.RuntimePatches, glm53FlashRuntimePatches)
+		valid = valid || cfg.ID == Qwen38FlashNextNVFP4DualGB10ID && equalRuntimePatches(cfg.MultiDevice.RuntimePatches, qwen38RuntimePatches)
+		if !valid {
 			t.Fatalf("unexpected runtime patch carrier: %s %#v", cfg.ID, cfg.MultiDevice.RuntimePatches)
 		}
 	}
-	if carriers != 1 {
-		t.Fatalf("expected exactly one runtime patch carrier, got %d", carriers)
+	if len(carriers) != 2 || !carriers[GLM53FlashNVFP4DualGB10ID] || !carriers[Qwen38FlashNextNVFP4DualGB10ID] {
+		t.Fatalf("unexpected runtime patch carriers: %#v", carriers)
 	}
 }
 

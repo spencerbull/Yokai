@@ -318,6 +318,132 @@ func validRequest() CreateRequest {
 	}
 }
 
+func validQwen38Request() CreateRequest {
+	headGID, workerGID := 3, 5
+	return CreateRequest{
+		BKCID: bkc.Qwen38FlashNextNVFP4DualGB10ID, IdempotencyKey: "qwen-create-1", APIKey: "qwen-test-key",
+		LocalModelPath: "/srv/huggingface/hub/" + bkc.Qwen38FlashNextHFCacheDirectory + "/snapshots/" + bkc.Qwen38FlashNextNVFP4Revision,
+		Bindings: []Binding{
+			{Role: bkc.MultiDeviceRoleHead, DeviceID: "spark-a", FabricAddress: "10.20.0.1", FabricInterface: "enp1s0f0np0", FabricHCA: "rocep1s0f0", FabricGIDIndex: &headGID, ServiceAddress: "100.96.0.20", ServicePort: bkc.Qwen38FlashNextServicePort},
+			{Role: bkc.MultiDeviceRoleWorker, DeviceID: "spark-b", FabricAddress: "10.20.0.2", FabricInterface: "enp1s0f1np1", FabricHCA: "rocep1s0f1", FabricGIDIndex: &workerGID},
+		},
+	}
+}
+
+func TestCreateQwen38UsesWorkerFirstRankSpecificVLLMArgv(t *testing.T) {
+	ops := &fakeOperations{testModel: bkc.Qwen38FlashNextServedModel}
+	engine, _, _ := newTestEngine(t, ops)
+	deployment, err := engine.Create(context.Background(), validQwen38Request())
+	if err != nil {
+		t.Fatalf("create pinned Qwen3.8 deployment: %v", err)
+	}
+	wantEvents := []string{"preflight:head", "preflight:worker", "pull:head", "pull:worker", "launch:worker", "launch:head", "inspect:spark-a:new-head", "inspect:spark-b:new-worker", "test:spark-a:new-head"}
+	if !reflect.DeepEqual(ops.events, wantEvents) {
+		t.Fatalf("transaction order mismatch\n got: %v\nwant: %v", ops.events, wantEvents)
+	}
+	if deployment.RecipeRevision != bkc.Qwen38FlashNextSourceRevision || deployment.ModelRevision != bkc.Qwen38FlashNextNVFP4Revision || deployment.ImageDigest != bkc.Qwen38FlashNextNVFP4ImageDigest || !reflect.DeepEqual(deployment.LaunchOrder, []string{bkc.MultiDeviceRoleWorker, bkc.MultiDeviceRoleHead}) {
+		t.Fatalf("deployment omitted immutable provenance or launch order: %#v", deployment)
+	}
+	if len(ops.candidates) != 2 || ops.candidates[0].Role != bkc.MultiDeviceRoleWorker || ops.candidates[1].Role != bkc.MultiDeviceRoleHead {
+		t.Fatalf("unexpected candidate order: %#v", ops.candidates)
+	}
+	worker, head := ops.candidates[0], ops.candidates[1]
+	if value, count := candidateFlagValue(worker.Args, "--node-rank"); count != 1 || value != "1" || candidateArgCount(worker.Args, "--headless") != 1 || candidateArgCount(worker.Args, "--host") != 0 || candidateArgCount(worker.Args, "--api-key") != 0 {
+		t.Fatalf("worker argv is not rank-1 headless: %#v", worker.Args)
+	}
+	if value, count := candidateFlagValue(head.Args, "--node-rank"); count != 1 || value != "0" || candidateArgCount(head.Args, "--headless") != 0 || candidateArgCount(head.Args, "--api-key") != 1 {
+		t.Fatalf("head argv is not rank-0 API: %#v", head.Args)
+	}
+	if host, count := candidateFlagValue(head.Args, "--host"); count != 1 || host != "100.96.0.20" {
+		t.Fatalf("head service bind drifted: %#v", head.Args)
+	}
+	if master, count := candidateFlagValue(worker.Args, "--master-addr"); count != 1 || master != "10.20.0.1" {
+		t.Fatalf("worker rendezvous address drifted: %#v", worker.Args)
+	}
+	if worker.Env["NCCL_SOCKET_IFNAME"] != "enp1s0f1np1" || worker.Env["NCCL_IB_HCA"] != "=rocep1s0f1" || worker.Env["NCCL_IB_GID_INDEX"] != "5" || worker.Env["VLLM_HOST_IP"] != "10.20.0.2" {
+		t.Fatalf("worker fabric env drifted: %#v", worker.Env)
+	}
+	if head.CapAdd[0] != "SYS_NICE" || head.Runtime.IPCMode != "host" || head.Runtime.ShmSize != "" || head.Model != bkc.Qwen38FlashNextContainerModel {
+		t.Fatalf("head runtime drifted: %#v", head)
+	}
+	repositoryRoot := filepath.Dir(filepath.Dir(validQwen38Request().LocalModelPath))
+	if len(head.Volumes) != 1 || head.Volumes[repositoryRoot] != bkc.Qwen38FlashNextContainerRoot+":ro" {
+		t.Fatalf("head did not mount the content-addressed Hugging Face repository read-only: %#v", head.Volumes)
+	}
+}
+
+func TestCreateQwen38RejectsMissingSnapshotOrFabricBeforeMutation(t *testing.T) {
+	for name, mutate := range map[string]func(*CreateRequest){
+		"snapshot":          func(request *CreateRequest) { request.LocalModelPath = "" },
+		"snapshot revision": func(request *CreateRequest) { request.LocalModelPath = "/srv/huggingface/snapshots/main" },
+		"interface":         func(request *CreateRequest) { request.Bindings[1].FabricInterface = "" },
+		"hca":               func(request *CreateRequest) { request.Bindings[0].FabricHCA = "=unsafe" },
+		"gid":               func(request *CreateRequest) { invalid := 256; request.Bindings[0].FabricGIDIndex = &invalid },
+		"missing gid":       func(request *CreateRequest) { request.Bindings[0].FabricGIDIndex = nil },
+	} {
+		t.Run(name, func(t *testing.T) {
+			ops := &fakeOperations{}
+			engine, store, _ := newTestEngine(t, ops)
+			request := validQwen38Request()
+			mutate(&request)
+			if _, err := engine.Create(context.Background(), request); err == nil {
+				t.Fatal("expected fail-closed validation")
+			}
+			if len(ops.events) != 0 || len(store.List()) != 0 {
+				t.Fatalf("invalid request mutated state: events=%v store=%v", ops.events, store.List())
+			}
+		})
+	}
+}
+
+func TestQwen38LifecyclePreservesWorkerFirstLaunchOrder(t *testing.T) {
+	ops := &fakeOperations{testModel: bkc.Qwen38FlashNextServedModel}
+	engine, _, _ := newTestEngine(t, ops)
+	deployment, err := engine.Create(context.Background(), validQwen38Request())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ops.events = nil
+	if _, err := engine.Stop(context.Background(), deployment.ID); err != nil {
+		t.Fatal(err)
+	}
+	wantStop := []string{"inspect:spark-a:new-head", "stop:spark-a:new-head", "inspect:spark-b:new-worker", "stop:spark-b:new-worker"}
+	if len(ops.events) < len(wantStop) || !reflect.DeepEqual(ops.events[:len(wantStop)], wantStop) {
+		t.Fatalf("Qwen3.8 reverse launch stop order mismatch: got %v want prefix %v", ops.events, wantStop)
+	}
+	ops.events = nil
+	started, err := engine.Start(context.Background(), deployment.ID, "qwen-test-key")
+	if err != nil || started.State != StateRunning {
+		t.Fatalf("Qwen3.8 restart failed: deployment=%#v err=%v", started, err)
+	}
+	wantStart := []string{"inspect:spark-b:new-worker", "restart:spark-b:new-worker", "inspect:spark-a:new-head", "restart:spark-a:new-head"}
+	if len(ops.events) < len(wantStart) || !reflect.DeepEqual(ops.events[:len(wantStart)], wantStart) {
+		t.Fatalf("Qwen3.8 persisted launch order mismatch: got %v want prefix %v", ops.events, wantStart)
+	}
+}
+
+func candidateFlagValue(args []string, flag string) (string, int) {
+	value, count := "", 0
+	for index := 0; index < len(args); index++ {
+		if args[index] == flag {
+			count++
+			if index+1 < len(args) {
+				value = args[index+1]
+				index++
+			}
+		} else if strings.HasPrefix(args[index], flag+"=") {
+			count++
+			value = strings.TrimPrefix(args[index], flag+"=")
+		}
+	}
+	return value, count
+}
+
+func candidateArgCount(args []string, flag string) int {
+	_, count := candidateFlagValue(args, flag)
+	return count
+}
+
 func TestCreateRejectsDuplicateDeviceBeforeMutation(t *testing.T) {
 	ops := &fakeOperations{}
 	engine, store, _ := newTestEngine(t, ops)

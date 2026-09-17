@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -116,8 +117,9 @@ func (e *Engine) CreateWithOutcome(ctx context.Context, request CreateRequest) (
 		ID: deploymentID, BKCID: cfg.ID, IdempotencyKey: request.IdempotencyKey, RequestHash: hash,
 		State: StatePending, Phase: PhasePlanned, Generation: previousGeneration + 1, PreviousGeneration: previousGeneration,
 		Bindings: cloneBindings(ordered), PreviousMembers: previous, UsesLocalModelSnapshot: request.LocalModelPath != "",
-		RuntimePatches: runtimePatchProvenance(cfg),
-		CreatedAt:      now, UpdatedAt: now,
+		RecipeSource: cfg.Source, RecipeRevision: cfg.MultiDevice.SourceRevision, ModelRevision: cfg.MultiDevice.ModelRevision,
+		ImageDigest: pinnedImageDigest(cfg.Image), LaunchOrder: recipeLaunchOrder(cfg), RuntimePatches: runtimePatchProvenance(cfg),
+		CreatedAt: now, UpdatedAt: now,
 	}
 	for _, binding := range ordered {
 		candidate := buildCandidate(deployment, request, cfg, binding, ordered[0].FabricAddress)
@@ -128,6 +130,7 @@ func (e *Engine) CreateWithOutcome(ctx context.Context, request CreateRequest) (
 		preflight := PreflightRequest{
 			Binding: binding, CandidateName: deployment.Members[index].Name, LocalModelPath: request.LocalModelPath,
 			ServicePort: cfg.MultiDevice.ServicePort, RendezvousPort: cfg.MultiDevice.RendezvousPort, Head: binding.Role == bkc.MultiDeviceRoleHead,
+			BKCID: cfg.ID, ModelRevision: cfg.MultiDevice.ModelRevision,
 		}
 		if preflightErr := e.Ops.Preflight(ctx, preflight, cfg.MultiDevice.RequiredCapabilities, cfg.TargetDevices); preflightErr != nil {
 			kind := ErrorKindOf(preflightErr)
@@ -164,7 +167,9 @@ func (e *Engine) CreateWithOutcome(ctx context.Context, request CreateRequest) (
 			return e.createRollback(ctx, deployment, err, "persist previous stop completion failed", request.APIKey)
 		}
 	}
-	for index, binding := range ordered {
+	for _, role := range recipeLaunchOrder(cfg) {
+		index := memberIndexByRole(deployment.Members, role)
+		binding := bindingByRole(ordered, role)
 		candidate := buildCandidate(deployment, request, cfg, binding, ordered[0].FabricAddress)
 		if err := e.beforeMemberAction(&deployment, index, PhaseLaunching, "launch", "launching"); err != nil {
 			return e.createRollback(ctx, deployment, err, "persist launch intent failed", request.APIKey)
@@ -271,11 +276,11 @@ func (e *Engine) stopLocked(ctx context.Context, deployment Deployment) (Deploym
 		return Deployment{}, WrapError(ErrorConflict, "stop deployment", fmt.Errorf("deployment state %s cannot be stopped", deployment.State))
 	}
 	deployment.State = StateStopping
-	if err := e.persistProgress(&deployment, PhaseStopping, "stop_group", "", "started", "worker then head"); err != nil {
+	if err := e.persistProgress(&deployment, PhaseStopping, "stop_group", "", "started", "reverse launch order"); err != nil {
 		return Deployment{}, err
 	}
 	var stopErrors []string
-	for index := len(deployment.Members) - 1; index >= 0; index-- {
+	for _, index := range reverseLaunchMemberIndexes(deployment) {
 		member := deployment.Members[index]
 		if member.Ownership == OwnershipObserved {
 			stopErrors = append(stopErrors, "refused observed "+member.Role)
@@ -363,11 +368,11 @@ func (e *Engine) Start(ctx context.Context, id, apiKey string) (Deployment, erro
 	}
 	deployment.State = StateStarting
 	deployment.Error = ""
-	if err := e.persistProgress(&deployment, PhaseStarting, "start_group", "", "started", "head then worker"); err != nil {
+	if err := e.persistProgress(&deployment, PhaseStarting, "start_group", "", "started", "recipe launch order"); err != nil {
 		return Deployment{}, err
 	}
 	restartMayHaveHappened := false
-	for _, role := range []string{bkc.MultiDeviceRoleHead, bkc.MultiDeviceRoleWorker} {
+	for _, role := range deploymentLaunchOrder(deployment) {
 		index := memberIndexByRole(deployment.Members, role)
 		if index < 0 {
 			if restartMayHaveHappened {
@@ -444,7 +449,7 @@ func (e *Engine) failStart(ctx context.Context, deployment Deployment, cause err
 	cleanupCtx, cancel := e.boundedCleanupContext(ctx)
 	defer cancel()
 	var stopErrors []string
-	for index := len(deployment.Members) - 1; index >= 0; index-- {
+	for _, index := range reverseLaunchMemberIndexes(deployment) {
 		member := deployment.Members[index]
 		observed, inspectErr := e.Ops.Inspect(cleanupCtx, member.DeviceID, memberLocator(member))
 		if inspectErr != nil || validateManagedMemberIdentity(deployment, member, observed) != nil {
@@ -598,7 +603,7 @@ func (e *Engine) rollbackLocked(ctx context.Context, deployment Deployment, safe
 	}
 
 	candidatesSafe := true
-	for index := len(deployment.Members) - 1; index >= 0; index-- {
+	for _, index := range reverseLaunchMemberIndexes(deployment) {
 		member := deployment.Members[index]
 		if !candidateMayExist(member.Status) {
 			continue
@@ -902,6 +907,9 @@ func expectedStoredDeploymentModel(deployment Deployment) (string, error) {
 }
 
 func expectedModel(cfg bkc.Config, usesLocalSnapshot bool) string {
+	if cfg.MultiDevice != nil && cfg.MultiDevice.ServedModelName != "" {
+		return cfg.MultiDevice.ServedModelName
+	}
 	if usesLocalSnapshot {
 		return FixedLocalModelPath
 	}
@@ -972,6 +980,14 @@ func validateCreateRequest(request CreateRequest) (bkc.Config, error) {
 	if err := bkc.ValidateMultiDeviceRecipe(cfg); err != nil {
 		return bkc.Config{}, err
 	}
+	if cfg.MultiDevice.RequiresLocalModel {
+		if request.LocalModelPath == "" {
+			return bkc.Config{}, fmt.Errorf("BKC %s requires local_model_path for the exact pre-staged snapshot", cfg.ID)
+		}
+		if filepath.Base(request.LocalModelPath) != cfg.MultiDevice.ModelRevision || filepath.Base(filepath.Dir(request.LocalModelPath)) != "snapshots" || filepath.Base(filepath.Dir(filepath.Dir(request.LocalModelPath))) != bkc.Qwen38FlashNextHFCacheDirectory {
+			return bkc.Config{}, fmt.Errorf("local_model_path must be the standard Hugging Face cache snapshot for revision %s", cfg.MultiDevice.ModelRevision)
+		}
+	}
 	if len(request.Bindings) != len(cfg.MultiDevice.Roles) {
 		return bkc.Config{}, fmt.Errorf("exactly %d role bindings are required", len(cfg.MultiDevice.Roles))
 	}
@@ -1000,6 +1016,16 @@ func validateCreateRequest(request CreateRequest) (bkc.Config, error) {
 			return bkc.Config{}, fmt.Errorf("role bindings must use distinct fabric addresses")
 		}
 		addresses[canonicalIP] = struct{}{}
+		if cfg.MultiDevice.RequiresFabricConfig {
+			if !fabricNamePattern.MatchString(binding.FabricInterface) || !fabricNamePattern.MatchString(binding.FabricHCA) || strings.HasPrefix(binding.FabricHCA, "=") {
+				return bkc.Config{}, fmt.Errorf("role %s requires valid fabric_interface and fabric_hca names", binding.Role)
+			}
+			if binding.FabricGIDIndex == nil || *binding.FabricGIDIndex < 0 || *binding.FabricGIDIndex > 255 {
+				return bkc.Config{}, fmt.Errorf("role %s fabric_gid_index must be between 0 and 255", binding.Role)
+			}
+		} else if binding.FabricInterface != "" || binding.FabricHCA != "" || binding.FabricGIDIndex != nil {
+			return bkc.Config{}, fmt.Errorf("BKC %s does not accept explicit fabric interface settings", cfg.ID)
+		}
 		if binding.Role == bkc.MultiDeviceRoleHead {
 			serviceIP := net.ParseIP(binding.ServiceAddress)
 			if serviceIP == nil || serviceIP.IsUnspecified() || serviceIP.IsLoopback() || serviceIP.IsMulticast() {
@@ -1024,6 +1050,8 @@ func validateCreateRequest(request CreateRequest) (bkc.Config, error) {
 	return cfg, nil
 }
 
+var fabricNamePattern = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,64}$`)
+
 func validateAPIKey(apiKey string) error {
 	if apiKey == "" {
 		return fmt.Errorf("api_key is required")
@@ -1042,6 +1070,8 @@ func normalizeRequest(request CreateRequest) CreateRequest {
 		request.Bindings[index].Role = strings.TrimSpace(request.Bindings[index].Role)
 		request.Bindings[index].DeviceID = strings.TrimSpace(request.Bindings[index].DeviceID)
 		request.Bindings[index].FabricAddress = strings.TrimSpace(request.Bindings[index].FabricAddress)
+		request.Bindings[index].FabricInterface = strings.TrimSpace(request.Bindings[index].FabricInterface)
+		request.Bindings[index].FabricHCA = strings.TrimSpace(request.Bindings[index].FabricHCA)
 		request.Bindings[index].ServiceAddress = strings.TrimSpace(request.Bindings[index].ServiceAddress)
 		request.Bindings[index].ObservedContainerID = strings.TrimSpace(request.Bindings[index].ObservedContainerID)
 	}
@@ -1076,6 +1106,26 @@ func orderedBindings(bindings []Binding, cfg bkc.Config) []Binding {
 	return ordered
 }
 
+func bindingByRole(bindings []Binding, role string) Binding {
+	for _, binding := range bindings {
+		if binding.Role == role {
+			return binding
+		}
+	}
+	return Binding{}
+}
+
+func recipeLaunchOrder(cfg bkc.Config) []string {
+	if cfg.MultiDevice != nil && len(cfg.MultiDevice.LaunchOrder) != 0 {
+		return append([]string(nil), cfg.MultiDevice.LaunchOrder...)
+	}
+	roles := make([]string, 0, len(cfg.MultiDevice.Roles))
+	for _, role := range cfg.MultiDevice.Roles {
+		roles = append(roles, role.Name)
+	}
+	return roles
+}
+
 func roleRank(cfg bkc.Config, roleName string) int {
 	for _, role := range cfg.MultiDevice.Roles {
 		if role.Name == roleName {
@@ -1093,14 +1143,22 @@ func buildCandidate(deployment Deployment, request CreateRequest, cfg bkc.Config
 	}
 	args := strings.ReplaceAll(cfg.ExtraArgs, bkc.MultiDeviceRoleRankPlaceholder, strconv.Itoa(rank))
 	args = strings.ReplaceAll(args, bkc.MultiDeviceHeadAddrPlaceholder, headForArg)
-	bindAddress := binding.FabricAddress
-	if binding.Role == bkc.MultiDeviceRoleHead {
-		bindAddress = binding.ServiceAddress
+	structuredArgs := renderCandidateArgs(cfg.MultiDevice.CommonArgs, headForArg, binding.ServiceAddress)
+	structuredArgs = append(structuredArgs, renderCandidateArgs(cfg.MultiDevice.RoleArgs[binding.Role], headForArg, binding.ServiceAddress)...)
+	if len(cfg.MultiDevice.CommonArgs) == 0 {
+		bindAddress := binding.FabricAddress
+		if binding.Role == bkc.MultiDeviceRoleHead {
+			bindAddress = binding.ServiceAddress
+		}
+		args = strings.TrimSpace(fmt.Sprintf("%s --host %s --port %d", args, bindAddress, cfg.MultiDevice.ServicePort))
 	}
-	args = strings.TrimSpace(fmt.Sprintf("%s --host %s --port %d", args, bindAddress, cfg.MultiDevice.ServicePort))
 	model := cfg.ModelID
 	volumes := cloneMap(cfg.Volumes)
-	if request.LocalModelPath != "" {
+	if cfg.ID == bkc.Qwen38FlashNextNVFP4DualGB10ID {
+		model = bkc.Qwen38FlashNextContainerModel
+		repositoryRoot := filepath.Dir(filepath.Dir(request.LocalModelPath))
+		volumes[repositoryRoot] = bkc.Qwen38FlashNextContainerRoot + ":ro"
+	} else if request.LocalModelPath != "" {
 		model = FixedLocalModelPath
 		volumes[request.LocalModelPath] = FixedLocalModelPath + ":ro"
 	}
@@ -1111,8 +1169,11 @@ func buildCandidate(deployment Deployment, request CreateRequest, cfg bkc.Config
 		"io.yokai.model.revision": cfg.MultiDevice.ModelRevision,
 		"io.yokai.image.digest":   strings.TrimPrefix(cfg.Image[strings.Index(cfg.Image, "@")+1:], "sha256:"),
 	}
+	if cfg.MultiDevice.SourceRevision != "" {
+		labels["io.yokai.source.revision"] = cfg.MultiDevice.SourceRevision
+	}
 	if len(cfg.MultiDevice.RuntimePatches) != 0 {
-		labels["io.yokai.runtime.patch"] = bkc.GLM53FlashRuntimePatchSetLabel()
+		labels["io.yokai.runtime.patch"] = bkc.RuntimePatchSetLabel(cfg.MultiDevice.RuntimePatches)
 	}
 	if binding.Role == bkc.MultiDeviceRoleHead {
 		labels["io.yokai.service.address"] = binding.ServiceAddress
@@ -1122,16 +1183,45 @@ func buildCandidate(deployment Deployment, request CreateRequest, cfg bkc.Config
 	runtime.ShmSize = "32g"
 	runtime.Ulimits = map[string]string{"memlock": "-1", "stack": "67108864"}
 	runtime.RestartPolicy = config.RestartPolicyNo
-	var structuredArgs []string
 	if binding.Role == bkc.MultiDeviceRoleHead {
-		structuredArgs = []string{"--api-key=" + request.APIKey}
+		structuredArgs = append(structuredArgs, "--api-key="+request.APIKey)
+	}
+	env := cloneMap(cfg.Env)
+	capAdd := []string{"IPC_LOCK"}
+	if cfg.MultiDevice.RequiresFabricConfig {
+		env["GLOO_SOCKET_IFNAME"] = binding.FabricInterface
+		env["NCCL_SOCKET_IFNAME"] = binding.FabricInterface
+		env["TP_SOCKET_IFNAME"] = binding.FabricInterface
+		env["NCCL_IB_HCA"] = "=" + binding.FabricHCA
+		env["NCCL_IB_GID_INDEX"] = strconv.Itoa(*binding.FabricGIDIndex)
+		env["VLLM_HOST_IP"] = binding.FabricAddress
+		runtime.ShmSize = ""
+		capAdd = []string{"SYS_NICE"}
 	}
 	return Candidate{
 		Role: binding.Role, Rank: rank, Name: fmt.Sprintf("yokai-deployment-%s-g%d-%s", deployment.ID, deployment.Generation, binding.Role),
 		Image: cfg.Image, Model: model, Port: cfg.Port, ExtraArgs: args, Args: structuredArgs,
-		Env: cloneMap(cfg.Env), Volumes: volumes, Runtime: runtime, Labels: labels,
-		NetworkMode: "host", Devices: []string{"/dev/infiniband:/dev/infiniband"}, CapAdd: []string{"IPC_LOCK"}, GPUIDs: "0",
+		Env: env, Volumes: volumes, Runtime: runtime, Labels: labels,
+		NetworkMode: "host", Devices: []string{"/dev/infiniband:/dev/infiniband"}, CapAdd: capAdd, GPUIDs: "0",
 	}
+}
+
+func renderCandidateArgs(args []string, headAddress, serviceAddress string) []string {
+	rendered := make([]string, len(args))
+	for index, arg := range args {
+		arg = strings.ReplaceAll(arg, bkc.MultiDeviceHeadAddrPlaceholder, headAddress)
+		arg = strings.ReplaceAll(arg, "{SERVICE_ADDRESS}", serviceAddress)
+		rendered[index] = arg
+	}
+	return rendered
+}
+
+func pinnedImageDigest(image string) string {
+	_, digest, ok := strings.Cut(image, "@sha256:")
+	if !ok {
+		return ""
+	}
+	return digest
 }
 
 func runtimePatchProvenance(cfg bkc.Config) []RuntimePatchProvenance {
@@ -1171,6 +1261,24 @@ func memberIndexByRole(members []Member, role string) int {
 		}
 	}
 	return -1
+}
+
+func deploymentLaunchOrder(deployment Deployment) []string {
+	if len(deployment.LaunchOrder) != 0 {
+		return append([]string(nil), deployment.LaunchOrder...)
+	}
+	return []string{bkc.MultiDeviceRoleHead, bkc.MultiDeviceRoleWorker}
+}
+
+func reverseLaunchMemberIndexes(deployment Deployment) []int {
+	order := deploymentLaunchOrder(deployment)
+	indexes := make([]int, 0, len(order))
+	for position := len(order) - 1; position >= 0; position-- {
+		if index := memberIndexByRole(deployment.Members, order[position]); index >= 0 {
+			indexes = append(indexes, index)
+		}
+	}
+	return indexes
 }
 
 func memberLocator(member Member) string {

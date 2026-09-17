@@ -16,12 +16,13 @@ const (
 )
 
 const (
-	DefaultReadinessTimeout         = 45 * time.Minute
-	DefaultReadinessInterval        = 5 * time.Second
-	DefaultCleanupTimeout           = 5 * time.Minute
-	DefaultImagePullRPCTimeout      = 10 * time.Minute
-	DefaultMemberMutationRPCTimeout = 2 * time.Minute
-	DefaultClientRequestTimeout     = 90 * time.Minute
+	DefaultReadinessTimeout              = 45 * time.Minute
+	DefaultReadinessInterval             = 5 * time.Second
+	DefaultCleanupTimeout                = 5 * time.Minute
+	DefaultImagePullRPCTimeout           = 10 * time.Minute
+	DefaultDeploymentPreflightRPCTimeout = 15 * time.Minute
+	DefaultMemberMutationRPCTimeout      = 2 * time.Minute
+	DefaultClientRequestTimeout          = 90 * time.Minute
 	// A coordinated launch RPC outlives both the bounded docker CLI and its
 	// post-exit deterministic-name settling pass. This makes the agent response
 	// a cleanup barrier instead of allowing request cancellation to race rollback.
@@ -73,6 +74,9 @@ type Binding struct {
 	Role                string `json:"role"`
 	DeviceID            string `json:"device_id"`
 	FabricAddress       string `json:"fabric_address"`
+	FabricInterface     string `json:"fabric_interface,omitempty"`
+	FabricHCA           string `json:"fabric_hca,omitempty"`
+	FabricGIDIndex      *int   `json:"fabric_gid_index,omitempty"`
 	ServiceAddress      string `json:"service_address,omitempty"`
 	ServicePort         int    `json:"service_port,omitempty"`
 	ObservedContainerID string `json:"observed_container_id,omitempty"`
@@ -181,6 +185,11 @@ type Deployment struct {
 	Members                []Member                 `json:"members,omitempty"`
 	PreviousMembers        []Member                 `json:"previous_members,omitempty"`
 	UsesLocalModelSnapshot bool                     `json:"uses_local_model_snapshot,omitempty"`
+	RecipeSource           string                   `json:"recipe_source,omitempty"`
+	RecipeRevision         string                   `json:"recipe_revision,omitempty"`
+	ModelRevision          string                   `json:"model_revision,omitempty"`
+	ImageDigest            string                   `json:"image_digest,omitempty"`
+	LaunchOrder            []string                 `json:"launch_order,omitempty"`
 	RuntimePatches         []RuntimePatchProvenance `json:"runtime_patches,omitempty"`
 	Error                  string                   `json:"error,omitempty"`
 	Rollback               *RollbackResult          `json:"rollback,omitempty"`
@@ -239,6 +248,8 @@ type PreflightRequest struct {
 	ServicePort    int
 	RendezvousPort int
 	Head           bool
+	BKCID          string
+	ModelRevision  string
 }
 
 type ObservedContainer struct {

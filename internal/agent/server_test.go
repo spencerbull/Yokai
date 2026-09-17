@@ -16,7 +16,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spencerbull/yokai/internal/bkc"
 	"github.com/spencerbull/yokai/internal/deployments"
+	"github.com/spencerbull/yokai/internal/launchauth"
 )
 
 // requireTestAuth creates a test-specific auth middleware that doesn't use global state
@@ -114,6 +116,47 @@ func TestHealthEndpoint(t *testing.T) {
 	if !ok || len(capabilities) != len(AgentCapabilities) {
 		t.Fatalf("unexpected capabilities: %#v", response["capabilities"])
 	}
+}
+
+func TestHealthAdvertisesQwenAuthorizationOnlyWhenVerifierIsConfigured(t *testing.T) {
+	publicKey, _, err := launchauth.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalPublicKey := coordinatorVerificationKey
+	originalDeviceID := agentDeviceID
+	originalReplayStore := launchAuthorizationReplayStore
+	defer func() {
+		coordinatorVerificationKey = originalPublicKey
+		agentDeviceID = originalDeviceID
+		launchAuthorizationReplayStore = originalReplayStore
+	}()
+
+	coordinatorVerificationKey = nil
+	agentDeviceID = ""
+	launchAuthorizationReplayStore = nil
+	if containsCapability(currentAgentCapabilities(), bkc.Qwen38LaunchAuthorizationCapability) {
+		t.Fatal("agent advertised Qwen launch authorization without a verifier")
+	}
+	coordinatorVerificationKey = publicKey
+	agentDeviceID = "spark-a"
+	launchAuthorizationReplayStore = launchauth.NewReplayStore(filepath.Join(t.TempDir(), "agent.json"))
+	if !containsCapability(currentAgentCapabilities(), bkc.Qwen38LaunchAuthorizationCapability) {
+		t.Fatal("agent did not advertise configured Qwen launch authorization")
+	}
+	agentDeviceID = ""
+	if containsCapability(currentAgentCapabilities(), bkc.Qwen38LaunchAuthorizationCapability) {
+		t.Fatal("agent advertised Qwen launch authorization without a local device identity")
+	}
+}
+
+func containsCapability(capabilities []string, expected string) bool {
+	for _, capability := range capabilities {
+		if capability == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func TestSystemInfoEndpoint(t *testing.T) {
@@ -679,7 +722,7 @@ exit 1
 	}
 }
 
-func TestManagedMemberLogTailEndpointIsBoundedSanitizedAndNonFollowing(t *testing.T) {
+func TestQwenWorkerLogTailEndpointRemainsBoundedSanitizedAndNonFollowing(t *testing.T) {
 	const sentinel = "exact-request-key"
 	binDir := t.TempDir()
 	dockerPath := filepath.Join(binDir, "docker")
@@ -687,7 +730,7 @@ func TestManagedMemberLogTailEndpointIsBoundedSanitizedAndNonFollowing(t *testin
 if [ "$1" = inspect ]; then
   printf '%s\n' '"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"'
   printf '%s\n' '"/candidate-worker"'
-  printf '%s\n' '{"io.yokai.managed":"true","io.yokai.ownership":"managed","io.yokai.deployment.id":"dep-test","io.yokai.deployment.generation":"1","io.yokai.deployment.role":"worker"}'
+  printf '%s\n' '{"io.yokai.managed":"true","io.yokai.ownership":"managed","io.yokai.deployment.id":"dep-test","io.yokai.deployment.generation":"1","io.yokai.deployment.role":"worker","io.yokai.bkc.id":"qwen3-8-flash-next-nvfp4-dual-gb10"}'
   exit 0
 fi
 if [ "$1" = logs ] && [ "$2" = --tail ] && [ "$3" = 2000 ] && [ "$4" = candidate-worker ] && [ -z "$5" ]; then
@@ -711,6 +754,234 @@ exit 9
 	body := recorder.Body.String()
 	if !strings.Contains(body, "rank 1 scheduler exception") || strings.Contains(body, sentinel) || strings.Contains(body, "generic-secret") {
 		t.Fatalf("unsafe or incomplete log response: %s", body)
+	}
+}
+
+func TestNonQwenRankZeroLogTailEndpointRemainsAvailable(t *testing.T) {
+	const sentinel = "exact-request-key"
+	binDir := t.TempDir()
+	dockerPath := filepath.Join(binDir, "docker")
+	script := `#!/bin/sh
+if [ "$1" = inspect ]; then
+  printf '%s\n' '"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"'
+  printf '%s\n' '"/candidate-head"'
+  printf '%s\n' '{"io.yokai.managed":"true","io.yokai.ownership":"managed","io.yokai.deployment.id":"dep-test","io.yokai.deployment.generation":"1","io.yokai.deployment.role":"head","io.yokai.bkc.id":"glm-5-3-flash-nvfp4-dual-gb10"}'
+  exit 0
+fi
+if [ "$1" = logs ] && [ "$2" = --tail ] && [ "$3" = 2000 ] && [ "$4" = candidate-head ] && [ -z "$5" ]; then
+  printf '%s\n' 'rank 0 scheduler exception exact-request-key --api-key=generic-secret'
+  exit 0
+fi
+exit 9
+`
+	if err := os.WriteFile(dockerPath, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	request := httptest.NewRequest(http.MethodPost, "/deployments/dep-test/members/candidate-head/logs/tail?generation=1&role=head&name=candidate-head", strings.NewReader(`{"redact":"`+sentinel+`"}`))
+	request.SetPathValue("deploymentID", "dep-test")
+	request.SetPathValue("id", "candidate-head")
+	recorder := httptest.NewRecorder()
+	handleDeploymentMemberLogTail(recorder, request)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "rank 0 scheduler exception") || strings.Contains(recorder.Body.String(), sentinel) || strings.Contains(recorder.Body.String(), "generic-secret") {
+		t.Fatalf("safe non-Qwen rank-0 log semantics changed: status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestQwenRankZeroLogTailRejectsMissingOrWrongRedactionBeforeDockerLogs(t *testing.T) {
+	const sentinel = "sentinel-rank-zero-api-key"
+	for name, body := range map[string]string{
+		"missing redact": `{}`,
+		"wrong redact":   `{"redact":"different-key"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			binDir := t.TempDir()
+			logsMarker := filepath.Join(binDir, "logs-called")
+			dockerPath := filepath.Join(binDir, "docker")
+			script := fmt.Sprintf(`#!/bin/sh
+if [ "$1" = inspect ]; then
+  printf '%%s\n' '"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"'
+  printf '%%s\n' '"/candidate-head"'
+  printf '%%s\n' '{"io.yokai.managed":"true","io.yokai.ownership":"managed","io.yokai.deployment.id":"dep-secret","io.yokai.deployment.generation":"1","io.yokai.deployment.role":"head","io.yokai.bkc.id":"%s"}'
+  exit 0
+fi
+if [ "$1" = logs ]; then
+  : > %q
+  printf '%%s\n' '--api-key=%s'
+  exit 0
+fi
+exit 9
+`, bkc.Qwen38FlashNextNVFP4DualGB10ID, logsMarker, sentinel)
+			if err := os.WriteFile(dockerPath, []byte(script), 0700); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+			request := httptest.NewRequest(http.MethodPost, "/deployments/dep-secret/members/candidate-head/logs/tail?generation=1&role=head&name=candidate-head", strings.NewReader(body))
+			request.SetPathValue("deploymentID", "dep-secret")
+			request.SetPathValue("id", "candidate-head")
+			recorder := httptest.NewRecorder()
+			handleDeploymentMemberLogTail(recorder, request)
+			if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), "qwen_rank_zero_logs_unavailable") {
+				t.Fatalf("Qwen rank-0 log tail was not rejected: status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+			if strings.Contains(recorder.Body.String(), sentinel) {
+				t.Fatalf("rejection disclosed the rank-0 API key: %s", recorder.Body.String())
+			}
+			if _, err := os.Stat(logsMarker); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("docker logs ran for Qwen rank 0: %v", err)
+			}
+		})
+	}
+}
+
+func TestGenericContainerLogsRejectGroupedRankZeroBeforeDockerLogsCanDiscloseAPIKey(t *testing.T) {
+	const sentinel = "sentinel-rank-zero-api-key"
+	binDir := t.TempDir()
+	logsMarker := filepath.Join(binDir, "logs-called")
+	dockerPath := filepath.Join(binDir, "docker")
+	script := fmt.Sprintf(`#!/bin/sh
+if [ "$1" = inspect ]; then
+  printf '%%s\n' '"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"'
+  printf '%%s\n' '"/candidate-head"'
+  printf '%%s\n' '{"io.yokai.managed":"true","io.yokai.ownership":"managed","io.yokai.deployment.id":"dep-secret","io.yokai.deployment.generation":"1","io.yokai.deployment.role":"head"}'
+  exit 0
+fi
+if [ "$1" = logs ]; then
+  : > %q
+  printf '%%s\n' '--api-key=%s'
+  exit 0
+fi
+exit 9
+`, logsMarker, sentinel)
+	if err := os.WriteFile(dockerPath, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	request := httptest.NewRequest(http.MethodGet, "/containers/candidate-head/logs", nil)
+	request.SetPathValue("id", "candidate-head")
+	recorder := httptest.NewRecorder()
+	handleContainerLogs(recorder, request)
+	if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), "grouped_deployment_required") {
+		t.Fatalf("grouped generic logs were not rejected: status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if strings.Contains(recorder.Body.String(), sentinel) {
+		t.Fatalf("generic logs disclosed the rank-0 API key: %s", recorder.Body.String())
+	}
+	if _, err := os.Stat(logsMarker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("docker logs ran for grouped rank 0: %v", err)
+	}
+}
+
+func TestGenericContainerLogsRejectUngroupedQwenRankZeroBeforeDockerLogsCanDiscloseAPIKey(t *testing.T) {
+	const sentinel = "sentinel-ungrouped-rank-zero-api-key"
+	binDir := t.TempDir()
+	logsMarker := filepath.Join(binDir, "logs-called")
+	dockerPath := filepath.Join(binDir, "docker")
+	script := fmt.Sprintf(`#!/bin/sh
+if [ "$1" = inspect ]; then
+  printf '%%s\n' '"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"'
+  printf '%%s\n' '"/ungrouped-qwen-head"'
+  printf '%%s\n' '{"io.yokai.managed":"true","io.yokai.ownership":"managed","io.yokai.deployment.role":"head","io.yokai.bkc.id":"%s"}'
+  exit 0
+fi
+if [ "$1" = logs ]; then
+  : > %q
+  printf '%%s\n' '--api-key=%s'
+  exit 0
+fi
+exit 9
+`, bkc.Qwen38FlashNextNVFP4DualGB10ID, logsMarker, sentinel)
+	if err := os.WriteFile(dockerPath, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	request := httptest.NewRequest(http.MethodGet, "/containers/ungrouped-qwen-head/logs", nil)
+	request.SetPathValue("id", "ungrouped-qwen-head")
+	recorder := httptest.NewRecorder()
+	handleContainerLogs(recorder, request)
+	if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), "qwen_rank_zero_logs_unavailable") {
+		t.Fatalf("ungrouped Qwen rank-0 generic logs were not rejected: status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if strings.Contains(recorder.Body.String(), sentinel) {
+		t.Fatalf("generic logs disclosed the ungrouped rank-0 API key: %s", recorder.Body.String())
+	}
+	if _, err := os.Stat(logsMarker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("docker logs ran for ungrouped Qwen rank 0: %v", err)
+	}
+}
+
+func TestContainerDeployRejectsFabricatedCoordinatedQwenLabelsBeforeDockerMutation(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "docker-called")
+	binDir := t.TempDir()
+	dockerPath := filepath.Join(binDir, "docker")
+	if err := os.WriteFile(dockerPath, []byte("#!/bin/sh\n: > "+marker+"\nexit 1\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	_, publicKey, _, _ := authorizedQwenTestRequest(t)
+	originalPublicKey := coordinatorVerificationKey
+	originalDeviceID := agentDeviceID
+	originalReplayStore := launchAuthorizationReplayStore
+	coordinatorVerificationKey = publicKey
+	agentDeviceID = "spark-a"
+	launchAuthorizationReplayStore = launchauth.NewReplayStore(filepath.Join(t.TempDir(), "agent.json"))
+	defer func() {
+		coordinatorVerificationKey = originalPublicKey
+		agentDeviceID = originalDeviceID
+		launchAuthorizationReplayStore = originalReplayStore
+	}()
+	mux := setupTestServer("test-version", "ordinary-agent-token")
+	for _, role := range []string{bkc.MultiDeviceRoleHead, bkc.MultiDeviceRoleWorker} {
+		t.Run(role, func(t *testing.T) {
+			requestBody, _, _, _ := authorizedQwenTestRequest(t)
+			requestBody.Name = "fabricated-qwen-" + role
+			requestBody.Labels[LabelRole] = role
+			requestBody.LaunchAuthorization = ""
+			body, err := json.Marshal(requestBody)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := httptest.NewRequest(http.MethodPost, "/containers", bytes.NewReader(body))
+			request.Header.Set("Authorization", "Bearer ordinary-agent-token")
+			recorder := httptest.NewRecorder()
+			mux.ServeHTTP(recorder, request)
+			if recorder.Code != http.StatusForbidden || !strings.Contains(recorder.Body.String(), "coordinator_authorization_invalid") {
+				t.Fatalf("fabricated Qwen %s launch was not rejected: status=%d body=%s", role, recorder.Code, recorder.Body.String())
+			}
+		})
+	}
+	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Docker was invoked for a fabricated coordinated launch: %v", err)
+	}
+}
+
+func TestGenericContainerLogsRemainAvailableForNonGroupedContainer(t *testing.T) {
+	binDir := t.TempDir()
+	dockerPath := filepath.Join(binDir, "docker")
+	script := `#!/bin/sh
+if [ "$1" = inspect ]; then
+  printf '%s\n' '"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"'
+  printf '%s\n' '"/legacy-service"'
+  printf '%s\n' '{"io.yokai.managed":"true","io.yokai.ownership":"managed"}'
+  exit 0
+fi
+if [ "$1" = logs ] && [ "$2" = -f ] && [ "$3" = --tail ] && [ "$4" = 100 ] && [ "$5" = legacy-service ]; then
+  printf '%s\n' 'ordinary log line'
+	  sleep 0.1
+  exit 0
+fi
+exit 9
+`
+	if err := os.WriteFile(dockerPath, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	request := httptest.NewRequest(http.MethodGet, "/containers/legacy-service/logs", nil)
+	request.SetPathValue("id", "legacy-service")
+	recorder := httptest.NewRecorder()
+	handleContainerLogs(recorder, request)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "ordinary log line") {
+		t.Fatalf("non-grouped generic logs failed: status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
 
@@ -1084,6 +1355,73 @@ func TestLoadAuthTokenPrefersEnvPath(t *testing.T) {
 	}
 }
 
+func TestLoadAuthTokenLoadsDedicatedCoordinatorVerifier(t *testing.T) {
+	base := t.TempDir()
+	configPath := filepath.Join(base, "agent.json")
+	publicKey, _, err := launchauth.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := fmt.Sprintf(`{"token":"agent-token","device_id":"spark-a","coordinator_public_key":%q}`, launchauth.EncodePublicKey(publicKey))
+	if err := os.WriteFile(configPath, []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("YOKAI_AGENT_CONFIG", configPath)
+	originalSystemPath := systemAgentConfigPath
+	originalToken := authToken
+	originalPublicKey := coordinatorVerificationKey
+	originalDeviceID := agentDeviceID
+	originalReplayStore := launchAuthorizationReplayStore
+	systemAgentConfigPath = filepath.Join(base, "missing-system-agent.json")
+	defer func() {
+		systemAgentConfigPath = originalSystemPath
+		authToken = originalToken
+		coordinatorVerificationKey = originalPublicKey
+		agentDeviceID = originalDeviceID
+		launchAuthorizationReplayStore = originalReplayStore
+	}()
+
+	loadAuthToken()
+	if authToken != "agent-token" {
+		t.Fatalf("expected ordinary agent token, got %q", authToken)
+	}
+	if agentDeviceID != "spark-a" || !bytes.Equal(coordinatorVerificationKey, publicKey) || launchAuthorizationReplayStore == nil {
+		t.Fatal("dedicated coordinator verifier and durable replay store were not loaded")
+	}
+}
+
+func TestLoadAuthTokenLeavesQwenAuthorizationUnavailableWithoutDeviceIdentity(t *testing.T) {
+	base := t.TempDir()
+	configPath := filepath.Join(base, "agent.json")
+	publicKey, _, err := launchauth.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := fmt.Sprintf(`{"token":"agent-token","coordinator_public_key":%q}`, launchauth.EncodePublicKey(publicKey))
+	if err := os.WriteFile(configPath, []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("YOKAI_AGENT_CONFIG", configPath)
+	originalSystemPath := systemAgentConfigPath
+	originalToken := authToken
+	originalPublicKey := coordinatorVerificationKey
+	originalDeviceID := agentDeviceID
+	originalReplayStore := launchAuthorizationReplayStore
+	systemAgentConfigPath = filepath.Join(base, "missing-system-agent.json")
+	defer func() {
+		systemAgentConfigPath = originalSystemPath
+		authToken = originalToken
+		coordinatorVerificationKey = originalPublicKey
+		agentDeviceID = originalDeviceID
+		launchAuthorizationReplayStore = originalReplayStore
+	}()
+
+	loadAuthToken()
+	if agentDeviceID != "" || containsCapability(currentAgentCapabilities(), bkc.Qwen38LaunchAuthorizationCapability) {
+		t.Fatal("agent enabled Qwen authorization without a configured local device identity")
+	}
+}
+
 func TestLoadAuthTokenFallsBackToHome(t *testing.T) {
 	base := t.TempDir()
 	homeDir := filepath.Join(base, "home")
@@ -1098,6 +1436,9 @@ func TestLoadAuthTokenFallsBackToHome(t *testing.T) {
 
 	t.Setenv("HOME", homeDir)
 	t.Setenv("YOKAI_AGENT_CONFIG", "")
+	oldSystemPath := systemAgentConfigPath
+	systemAgentConfigPath = filepath.Join(base, "missing-system-agent.json")
+	t.Cleanup(func() { systemAgentConfigPath = oldSystemPath })
 
 	authToken = ""
 	loadAuthToken()
@@ -1141,7 +1482,12 @@ func TestLoadAuthTokenPrefersSystemPathBeforeHome(t *testing.T) {
 }
 
 func TestLoadAuthTokenMissingClearsValue(t *testing.T) {
-	t.Setenv("YOKAI_AGENT_CONFIG", filepath.Join(t.TempDir(), "missing.json"))
+	base := t.TempDir()
+	t.Setenv("YOKAI_AGENT_CONFIG", filepath.Join(base, "missing.json"))
+	oldSystemPath := systemAgentConfigPath
+	systemAgentConfigPath = filepath.Join(base, "missing-system-agent.json")
+	t.Cleanup(func() { systemAgentConfigPath = oldSystemPath })
+	t.Setenv("HOME", filepath.Join(base, "missing-home"))
 
 	authToken = "stale"
 	loadAuthToken()

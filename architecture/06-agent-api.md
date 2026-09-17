@@ -15,6 +15,8 @@ Token is a 64-character hex string generated during device bootstrap and stored 
 
 Unauthorized requests receive `401 Unauthorized`.
 
+This bearer token is deliberately insufficient for a coordinated Qwen3.8 container launch. `POST /containers` additionally requires a two-minute, one-time Ed25519 launch authorization created by the Yokai coordinator and bound to the exact target device ID, candidate identity, deployment/generation/role, BKC and model/source/image provenance, and non-secret request payload. Bootstrap stores the selected stable device ID as `device_id` and the coordinator public key separately as `coordinator_public_key` in the same agent config, while the private signing key remains only in the coordinator's owner-only `~/.config/yokai/coordinator-signing-key.json`. Before consuming the authorization or starting Docker/image work, the agent requires the signed target to equal its local configured identity exactly; it does not derive identity from a hostname, IP address, bearer token, or launch labels. The agent consumes authorization IDs durably in `consumed-launch-authorizations/` beside its config before any Docker mutation. Bootstrap enforces mode `0700` on the agent config/state directory and `0600` on `agent.json`; a manual installation must provide the same ownership and permissions, the exact coordinator-side device ID, and a base64-encoded Ed25519 public key from the active coordinator. The Qwen capability and preflight fail closed unless local identity, verifier, and replay state are all usable. Existing agents must be bootstrapped again after this feature is installed; a binary-only upgrade leaves coordinated Qwen launches fail-closed at capability preflight. Non-Qwen requests retain bearer-only behavior and reject an unexpected launch authorization.
+
 ---
 
 ## Endpoints
@@ -29,7 +31,9 @@ Health check and version info.
   "status": "ok",
   "version": "0.1.0",
   "uptime_seconds": 86400,
-  "hostname": "gaming-rig"
+  "hostname": "gaming-rig",
+  "device_id": "gaming-rig",
+  "capabilities": []
 }
 ```
 
@@ -410,9 +414,12 @@ All errors follow:
 |-----------|------------|---------|
 | 400 | `bad_request` | Invalid request body |
 | 401 | `unauthorized` | Missing or invalid token |
+| 403 | `coordinator_authorization_invalid` | Missing, expired, tampered, or candidate-mismatched Qwen launch authorization |
 | 404 | `not_found` | Resource not found |
 | 409 | `conflict` | Resource already exists |
+| 409 | `coordinator_authorization_replayed` | Qwen launch authorization was already consumed |
 | 500 | `internal` | Server error |
+| 503 | `coordinator_authorization_unavailable` | Agent verifier or durable replay state is not configured |
 
 ---
 

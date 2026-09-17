@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/hex"
 	"flag"
@@ -10,6 +11,7 @@ import (
 	"strconv"
 
 	"github.com/spencerbull/yokai/internal/config"
+	"github.com/spencerbull/yokai/internal/launchauth"
 	sshpkg "github.com/spencerbull/yokai/internal/ssh"
 )
 
@@ -280,6 +282,15 @@ func runDevicesBootstrap(args []string) {
 		exitError(fmt.Sprintf("generating token: %v", err))
 	}
 	agentToken := hex.EncodeToString(tokenBytes)
+	coordinatorKeyPath, err := config.CoordinatorSigningKeyPath()
+	if err != nil {
+		exitError(fmt.Sprintf("resolving coordinator signing key: %v", err))
+	}
+	coordinatorSigningKey, err := launchauth.LoadOrCreateSigningKey(coordinatorKeyPath)
+	if err != nil {
+		exitError(fmt.Sprintf("loading coordinator signing key: %v", err))
+	}
+	coordinatorPublicKey := launchauth.EncodePublicKey(coordinatorSigningKey.Public().(ed25519.PublicKey))
 
 	// Get binary path
 	binaryPath, err := os.Executable()
@@ -288,7 +299,7 @@ func runDevicesBootstrap(args []string) {
 	}
 
 	// Deploy agent
-	if err := sshpkg.DeployAgent(client, binaryPath, agentToken); err != nil {
+	if err := sshpkg.DeployAgent(client, binaryPath, agentToken, dev.ID, coordinatorPublicKey); err != nil {
 		exitError(fmt.Sprintf("deploying agent: %v", err))
 	}
 
@@ -307,15 +318,15 @@ func runDevicesBootstrap(args []string) {
 		"status":    "bootstrapped",
 		"device_id": dev.ID,
 		"preflight": map[string]interface{}{
-			"os":              pf.OS,
-			"arch":            pf.Arch,
-			"docker_version":  pf.DockerVersion,
-			"gpu_detected":    pf.GPUDetected,
-			"gpu_name":        pf.GPUName,
-			"gpu_vram_mb":     pf.GPUVRAMMb,
-			"nvidia_toolkit":  pf.NvidiaToolkitInstalled,
-			"nvidia_runtime":  pf.NvidiaRuntimeAvailable,
-			"disk_free_gb":    pf.DiskFreeGB,
+			"os":             pf.OS,
+			"arch":           pf.Arch,
+			"docker_version": pf.DockerVersion,
+			"gpu_detected":   pf.GPUDetected,
+			"gpu_name":       pf.GPUName,
+			"gpu_vram_mb":    pf.GPUVRAMMb,
+			"nvidia_toolkit": pf.NvidiaToolkitInstalled,
+			"nvidia_runtime": pf.NvidiaRuntimeAvailable,
+			"disk_free_gb":   pf.DiskFreeGB,
 		},
 	})
 }

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -63,6 +64,34 @@ func TestBuildDeploymentCreateRequestRejectsBroadHeadServiceAddress(t *testing.T
 	}, func(string) string { return "secret" })
 	if err == nil {
 		t.Fatal("expected broad head service address rejection")
+	}
+}
+
+func TestBuildDeploymentCreateRequestCarriesQwen38FabricBinding(t *testing.T) {
+	request, err := buildDeploymentCreateRequest(deploymentCreateFlags{
+		bkcID: bkc.Qwen38FlashNextNVFP4DualGB10ID, key: "key", headDevice: "spark-a", workerDevice: "spark-b",
+		headFabric: "192.168.201.1", headFabricInterface: "enP2p1s0f0np0", headFabricHCA: "roceP2p1s0f0", headFabricGID: "3",
+		headServiceAddress: "100.96.0.20", headServicePort: "8888", workerFabric: "192.168.201.2",
+		workerFabricInterface: "enP2p1s0f0np0", workerFabricHCA: "roceP2p1s0f0", workerFabricGID: "3", apiKeyEnv: "YOKAI_TEST_KEY",
+		localModelPath: "/srv/hf/hub/models--nvidia--Qwen3.8-Flash-Next-NVFP4/snapshots/fc694b54fb0174e0913e6adf86691ef85a4ead47",
+	}, func(string) string { return "secret" })
+	if err != nil {
+		t.Fatalf("build Qwen3.8 request: %v", err)
+	}
+	if request.Bindings[0].FabricInterface != "enP2p1s0f0np0" || request.Bindings[0].FabricHCA != "roceP2p1s0f0" || request.Bindings[0].FabricGIDIndex == nil || *request.Bindings[0].FabricGIDIndex != 3 || request.Bindings[1].FabricGIDIndex == nil || *request.Bindings[1].FabricGIDIndex != 3 {
+		t.Fatalf("unexpected fabric bindings: %#v", request.Bindings)
+	}
+}
+
+func TestBuildDeploymentCreateRequestRejectsIncompleteQwen38FabricBinding(t *testing.T) {
+	_, err := buildDeploymentCreateRequest(deploymentCreateFlags{
+		bkcID: bkc.Qwen38FlashNextNVFP4DualGB10ID, key: "key", headDevice: "spark-a", workerDevice: "spark-b",
+		headFabric: "192.168.201.1", headFabricInterface: "enP2p1s0f0np0", headFabricHCA: "roceP2p1s0f0", headFabricGID: "3",
+		headServiceAddress: "100.96.0.20", headServicePort: "8888", workerFabric: "192.168.201.2",
+		workerFabricInterface: "enP2p1s0f0np0", workerFabricHCA: "roceP2p1s0f0", apiKeyEnv: "YOKAI_TEST_KEY",
+	}, func(string) string { return "secret" })
+	if err == nil || !strings.Contains(err.Error(), "--worker-fabric-gid-index") {
+		t.Fatalf("expected missing worker GID rejection, got %v", err)
 	}
 }
 
