@@ -726,6 +726,7 @@ func (m *tensorFoldManager) waitForProcess(name string, launch *tensorFoldLaunch
 
 func (m *tensorFoldManager) ensurePinnedRecipe(ctx context.Context) error {
 	recipeDir := m.recipePath()
+	freshCheckout := false
 	if err := ensureOwnedTensorFoldDirectory(m.root); err != nil {
 		return err
 	}
@@ -746,8 +747,14 @@ func (m *tensorFoldManager) ensurePinnedRecipe(ctx context.Context) error {
 				return fmt.Errorf("stage pinned TensorFold recipe: %w", err)
 			}
 		}
+		freshCheckout = true
 	} else if err != nil {
 		return err
+	}
+	if freshCheckout {
+		if err := m.normalizeFreshPinnedRecipePermissions(); err != nil {
+			return err
+		}
 	}
 	if info, err := os.Lstat(recipeDir); err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("TensorFold recipe directory is missing or unsafe")
@@ -768,6 +775,23 @@ func (m *tensorFoldManager) ensurePinnedRecipe(ctx context.Context) error {
 		}
 	}
 	return m.verifyPinnedRecipeFiles()
+}
+
+func (m *tensorFoldManager) normalizeFreshPinnedRecipePermissions() error {
+	for relative := range m.pinnedFiles {
+		path := filepath.Join(m.recipePath(), filepath.FromSlash(relative))
+		info, err := os.Lstat(path)
+		if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("pinned TensorFold file %s is missing or unsafe", relative)
+		}
+		if stat, ok := info.Sys().(*syscall.Stat_t); !ok || int(stat.Uid) != os.Geteuid() {
+			return fmt.Errorf("pinned TensorFold file %s is not owned by the agent user", relative)
+		}
+		if err := os.Chmod(path, info.Mode().Perm()&^0o022); err != nil {
+			return fmt.Errorf("secure pinned TensorFold file %s: %w", relative, err)
+		}
+	}
+	return nil
 }
 
 func (m *tensorFoldManager) verifyPinnedRecipeFiles() error {

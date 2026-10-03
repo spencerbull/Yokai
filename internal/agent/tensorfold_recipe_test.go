@@ -560,6 +560,47 @@ func TestTensorFoldImageProvenanceRequiresPinnedPatchLabelOnBothNodes(t *testing
 	}
 }
 
+func TestTensorFoldFreshCheckoutNormalizesGroupWritablePinnedFiles(t *testing.T) {
+	body := []byte("pinned recipe content\n")
+	sum := sha256.Sum256(body)
+	var manager *tensorFoldManager
+	runner := tensorFoldRunnerFunc(func(_ context.Context, dir string, _ []string, name string, args ...string) ([]byte, error) {
+		joined := strings.Join(args, " ")
+		if name == "git" && strings.Contains(joined, "checkout --quiet --detach") {
+			if err := os.MkdirAll(filepath.Join(dir, "scripts"), 0o700); err != nil {
+				return nil, err
+			}
+			path := filepath.Join(dir, "CHANGELOG.md")
+			if err := os.WriteFile(path, body, 0o600); err != nil {
+				return nil, err
+			}
+			if err := os.Chmod(path, 0o664); err != nil {
+				return nil, err
+			}
+			return nil, nil
+		}
+		if name == "git" && strings.Contains(joined, "rev-parse HEAD") {
+			return []byte(bkc.GLM53FlashEXL3TensorFoldRecipeCommit + "\n"), nil
+		}
+		if name == "git" && strings.Contains(joined, "status --porcelain") {
+			return nil, nil
+		}
+		return nil, nil
+	})
+	manager = newTensorFoldManager(t.TempDir(), runner)
+	manager.pinnedFiles = map[string]string{"CHANGELOG.md": hex.EncodeToString(sum[:])}
+	if err := manager.ensurePinnedRecipe(context.Background()); err != nil {
+		t.Fatalf("fresh checkout did not normalize inherited group write permission: %v", err)
+	}
+	info, err := os.Stat(filepath.Join(manager.recipePath(), "CHANGELOG.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o644 {
+		t.Fatalf("fresh checkout mode = %o, want 644", info.Mode().Perm())
+	}
+}
+
 func TestTensorFoldPinnedRecipeRejectsIgnoredAdditions(t *testing.T) {
 	resource := resourceFromTensorFoldRequest(validTensorFoldResourceRequest(true), "starting")
 	var inspectedIgnored bool
