@@ -367,3 +367,20 @@ func TestContainerServiceRequiredMetricsGateAcceptsVLLMNativeFamily(t *testing.T
 		t.Fatalf("vLLM native family did not pass metrics gate: result=%#v err=%v", result, err)
 	}
 }
+
+func TestTensorFoldMetricsFamilyIsRecognized(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("tensorfold:requests_running 0\ntensorfold_health:context_length 1048576\ntensorfold_health:streams_max 4\n"))
+	}))
+	defer server.Close()
+	metrics, err := scrapeVLLMMetricsURL(server.URL, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !metrics.HasTensorFoldNativeMetric || !metrics.HasRequestsRunning {
+		t.Fatalf("TensorFold metrics were not recognized: %#v", metrics)
+	}
+	if !metrics.hasNativeFamily("tensorfold") {
+		t.Fatal("TensorFold native metrics gate rejected its own family")
+	}
+}

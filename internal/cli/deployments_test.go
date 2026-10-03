@@ -13,7 +13,17 @@ import (
 func TestDeploymentDaemonClientUsesPatientBoundedTimeout(t *testing.T) {
 	client := newDeploymentDaemonClient(&config.Config{})
 	if client.http.Timeout != 90*time.Minute {
-		t.Fatalf("deployment client timeout = %s, want 90m", client.http.Timeout)
+		t.Fatalf("generic deployment client timeout = %s, want 90m", client.http.Timeout)
+	}
+}
+
+func TestBuildTensorFoldDeploymentCreateRequestNeedsNoServiceAPIKey(t *testing.T) {
+	request, err := buildDeploymentCreateRequest(deploymentCreateFlags{
+		bkcID: bkc.GLM53FlashEXL3TensorFoldDualGB10ID, key: "tensorfold-key", headDevice: "kyber", workerDevice: "beskar",
+		headFabric: "192.168.201.2", headServiceAddress: "192.168.1.191", headServicePort: "8888", workerFabric: "192.168.201.1",
+	}, func(string) string { return "" })
+	if err != nil || request.APIKey != "" {
+		t.Fatalf("TensorFold request required or retained a service API key: request=%#v err=%v", request, err)
 	}
 }
 
@@ -107,9 +117,9 @@ func TestBuildDeploymentTestRequestReadsAPIKeyOnlyAtRequestTime(t *testing.T) {
 	}
 }
 
-func TestBuildDeploymentTestRequestRejectsMissingOrEmptyAPIKey(t *testing.T) {
-	if _, err := buildDeploymentTestRequest("", func(string) string { return "secret" }); err == nil {
-		t.Fatal("expected missing API key environment name to fail")
+func TestBuildDeploymentTestRequestAllowsNoAPIKeyForRecipeDeployment(t *testing.T) {
+	if request, err := buildDeploymentTestRequest("", func(string) string { return "secret" }); err != nil || request.APIKey != "" {
+		t.Fatalf("keyless recipe action was rejected: request=%#v err=%v", request, err)
 	}
 	if _, err := buildDeploymentTestRequest("YOKAI_TEST_KEY", func(string) string { return "" }); err == nil {
 		t.Fatal("expected empty API key environment value to fail")

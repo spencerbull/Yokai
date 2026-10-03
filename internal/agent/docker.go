@@ -33,27 +33,34 @@ import (
 // field name is retained for API compatibility, but values may come from vLLM
 // or SGLang.
 type VLLMMetrics struct {
-	Model                    string             `json:"model,omitempty"`
-	GenerationTokPerSec      float64            `json:"generation_tok_per_s"`
-	PromptTokPerSec          float64            `json:"prompt_tok_per_s"`
-	RequestsRunning          float64            `json:"requests_running,omitempty"`
-	RequestsWaiting          float64            `json:"requests_waiting,omitempty"`
-	PromptTokensTotal        float64            `json:"prompt_tokens_total,omitempty"`
-	GenerationTokensTotal    float64            `json:"generation_tokens_total,omitempty"`
-	CachedPromptTokensTotal  float64            `json:"cached_prompt_tokens_total,omitempty"`
-	TTFTBuckets              map[string]float64 `json:"-"`
-	TTFTSum                  float64            `json:"-"`
-	TTFTCount                float64            `json:"-"`
-	HasGenerationTokPerSec   bool               `json:"-"`
-	HasPromptTokPerSec       bool               `json:"-"`
-	HasRequestsRunning       bool               `json:"-"`
-	HasRequestsWaiting       bool               `json:"-"`
-	HasPromptTokensTotal     bool               `json:"-"`
-	HasGenerationTokensTotal bool               `json:"-"`
-	HasCachedPromptTokens    bool               `json:"-"`
-	HasTTFT                  bool               `json:"-"`
-	HasSGLangNativeMetric    bool               `json:"-"`
-	HasVLLMNativeMetric      bool               `json:"-"`
+	Model                     string             `json:"model,omitempty"`
+	GenerationTokPerSec       float64            `json:"generation_tok_per_s"`
+	PromptTokPerSec           float64            `json:"prompt_tok_per_s"`
+	RequestsRunning           float64            `json:"requests_running,omitempty"`
+	RequestsWaiting           float64            `json:"requests_waiting,omitempty"`
+	PromptTokensTotal         float64            `json:"prompt_tokens_total,omitempty"`
+	GenerationTokensTotal     float64            `json:"generation_tokens_total,omitempty"`
+	CachedPromptTokensTotal   float64            `json:"cached_prompt_tokens_total,omitempty"`
+	TTFTBuckets               map[string]float64 `json:"-"`
+	TTFTSum                   float64            `json:"-"`
+	TTFTCount                 float64            `json:"-"`
+	HasGenerationTokPerSec    bool               `json:"-"`
+	HasPromptTokPerSec        bool               `json:"-"`
+	HasRequestsRunning        bool               `json:"-"`
+	HasRequestsWaiting        bool               `json:"-"`
+	HasPromptTokensTotal      bool               `json:"-"`
+	HasGenerationTokensTotal  bool               `json:"-"`
+	HasCachedPromptTokens     bool               `json:"-"`
+	HasTTFT                   bool               `json:"-"`
+	HasSGLangNativeMetric     bool               `json:"-"`
+	HasVLLMNativeMetric       bool               `json:"-"`
+	HasTensorFoldNativeMetric bool               `json:"-"`
+	TensorFoldContextLength   float64            `json:"tensorfold_context_length,omitempty"`
+	TensorFoldStreamsMax      float64            `json:"tensorfold_streams_max,omitempty"`
+	TensorFoldPoolTokens      float64            `json:"tensorfold_pool_tokens,omitempty"`
+	HasTensorFoldContext      bool               `json:"-"`
+	HasTensorFoldStreamsMax   bool               `json:"-"`
+	HasTensorFoldPoolTokens   bool               `json:"-"`
 }
 
 // Container represents a running container.
@@ -97,6 +104,9 @@ var AgentCapabilities = []string{
 	"deployments.preflight.v1",
 	"deployments.members.v1",
 	"deployments.logs.tail.v1",
+	"deployments.recipe.tensorfold.v1",
+	"deployments.recipe.reservations.v1",
+	"deployments.recipe.logs.v1",
 	"container.inventory.all",
 	"container.labels",
 	"container.network.host",
@@ -982,6 +992,10 @@ func isSGLangImage(image string) bool {
 	return strings.Contains(strings.ToLower(image), "sglang")
 }
 
+func isTensorFoldImage(image string) bool {
+	return strings.Contains(strings.ToLower(image), "tensorfold")
+}
+
 func isLlamaCppImage(image string) bool {
 	return strings.Contains(strings.ToLower(image), "llama.cpp")
 }
@@ -1401,30 +1415,30 @@ func scrapeVLLMMetricsURLWithClient(client *http.Client, metricsURL, apiKey stri
 			m.PromptTokPerSec += value
 			m.HasPromptTokPerSec = true
 			m.markNativeMetric(name)
-		case "vllm:num_requests_running", "sglang:num_running_reqs":
+		case "vllm:num_requests_running", "sglang:num_running_reqs", "tensorfold:requests_running":
 			m.RequestsRunning += value
 			m.HasRequestsRunning = true
 			m.markNativeMetric(name)
-		case "vllm:num_requests_waiting", "sglang:num_queue_reqs":
+		case "vllm:num_requests_waiting", "sglang:num_queue_reqs", "tensorfold:requests_waiting":
 			m.RequestsWaiting += value
 			m.HasRequestsWaiting = true
 			m.markNativeMetric(name)
-		case "vllm:prompt_tokens_total", "vllm:prompt_tokens", "sglang:prompt_tokens_total":
+		case "vllm:prompt_tokens_total", "vllm:prompt_tokens", "sglang:prompt_tokens_total", "tensorfold:prompt_tokens_total":
 			m.PromptTokensTotal += value
 			m.HasPromptTokensTotal = true
 			m.markNativeMetric(name)
-		case "vllm:generation_tokens_total", "vllm:generation_tokens", "sglang:generation_tokens_total":
+		case "vllm:generation_tokens_total", "vllm:generation_tokens", "sglang:generation_tokens_total", "tensorfold:generation_tokens_total":
 			m.GenerationTokensTotal += value
 			m.HasGenerationTokensTotal = true
 			m.markNativeMetric(name)
-		case "vllm:prompt_tokens_cached_total", "vllm:prompt_tokens_cached", "sglang:cached_tokens_total":
+		case "vllm:prompt_tokens_cached_total", "vllm:prompt_tokens_cached", "sglang:cached_tokens_total", "tensorfold:cached_tokens_total":
 			m.CachedPromptTokensTotal += value
 			m.HasCachedPromptTokens = true
 			m.markNativeMetric(name)
 		case "vllm:prefix_cache_hits_total", "vllm:prefix_cache_hits", "vllm:external_prefix_cache_hits_total", "vllm:external_prefix_cache_hits":
 			cachedPromptTokensFallback += value
 			m.markNativeMetric(name)
-		case "vllm:time_to_first_token_seconds_bucket", "sglang:time_to_first_token_seconds_bucket":
+		case "vllm:time_to_first_token_seconds_bucket", "sglang:time_to_first_token_seconds_bucket", "tensorfold:time_to_first_token_seconds_bucket":
 			le := labels["le"]
 			if le == "" {
 				continue
@@ -1435,13 +1449,25 @@ func scrapeVLLMMetricsURLWithClient(client *http.Client, metricsURL, apiKey stri
 			m.TTFTBuckets[le] += value
 			m.HasTTFT = true
 			m.markNativeMetric(name)
-		case "vllm:time_to_first_token_seconds_sum", "sglang:time_to_first_token_seconds_sum":
+		case "vllm:time_to_first_token_seconds_sum", "sglang:time_to_first_token_seconds_sum", "tensorfold:time_to_first_token_seconds_sum":
 			m.TTFTSum += value
 			m.HasTTFT = true
 			m.markNativeMetric(name)
-		case "vllm:time_to_first_token_seconds_count", "sglang:time_to_first_token_seconds_count":
+		case "vllm:time_to_first_token_seconds_count", "sglang:time_to_first_token_seconds_count", "tensorfold:time_to_first_token_seconds_count":
 			m.TTFTCount += value
 			m.HasTTFT = true
+			m.markNativeMetric(name)
+		case "tensorfold_health:context_length":
+			m.TensorFoldContextLength = value
+			m.HasTensorFoldContext = true
+			m.markNativeMetric(name)
+		case "tensorfold_health:streams_max":
+			m.TensorFoldStreamsMax = value
+			m.HasTensorFoldStreamsMax = true
+			m.markNativeMetric(name)
+		case "tensorfold_health:pool_tokens":
+			m.TensorFoldPoolTokens = value
+			m.HasTensorFoldPoolTokens = true
 			m.markNativeMetric(name)
 		}
 	}
@@ -1458,6 +1484,8 @@ func (m *VLLMMetrics) markNativeMetric(name string) {
 		m.HasSGLangNativeMetric = true
 	case strings.HasPrefix(name, "vllm:"):
 		m.HasVLLMNativeMetric = true
+	case strings.HasPrefix(name, "tensorfold:"), strings.HasPrefix(name, "tensorfold_health:"):
+		m.HasTensorFoldNativeMetric = true
 	}
 }
 

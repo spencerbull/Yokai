@@ -12,6 +12,45 @@ func init() {
 
 	register(
 		Config{
+			ID:          GLM53FlashEXL3TensorFoldDualGB10ID,
+			Name:        "GLM-5.3-Flash EXL3 4bpw (dual GB10 TensorFold)",
+			Workload:    WorkloadTensorFold,
+			ModelID:     GLM53FlashEXL3TensorFoldModel,
+			Image:       GLM53FlashEXL3TensorFoldImage,
+			Port:        "8888",
+			Description: "Native two-Spark TensorFold deployment driven by MiaAI-Lab's immutable upstream recipe from the head node.",
+			Source:      GLM53FlashEXL3TensorFoldRecipeRepository + "@" + GLM53FlashEXL3TensorFoldRecipeCommit,
+			Notes: []string{
+				"The head executes the pinned upstream prepare/start/stop scripts; start.sh orchestrates both ranks over passwordless SSH and must not be run independently on each member.",
+				"DFlash2 is licensed CC BY-NC-ND 4.0 for non-commercial use only; a commercial deployment must use a separately reviewed MTP recipe.",
+				"The API binds only the explicit private-LAN head address on port 8888; wildcard and loopback service bindings are rejected.",
+				"This two-node policy uses one addressed ConnectX-7 rail, full 1,048,576-token context, four concurrent requests, FP8 KV, q4 dense weights, vision, a 14.5 GiB host reserve, and a 12.5 GiB KV pool.",
+			},
+			TargetDevices:   []string{DeviceGB10},
+			MinVRAMGBPerGPU: 100,
+			MinGPUCount:     1,
+			Quantization:    "EXL3 4bpw",
+			Arch:            ArchBlackwell,
+			MultiDevice: &MultiDeviceDeployment{
+				WorldSize: 2, TensorParallelSize: 2, Backend: MultiDeviceBackendTensorFoldRecipe, Driver: MultiDeviceDriverHeadRecipe,
+				GPUsPerNode: 1, RendezvousPort: GLM53FlashEXL3TensorFoldRendezvousPort, ServicePort: GLM53FlashEXL3TensorFoldServicePort,
+				ModelRevision:   GLM53FlashEXL3TensorFoldModelRevision,
+				ServedModelName: GLM53FlashEXL3TensorFoldServedModel,
+				// The worker reservation is taken first and released last; the
+				// head recipe owns both ranks' containers.
+				LaunchOrder:          []string{MultiDeviceRoleWorker, MultiDeviceRoleHead},
+				Roles:                []MultiDeviceRole{{Name: MultiDeviceRoleHead, Rank: 0, API: true}, {Name: MultiDeviceRoleWorker, Rank: 1, API: false}},
+				RequiredCapabilities: append([]string(nil), tensorFoldRecipeCapabilities...),
+				Recipe: &MultiDeviceRecipe{
+					Repository: GLM53FlashEXL3TensorFoldRecipeRepository, Commit: GLM53FlashEXL3TensorFoldRecipeCommit,
+					ImageTag: GLM53FlashEXL3TensorFoldImageTag, ImageDigest: GLM53FlashEXL3TensorFoldImageDigest,
+					DrafterModel: GLM53FlashEXL3TensorFoldDrafter, DrafterRevision: GLM53FlashEXL3TensorFoldDrafterRevision,
+					ContextTokens: 1048576, ParallelRequests: 4, KVCache: "fp8", Dense: "q4", Drafter: "dflash2", Vision: true,
+					MemoryReserveGiB: "14.5", KVPoolGiB: "12.5", NCCLRails: 1, ReadinessTimeoutSec: 14400,
+				},
+			},
+		},
+		Config{
 			ID:       GLM53FlashNVFP4DualGB10ID,
 			Name:     "GLM-5.3-Flash NVFP4 (dual GB10 SGLang TP=2)",
 			Workload: WorkloadSGLang,

@@ -444,6 +444,136 @@ func candidateArgCount(args []string, flag string) int {
 	return count
 }
 
+func validTensorFoldRequest() CreateRequest {
+	return CreateRequest{
+		BKCID: bkc.GLM53FlashEXL3TensorFoldDualGB10ID, IdempotencyKey: "tensorfold-create-1",
+		Bindings: []Binding{
+			{Role: bkc.MultiDeviceRoleWorker, DeviceID: "beskar", FabricAddress: "192.168.201.1"},
+			{Role: bkc.MultiDeviceRoleHead, DeviceID: "kyber", FabricAddress: "192.168.201.2", ServiceAddress: "192.168.1.191", ServicePort: 8888},
+		},
+	}
+}
+
+func TestTensorFoldCreateReservesWorkerThenStartsHeadRecipe(t *testing.T) {
+	ops := &fakeOperations{}
+	engine, _, _ := newTestEngine(t, ops)
+	deployment, err := engine.Create(context.Background(), validTensorFoldRequest())
+	if err != nil {
+		t.Fatalf("create TensorFold deployment: %v", err)
+	}
+	wantEvents := []string{
+		"preflight:head", "preflight:worker", "pull:head", "pull:worker",
+		"launch:worker", "launch:head", "inspect:kyber:new-head", "inspect:beskar:new-worker", "test:kyber:new-head",
+	}
+	if !reflect.DeepEqual(ops.events, wantEvents) {
+		t.Fatalf("TensorFold transaction order mismatch\n got: %v\nwant: %v", ops.events, wantEvents)
+	}
+	if ops.testAPIKey != "" {
+		t.Fatalf("TensorFold probe received an unexpected API key: %q", ops.testAPIKey)
+	}
+	if deployment.State != StateRunning || deployment.LastTest == nil || deployment.LastTest.Model != bkc.GLM53FlashEXL3TensorFoldServedModel {
+		t.Fatalf("unexpected TensorFold deployment: %#v", deployment)
+	}
+	if deployment.Recipe == nil || deployment.Recipe.Repository != bkc.GLM53FlashEXL3TensorFoldRecipeRepository || deployment.Recipe.Commit != bkc.GLM53FlashEXL3TensorFoldRecipeCommit || deployment.Recipe.ImageDigest != bkc.GLM53FlashEXL3TensorFoldImageDigest {
+		t.Fatalf("durable TensorFold provenance is incomplete: %#v", deployment.Recipe)
+	}
+	if len(ops.candidates) != 2 || ops.candidates[0].Driver != bkc.MultiDeviceDriverHeadRecipe || ops.candidates[1].Driver != bkc.MultiDeviceDriverHeadRecipe {
+		t.Fatalf("TensorFold candidates did not use the head-recipe driver: %#v", ops.candidates)
+	}
+	head := ops.candidates[1]
+	if head.Recipe == nil || head.Recipe.WorkerDeviceID != "beskar" || head.Recipe.WorkerAddress != "192.168.201.1" || head.Recipe.HeadFabricAddress != "192.168.201.2" {
+		t.Fatalf("head recipe candidate is incomplete: %#v", head.Recipe)
+	}
+}
+
+func TestTensorFoldLifecycleUsesHeadRecipeBeforeWorkerReservation(t *testing.T) {
+	ops := &fakeOperations{}
+	engine, _, _ := newTestEngine(t, ops)
+	created, err := engine.Create(context.Background(), validTensorFoldRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ops.events = nil
+	stopped, err := engine.Stop(context.Background(), created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantStop := []string{"inspect:kyber:new-head", "stop:kyber:new-head", "inspect:beskar:new-worker", "stop:beskar:new-worker"}
+	if !reflect.DeepEqual(ops.events, wantStop) {
+		t.Fatalf("TensorFold stop order mismatch: got %v want %v", ops.events, wantStop)
+	}
+	ops.events = nil
+	started, err := engine.Start(context.Background(), stopped.ID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPrefix := []string{"inspect:beskar:new-worker", "restart:beskar:new-worker", "inspect:kyber:new-head", "restart:kyber:new-head"}
+	if len(ops.events) < len(wantPrefix) || !reflect.DeepEqual(ops.events[:len(wantPrefix)], wantPrefix) {
+		t.Fatalf("TensorFold start order mismatch: got %v want prefix %v", ops.events, wantPrefix)
+	}
+	if started.State != StateRunning {
+		t.Fatalf("TensorFold restart did not promote: %#v", started)
+	}
+}
+
+func TestTensorFoldStopKeepsWorkerReservedWhenHeadCleanupIsUncertain(t *testing.T) {
+	ops := &fakeOperations{}
+	engine, _, _ := newTestEngine(t, ops)
+	created, err := engine.Create(context.Background(), validTensorFoldRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ops.events = nil
+	ops.fail = "stop:kyber:new-head"
+	if _, err := engine.Stop(context.Background(), created.ID); err == nil {
+		t.Fatal("uncertain head cleanup unexpectedly released the deployment")
+	}
+	for _, event := range ops.events {
+		if strings.Contains(event, "beskar") {
+			t.Fatalf("worker reservation was touched after head cleanup failed: %v", ops.events)
+		}
+	}
+}
+
+func TestTensorFoldRollbackKeepsWorkerReservedWhenHeadRemovalIsUncertain(t *testing.T) {
+	ops := &fakeOperations{testFailures: 1000, fail: "remove:kyber:new-head"}
+	engine, _, _ := newTestEngine(t, ops)
+	if _, err := engine.Create(context.Background(), validTensorFoldRequest()); err == nil {
+		t.Fatal("readiness and head removal failure unexpectedly succeeded")
+	}
+	headRemovalFailed := false
+	for _, event := range ops.events {
+		if event == "remove:kyber:new-head" {
+			headRemovalFailed = true
+		}
+		if headRemovalFailed && strings.Contains(event, "beskar") && (strings.HasPrefix(event, "logs:") || strings.HasPrefix(event, "remove:")) {
+			t.Fatalf("worker reservation was released after head removal failed: %v", ops.events)
+		}
+	}
+}
+
+func TestTensorFoldReadinessRollbackStopsHeadBeforeReleasingWorker(t *testing.T) {
+	ops := &fakeOperations{testFailures: 1000}
+	engine, _, _ := newTestEngine(t, ops)
+	_, err := engine.Create(context.Background(), validTensorFoldRequest())
+	if err == nil {
+		t.Fatal("readiness failure unexpectedly promoted TensorFold deployment")
+	}
+	var cleanup []string
+	for _, event := range ops.events {
+		if strings.HasPrefix(event, "logs:") || strings.HasPrefix(event, "remove:") {
+			cleanup = append(cleanup, event)
+		}
+	}
+	want := []string{
+		"logs:kyber:new-head", "remove:kyber:new-head",
+		"logs:beskar:new-worker", "remove:beskar:new-worker",
+	}
+	if !reflect.DeepEqual(cleanup, want) {
+		t.Fatalf("TensorFold rollback released worker before head cleanup: got %v want %v", cleanup, want)
+	}
+}
+
 func TestCreateRejectsDuplicateDeviceBeforeMutation(t *testing.T) {
 	ops := &fakeOperations{}
 	engine, store, _ := newTestEngine(t, ops)

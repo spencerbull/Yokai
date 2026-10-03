@@ -23,6 +23,7 @@ const (
 	DefaultDeploymentPreflightRPCTimeout = 15 * time.Minute
 	DefaultMemberMutationRPCTimeout      = 2 * time.Minute
 	DefaultClientRequestTimeout          = 90 * time.Minute
+	TensorFoldClientRequestTimeout       = 5 * time.Hour
 	// A coordinated launch RPC outlives both the bounded docker CLI and its
 	// post-exit deterministic-name settling pass. This makes the agent response
 	// a cleanup barrier instead of allowing request cancellation to race rollback.
@@ -191,12 +192,25 @@ type Deployment struct {
 	ImageDigest            string                   `json:"image_digest,omitempty"`
 	LaunchOrder            []string                 `json:"launch_order,omitempty"`
 	RuntimePatches         []RuntimePatchProvenance `json:"runtime_patches,omitempty"`
+	Recipe                 *RecipeProvenance        `json:"recipe,omitempty"`
 	Error                  string                   `json:"error,omitempty"`
 	Rollback               *RollbackResult          `json:"rollback,omitempty"`
 	LastTest               *TestResult              `json:"last_test,omitempty"`
 	Progress               []Progress               `json:"progress,omitempty"`
 	CreatedAt              time.Time                `json:"created_at"`
 	UpdatedAt              time.Time                `json:"updated_at"`
+}
+
+type RecipeProvenance struct {
+	Repository       string `json:"repository"`
+	Commit           string `json:"commit"`
+	ImageDigest      string `json:"image_digest"`
+	ModelRevision    string `json:"model_revision"`
+	DrafterRevision  string `json:"drafter_revision"`
+	ContextTokens    int    `json:"context_tokens"`
+	ParallelRequests int    `json:"parallel_requests"`
+	KVCache          string `json:"kv_cache"`
+	Drafter          string `json:"drafter"`
 }
 
 // UnmarshalJSON keeps already-persisted singular runtime_patch provenance
@@ -239,6 +253,21 @@ type Candidate struct {
 	Devices     []string
 	CapAdd      []string
 	GPUIDs      string
+	Driver      string
+	Recipe      *RecipeCandidate
+}
+
+// RecipeCandidate carries only typed, non-secret inputs for a pinned
+// head-orchestrated recipe. The device layer resolves WorkerDeviceID to the
+// configured SSH user; no arbitrary command or environment is accepted.
+type RecipeCandidate struct {
+	Repository        string
+	Commit            string
+	WorkerDeviceID    string
+	WorkerAddress     string
+	HeadFabricAddress string
+	ServiceAddress    string
+	ServicePort       int
 }
 
 type PreflightRequest struct {
@@ -250,6 +279,8 @@ type PreflightRequest struct {
 	Head           bool
 	BKCID          string
 	ModelRevision  string
+	Driver         string
+	Recipe         *RecipeCandidate
 }
 
 type ObservedContainer struct {
