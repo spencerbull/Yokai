@@ -15,7 +15,7 @@ func handlePrometheusMetrics(w http.ResponseWriter, r *http.Request) {
 		log.Printf("warning: failed to list containers for Prometheus metrics: %v", err)
 	}
 	if activeTensorFoldResources != nil {
-		if resources, resourceErr := activeTensorFoldResources.inventory(r.Context()); resourceErr == nil {
+		if resources, resourceErr := activeTensorFoldResources.serviceInventory(r.Context()); resourceErr == nil {
 			containers = append(containers, resources...)
 		} else {
 			log.Printf("warning: failed to list TensorFold resources for Prometheus metrics: %v", resourceErr)

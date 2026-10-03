@@ -152,6 +152,7 @@ type tensorFoldManager struct {
 	serviceBaseURL      func(tensorFoldResource) string
 	beforeWaiterCleanup func()
 	sshExecutable       string
+	fenceProcesses      func(marker string) error
 }
 
 func newTensorFoldManager(root string, runner tensorFoldCommandRunner) *tensorFoldManager {
@@ -161,6 +162,7 @@ func newTensorFoldManager(root string, runner tensorFoldCommandRunner) *tensorFo
 		sshExecutable:     sshExecutable,
 		httpClient:        &http.Client{Timeout: 3 * time.Minute},
 		metricsHTTPClient: inventoryMetricsHTTPClient,
+		fenceProcesses:    fenceTensorFoldProcesses,
 		serviceBaseURL: func(resource tensorFoldResource) string {
 			return "http://" + net.JoinHostPort(resource.ServiceAddress, strconv.Itoa(resource.ServicePort))
 		},
@@ -365,6 +367,27 @@ func (m *tensorFoldManager) stopResourceLocked(ctx context.Context, resource ten
 }
 
 func (m *tensorFoldManager) joinTensorFoldLaunchLocked(ctx context.Context, resource tensorFoldResource) error {
+	if err := m.joinInMemoryLaunchLocked(ctx, resource); err != nil {
+		return err
+	}
+	return m.fenceLauncherLocked(resource.LaunchID)
+}
+
+// fenceLauncherLocked kills every local process carrying this launch's
+// marker. A launcher that outlived an agent restart is absent from
+// m.processes, and descendants can escape the process-group kill; either
+// could otherwise create fixed-name containers after cleanup.
+func (m *tensorFoldManager) fenceLauncherLocked(launchID string) error {
+	if !tensorFoldLaunchIDPattern.MatchString(launchID) {
+		return nil
+	}
+	if err := m.fenceProcesses(m.tensorFoldLaunchMarker(launchID)); err != nil {
+		return fmt.Errorf("fence TensorFold launcher: %w", err)
+	}
+	return nil
+}
+
+func (m *tensorFoldManager) joinInMemoryLaunchLocked(ctx context.Context, resource tensorFoldResource) error {
 	launch := m.processes[resource.Name]
 	if launch == nil || launch.id != resource.LaunchID {
 		return nil
@@ -534,14 +557,38 @@ func (m *tensorFoldManager) reconcile(ctx context.Context) error {
 			}
 			continue
 		}
-		expected := resource
-		resource.Status = "stopped"
-		_, _, writeErr := m.compareAndWriteResource(expected, resource)
-		if writeErr != nil {
-			joined = append(joined, writeErr)
+		if err := m.fenceAndMarkStopped(resource); err != nil {
+			joined = append(joined, fmt.Errorf("resource %s: %w", name, err))
 		}
 	}
 	return errors.Join(joined...)
+}
+
+// fenceAndMarkStopped releases a generation whose containers never appeared,
+// but only after fencing any launcher that survived an agent restart and
+// could still create them.
+func (m *tensorFoldManager) fenceAndMarkStopped(expected tensorFoldResource) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	current, err := m.readResource(expected.Name)
+	if err != nil {
+		return err
+	}
+	if !sameTensorFoldGeneration(expected, current) || !expected.UpdatedAt.Equal(current.UpdatedAt) {
+		return nil
+	}
+	if launch := m.processes[current.Name]; launch != nil && launch.id == current.LaunchID {
+		select {
+		case <-launch.done:
+		default:
+			return nil
+		}
+	}
+	if err := m.fenceLauncherLocked(current.LaunchID); err != nil {
+		return err
+	}
+	current.Status = "stopped"
+	return m.writeResource(current)
 }
 
 // A reconcile pass shells out to docker and SSH; bound it so a hung remote
@@ -667,6 +714,23 @@ func (m *tensorFoldManager) inventory(ctx context.Context) ([]Container, error) 
 		containers = append(containers, container)
 	}
 	return containers, nil
+}
+
+// serviceInventory is inventory without worker reservations. A reservation
+// holds the node for the head's recipe and serves nothing, so it must not be
+// reported as an inference service that is down.
+func (m *tensorFoldManager) serviceInventory(ctx context.Context) ([]Container, error) {
+	containers, err := m.inventory(ctx)
+	if err != nil {
+		return nil, err
+	}
+	services := containers[:0]
+	for _, container := range containers {
+		if container.Labels[LabelRole] != bkc.MultiDeviceRoleWorker {
+			services = append(services, container)
+		}
+	}
+	return services, nil
 }
 
 func (m *tensorFoldManager) observe(ctx context.Context, name string) (tensorFoldResource, error) {
@@ -929,6 +993,12 @@ func (m *tensorFoldManager) tensorFoldSSHTransportDir(launchID string) string {
 	return filepath.Join(m.root, "transports", launchID)
 }
 
+// tensorFoldLaunchMarker is the launch-unique environment entry every recipe
+// process inherits; fencing matches it exactly.
+func (m *tensorFoldManager) tensorFoldLaunchMarker(launchID string) string {
+	return "RSYNC_RSH=" + filepath.Join(m.tensorFoldSSHTransportDir(launchID), "ssh")
+}
+
 func (m *tensorFoldManager) tensorFoldSSHTransportContents(resource tensorFoldResource) (string, string, error) {
 	if !tensorFoldLaunchIDPattern.MatchString(resource.LaunchID) || m.sshExecutable == "" || !filepath.IsAbs(m.sshExecutable) {
 		return "", "", fmt.Errorf("TensorFold SSH transport has no valid launch identity or SSH executable")
@@ -1037,9 +1107,8 @@ func (m *tensorFoldManager) commandEnvironment(foreground bool, launchIDs ...str
 		"LC_ALL=C.UTF-8",
 	}
 	if len(launchIDs) == 1 && tensorFoldLaunchIDPattern.MatchString(launchIDs[0]) {
-		transportDir := m.tensorFoldSSHTransportDir(launchIDs[0])
-		path = transportDir + ":" + path
-		environment = append(environment, "RSYNC_RSH="+filepath.Join(transportDir, "ssh"))
+		path = m.tensorFoldSSHTransportDir(launchIDs[0]) + ":" + path
+		environment = append(environment, m.tensorFoldLaunchMarker(launchIDs[0]))
 	}
 	environment = append(environment, "PATH="+path)
 	if foreground {

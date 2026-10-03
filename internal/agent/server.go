@@ -265,7 +265,7 @@ func handleMetrics(w http.ResponseWriter, r *http.Request) {
 		log.Printf("warning: failed to list containers for metrics: %v", err)
 	} else {
 		if activeTensorFoldResources != nil {
-			if resources, resourceErr := activeTensorFoldResources.inventory(r.Context()); resourceErr == nil {
+			if resources, resourceErr := activeTensorFoldResources.serviceInventory(r.Context()); resourceErr == nil {
 				containers = append(containers, resources...)
 			} else {
 				log.Printf("warning: failed to list TensorFold resources for metrics: %v", resourceErr)
@@ -358,6 +358,11 @@ func mergeContainerMetrics(metricContainers []ContainerMetrics, dockerContainers
 
 func shortContainerID(id string) string {
 	id = strings.TrimSpace(id)
+	// TensorFold resource IDs are names, not Docker hex IDs; truncating them
+	// collides ranks and breaks test/log routing.
+	if strings.HasPrefix(id, tensorFoldResourceID("")) {
+		return id
+	}
 	if len(id) > 12 {
 		return id[:12]
 	}

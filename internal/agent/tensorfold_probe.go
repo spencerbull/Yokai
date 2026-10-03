@@ -167,9 +167,13 @@ func (m *tensorFoldManager) inspectRecipeContainerIdentity(ctx context.Context, 
 	if record.ID != identifier || record.Name != "/"+tensorFoldContainerName {
 		return true, record.State.Running, identifier, fmt.Errorf("container inspection identity does not match the fixed target")
 	}
-	created, timeErr := time.Parse(time.RFC3339Nano, record.Created)
-	if timeErr != nil || resource.LaunchStartedAt.IsZero() || created.Before(resource.LaunchStartedAt) {
-		return true, record.State.Running, identifier, fmt.Errorf("container creation does not belong to this launch generation")
+	// Only the head's creation time shares a clock with LaunchStartedAt. The
+	// worker's generation is proven by the launch ID marker checked below.
+	if !worker {
+		created, timeErr := time.Parse(time.RFC3339Nano, record.Created)
+		if timeErr != nil || resource.LaunchStartedAt.IsZero() || created.Before(resource.LaunchStartedAt) {
+			return true, record.State.Running, identifier, fmt.Errorf("container creation does not belong to this launch generation")
+		}
 	}
 	if record.Config.Image != bkc.GLM53FlashEXL3TensorFoldImage {
 		return true, record.State.Running, identifier, fmt.Errorf("container image is not the pinned digest")
