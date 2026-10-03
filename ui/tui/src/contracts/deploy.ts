@@ -120,6 +120,7 @@ export type MultiDeviceMetadata = {
   rendezvous_port: number
   service_port: number
   model_revision: string
+  requires_local_model?: boolean
   requires_fabric_config?: boolean
   runtime_patches?: RuntimePatchMetadata[]
   roles: Array<{ name: "head" | "worker"; rank: number; api: boolean }>

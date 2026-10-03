@@ -137,6 +137,13 @@ describe("cluster deployment bindings", () => {
     })
   })
 
+  test("requires the pre-staged snapshot when the BKC demands a local model", () => {
+    const snapshotBKC: DeployBKC = { ...fabricBKC, multi_device: { ...fabricBKC.multi_device!, requires_local_model: true } }
+    expect(validateClusterDeploymentForm({ ...fabricForm, localModelPath: " " }, snapshotBKC)).toBe("Local model path is required for this BKC")
+    expect(validateClusterDeploymentForm(fabricForm, snapshotBKC)).toBeNull()
+    expect(validateClusterDeploymentForm({ ...form, localModelPath: "" }, bkc)).toBeNull()
+  })
+
   test("reports each missing fabric-required value before submitting", () => {
     const requiredCases: Array<[keyof DeployForm, string]> = [
       ["headFabricInterface", "Head fabric interface is required"],

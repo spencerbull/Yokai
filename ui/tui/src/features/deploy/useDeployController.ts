@@ -960,6 +960,7 @@ export function validateClusterDeploymentForm(form: DeployForm, bkc: DeployBKC) 
   }
   if (!form.idempotencyKey.trim()) return "Idempotency key is required"
   if (!form.apiKey) return "API key is required"
+  if (bkc.multi_device.requires_local_model && !form.localModelPath.trim()) return "Local model path is required for this BKC"
   if (form.localModelPath.trim() && !form.localModelPath.trim().startsWith("/")) return "Local model path must be absolute"
   return null
 }
