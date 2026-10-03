@@ -40,6 +40,7 @@ type deployBKCRecord struct {
 	MinGPUCount     int                        `json:"min_gpu_count,omitempty"`
 	Quantization    string                     `json:"quantization,omitempty"`
 	Arch            string                     `json:"arch,omitempty"`
+	UseCases        []string                   `json:"use_cases,omitempty"`
 	MultiDevice     *bkc.MultiDeviceDeployment `json:"multi_device,omitempty"`
 }
 
@@ -215,6 +216,7 @@ func deployBKCRecordFromConfig(cfg bkc.Config, matchType bkc.MatchType, warning 
 		MinGPUCount:     cfg.MinGPUCount,
 		Quantization:    cfg.Quantization,
 		Arch:            cfg.Arch,
+		UseCases:        cfg.UseCases(),
 		MultiDevice:     cfg.MultiDevice,
 	}
 }

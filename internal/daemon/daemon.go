@@ -17,6 +17,7 @@ import (
 	"github.com/spencerbull/yokai/internal/bkc"
 	"github.com/spencerbull/yokai/internal/config"
 	"github.com/spencerbull/yokai/internal/deployments"
+	"github.com/spencerbull/yokai/internal/recipes"
 )
 
 // Daemon is the local background service that maintains SSH tunnels,
@@ -30,6 +31,7 @@ type Daemon struct {
 	server           *http.Server
 	deploymentStore  *deployments.Store
 	deploymentEngine *deployments.Engine
+	recipeStore      *recipes.Store
 }
 
 // Run starts the daemon and blocks until interrupted.
@@ -62,6 +64,15 @@ func Run(version string) error {
 	d.deploymentStore, err = deployments.OpenStore(deploymentPath)
 	if err != nil {
 		return fmt.Errorf("loading deployments store: %w", err)
+	}
+
+	recipePath, err := recipeStorePath()
+	if err != nil {
+		return fmt.Errorf("resolve recipe store: %w", err)
+	}
+	d.recipeStore, err = recipes.OpenStoreWithDefault(recipePath)
+	if err != nil {
+		return fmt.Errorf("loading recipe store: %w", err)
 	}
 
 	d.tunnels = NewTunnelPool(cfg)
@@ -106,6 +117,17 @@ func Run(version string) error {
 	mux.HandleFunc("GET /hf/gguf-variants", d.handleHFGGUFVariants)
 	mux.HandleFunc("GET /deploy/bkc", d.handleDeployBKC)
 	mux.HandleFunc("POST /deploy/vllm-memory-estimate", d.handleVLLMMemoryEstimate)
+	mux.HandleFunc("GET /agent/catalog", d.handleAgentCatalog)
+	mux.HandleFunc("GET /agent/topology", d.handleAgentTopology)
+	mux.HandleFunc("GET /agent/recommend", d.handleAgentRecommend)
+	mux.HandleFunc("GET /agent/recipes", d.handleAgentListRecipes)
+	mux.HandleFunc("POST /agent/recipe", d.handleAgentProposeRecipe)
+	mux.HandleFunc("GET /agent/recipe/{recipeID}", d.handleAgentGetRecipe)
+	mux.HandleFunc("PATCH /agent/recipe/{recipeID}", d.handleAgentPatchRecipe)
+	mux.HandleFunc("POST /agent/recipe/{recipeID}/validate", d.handleAgentValidateRecipe)
+	mux.HandleFunc("POST /agent/recipe/{recipeID}/verify", d.handleAgentVerifyRecipe)
+	mux.HandleFunc("POST /agent/recipe/{recipeID}/inspect", d.handleAgentInspectRecipe)
+	mux.HandleFunc("POST /agent/swap", d.handleAgentSwapRecipe)
 	mux.HandleFunc("POST /devices", d.handleCreateDevice)
 	mux.HandleFunc("PUT /devices/{deviceID}", d.handleUpdateDevice)
 	mux.HandleFunc("POST /devices/{deviceID}/test", d.handleTestDevice)
