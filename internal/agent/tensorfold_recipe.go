@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/netip"
@@ -511,13 +512,19 @@ func (m *tensorFoldManager) reconcile(ctx context.Context) error {
 		}
 		m.mu.Unlock()
 		if launchActive {
-			if time.Since(resource.LaunchStartedAt) >= time.Duration(14400)*time.Second {
-				joined = append(joined, fmt.Errorf("resource %s active preparation exceeded its readiness deadline", name))
-			}
 			localExists, localRunning, localID, localErr := m.inspectRecipeContainerIdentity(ctx, resource, false)
 			workerExists, workerRunning, workerID, workerErr := m.inspectRecipeContainerIdentity(ctx, resource, true)
 			if localErr != nil || workerErr != nil {
 				joined = append(joined, fmt.Errorf("resource %s active preparation observation: %w", name, errors.Join(localErr, workerErr)))
+				continue
+			}
+			serving := localExists && workerExists && localRunning && workerRunning
+			if !serving && time.Since(resource.LaunchStartedAt) >= tensorFoldPreparationDeadline {
+				// The coordinator owns readiness and normally rolls back first;
+				// this only frees the node when no coordinator is left to do so.
+				if err := m.stopGeneration(ctx, resource); err != nil {
+					joined = append(joined, fmt.Errorf("resource %s stop after preparation deadline: %w", name, err))
+				}
 				continue
 			}
 			expected := resource
@@ -527,7 +534,7 @@ func (m *tensorFoldManager) reconcile(ctx context.Context) error {
 			if workerExists {
 				resource.WorkerContainerID = workerID
 			}
-			if localExists && workerExists && localRunning && workerRunning {
+			if serving {
 				resource.Status = "running"
 			}
 			_, _, writeErr := m.compareAndWriteResource(expected, resource)
@@ -591,6 +598,11 @@ func (m *tensorFoldManager) fenceAndMarkStopped(expected tensorFoldResource) err
 	return m.writeResource(current)
 }
 
+// tensorFoldPreparationDeadline exceeds the BKC's four-hour readiness
+// timeout by a grace period, so the coordinator's own deadline governs
+// whenever a coordinator is still present.
+const tensorFoldPreparationDeadline = 14400*time.Second + 15*time.Minute
+
 // A reconcile pass shells out to docker and SSH; bound it so a hung remote
 // command cannot stall agent startup or supervision indefinitely.
 const tensorFoldReconcileTimeout = 2 * time.Minute
@@ -633,7 +645,20 @@ func (m *tensorFoldManager) remove(ctx context.Context, name string) error {
 	if !sameTensorFoldGeneration(resource, current) || current.Status != "stopped" {
 		return fmt.Errorf("TensorFold resource changed before removal; reservation retained")
 	}
-	return os.Remove(m.resourcePath(name))
+	if err := os.Remove(m.resourcePath(name)); err != nil {
+		return err
+	}
+	// Rollback captures the bounded tail before removal; the append-only
+	// supervisor log and launch transport would otherwise accumulate forever.
+	if err := os.Remove(m.logPath(name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		log.Printf("warning: remove TensorFold supervisor log %s: %v", name, err)
+	}
+	if tensorFoldLaunchIDPattern.MatchString(current.LaunchID) {
+		if err := os.RemoveAll(m.tensorFoldSSHTransportDir(current.LaunchID)); err != nil {
+			log.Printf("warning: remove TensorFold transport for %s: %v", name, err)
+		}
+	}
+	return nil
 }
 
 func sameTensorFoldGeneration(left, right tensorFoldResource) bool {

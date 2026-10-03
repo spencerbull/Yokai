@@ -105,6 +105,7 @@ func TestLiveOpenAIEndpointCandidatesIncludeTensorFoldHead(t *testing.T) {
 				Image:  bkc.GLM53FlashEXL3TensorFoldImage,
 				Status: "running",
 				Ports:  map[string]string{"8888": "8888"},
+				Labels: map[string]string{"io.yokai.service.address": "192.168.1.191"},
 			},
 		},
 	}
@@ -112,5 +113,9 @@ func TestLiveOpenAIEndpointCandidatesIncludeTensorFoldHead(t *testing.T) {
 	candidates := liveOpenAIEndpointCandidates(devices, map[string]map[int]struct{}{}, liveContainers)
 	if len(candidates) != 1 || candidates[0].ServiceType != "tensorfold" || candidates[0].Port != 8888 {
 		t.Fatalf("TensorFold head was not offered as an OpenAI endpoint: %#v", candidates)
+	}
+	// The recipe binds only the explicit service address, not the device host.
+	if candidates[0].Host != "192.168.1.191" {
+		t.Fatalf("discovery probes %q instead of the explicit service bind", candidates[0].Host)
 	}
 }

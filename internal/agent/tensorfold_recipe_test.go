@@ -92,6 +92,12 @@ func (r *fakeTensorFoldRunner) Run(_ context.Context, dir string, env []string, 
 	if (name == "cat" || name == "ssh") && strings.Contains(joined, "gid_attrs/ndevs/3") {
 		return []byte("enP2p1s0f0np0\n"), nil
 	}
+	if name == "cat" && strings.Contains(joined, "ports/1/gids/3") {
+		return []byte("0000:0000:0000:0000:0000:ffff:c0a8:c902\n"), nil // 192.168.201.2
+	}
+	if name == "ssh" && strings.Contains(joined, "ports/1/gids/3") {
+		return []byte("0000:0000:0000:0000:0000:ffff:c0a8:c901\n"), nil // 192.168.201.1
+	}
 	if name == "./stop.sh" {
 		r.started = false
 	}

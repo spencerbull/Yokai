@@ -292,11 +292,18 @@ func (m *tensorFoldManager) verifyTensorFoldFabric(ctx context.Context, resource
 	}
 	const typePath = "/sys/class/infiniband/roceP2p1s0f0/ports/1/gid_attrs/types/3"
 	const devicePath = "/sys/class/infiniband/roceP2p1s0f0/ports/1/gid_attrs/ndevs/3"
+	const gidPath = "/sys/class/infiniband/roceP2p1s0f0/ports/1/gids/3"
 	for _, worker := range []bool{false, true} {
+		address := resource.HeadFabricAddress
+		if worker {
+			address = resource.WorkerAddress
+		}
 		typeValue, typeErr := m.runTensorFoldNodeCommand(ctx, resource, worker, "cat", typePath)
 		deviceValue, deviceErr := m.runTensorFoldNodeCommand(ctx, resource, worker, "cat", devicePath)
-		if typeErr != nil || deviceErr != nil || strings.TrimSpace(string(typeValue)) != "RoCE v2" || strings.TrimSpace(string(deviceValue)) != "enP2p1s0f0np0" {
-			return fmt.Errorf("rank fabric must expose roceP2p1s0f0 GID 3 as IPv4 RoCE v2 on enP2p1s0f0np0")
+		gidValue, gidErr := m.runTensorFoldNodeCommand(ctx, resource, worker, "cat", gidPath)
+		if typeErr != nil || deviceErr != nil || gidErr != nil || strings.TrimSpace(string(typeValue)) != "RoCE v2" ||
+			validateFabricGIDValue("enP2p1s0f0np0", address, gidValue, deviceValue) != nil {
+			return fmt.Errorf("rank fabric must expose roceP2p1s0f0 GID 3 as IPv4 RoCE v2 for %s on enP2p1s0f0np0", address)
 		}
 	}
 	return nil

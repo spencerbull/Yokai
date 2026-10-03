@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -125,5 +126,71 @@ func TestTensorFoldWorkerOwnershipToleratesCrossHostClockSkew(t *testing.T) {
 	}
 	if _, _, _, err := manager.inspectRecipeContainerIdentity(context.Background(), head, false); err == nil || !strings.Contains(err.Error(), "launch generation") {
 		t.Fatalf("head container predating its own launch was accepted: %v", err)
+	}
+}
+
+func TestTensorFoldFabricRequiresGIDToEncodeEachNodeAddress(t *testing.T) {
+	resource := resourceFromTensorFoldRequest(validTensorFoldResourceRequest(true), "planned")
+	base := &fakeTensorFoldRunner{}
+	runner := tensorFoldRunnerFunc(func(ctx context.Context, dir string, env []string, name string, args ...string) ([]byte, error) {
+		// The worker's GID 3 carries a secondary address instead of its fabric IP.
+		if name == "ssh" && strings.Contains(strings.Join(args, " "), "ports/1/gids/3") {
+			return []byte("0000:0000:0000:0000:0000:ffff:c0a8:c909\n"), nil
+		}
+		return base.Run(ctx, dir, env, name, args...)
+	})
+	if err := newTensorFoldManager(t.TempDir(), base).verifyTensorFoldFabric(context.Background(), resource); err != nil {
+		t.Fatalf("matching GIDs were rejected: %v", err)
+	}
+	if err := newTensorFoldManager(t.TempDir(), runner).verifyTensorFoldFabric(context.Background(), resource); err == nil || !strings.Contains(err.Error(), resource.WorkerAddress) {
+		t.Fatalf("GID 3 for another address passed fabric preflight: %v", err)
+	}
+}
+
+func TestTensorFoldRemoveDeletesSupervisorLogAndTransport(t *testing.T) {
+	manager := newTensorFoldManager(t.TempDir(), noTensorFoldContainersRunner(t))
+	manager.fenceProcesses = func(string) error { return nil }
+	head := resourceFromTensorFoldRequest(validTensorFoldResourceRequest(true), "stopped")
+	if err := manager.writeResource(head); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.ensureTensorFoldSSHTransport(head); err != nil {
+		t.Fatal(err)
+	}
+	logFile, err := manager.openLog(head.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = logFile.Close()
+	if err := manager.remove(context.Background(), head.Name); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{manager.logPath(head.Name), manager.tensorFoldSSHTransportDir(head.LaunchID)} {
+		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s outlived its released reservation: %v", path, err)
+		}
+	}
+}
+
+func TestTensorFoldPreparationDeadlineStopsUnservedLaunch(t *testing.T) {
+	manager := newTensorFoldManager(t.TempDir(), noTensorFoldContainersRunner(t))
+	manager.fenceProcesses = func(string) error { return nil }
+	head := resourceFromTensorFoldRequest(validTensorFoldResourceRequest(true), "starting")
+	head.LaunchStartedAt = time.Now().Add(-tensorFoldPreparationDeadline - time.Minute).UTC()
+	stageTensorFoldExecutionFixture(t, manager, head)
+	if err := manager.writeResource(head); err != nil {
+		t.Fatal(err)
+	}
+	process := &fakeTensorFoldProcess{done: make(chan error, 1)}
+	trackTestTensorFoldProcess(t, manager, head, process)
+	if err := manager.reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if current, err := manager.inspect(head.Name); err != nil || current.Status != "stopped" {
+		t.Fatalf("hung preparation kept the node past its deadline: resource=%#v err=%v", current, err)
+	}
+
+	if tensorFoldPreparationDeadline <= 14400*time.Second {
+		t.Fatal("agent deadline must trail the coordinator's readiness timeout")
 	}
 }
