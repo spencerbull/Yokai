@@ -12,6 +12,26 @@ type operationBarrierRegistry struct {
 	active map[string]chan struct{}
 }
 
+type agentAdmissionLock struct {
+	token chan struct{}
+}
+
+func newAgentAdmissionLock() *agentAdmissionLock {
+	lock := &agentAdmissionLock{token: make(chan struct{}, 1)}
+	lock.token <- struct{}{}
+	return lock
+}
+
+func (lock *agentAdmissionLock) acquire(ctx context.Context) (func(), error) {
+	select {
+	case <-lock.token:
+		var once sync.Once
+		return func() { once.Do(func() { lock.token <- struct{}{} }) }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
 func newOperationBarrierRegistry() *operationBarrierRegistry {
 	return &operationBarrierRegistry{active: make(map[string]chan struct{})}
 }
@@ -55,3 +75,4 @@ func detachedCandidateLaunchContext(parent context.Context, timeout time.Duratio
 
 var coordinatedCandidateLaunches = newOperationBarrierRegistry()
 var containerStops = newOperationBarrierRegistry()
+var qwenGPUAdmission = newAgentAdmissionLock()

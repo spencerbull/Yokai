@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"sort"
@@ -22,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/spencerbull/yokai/internal/bkc"
 	"github.com/spencerbull/yokai/internal/config"
 	"github.com/spencerbull/yokai/internal/deployments"
 	"github.com/spencerbull/yokai/internal/plugins"
@@ -86,6 +88,7 @@ const (
 	LabelModelRevision  = "io.yokai.model.revision"
 	LabelImageDigest    = "io.yokai.image.digest"
 	LabelRuntimePatch   = "io.yokai.runtime.patch"
+	LabelSourceRevision = "io.yokai.source.revision"
 	LabelLaunchNonce    = "io.yokai.launch.nonce"
 )
 
@@ -99,6 +102,8 @@ var AgentCapabilities = []string{
 	"container.network.host",
 	"container.device_mounts",
 	"container.cap_add",
+	"deployments.fabric.v1",
+	"container.runtime_patch.qwen38_flash_next.v1",
 }
 
 // ContainerRequest represents a container deployment request.
@@ -122,6 +127,9 @@ type ContainerRequest struct {
 	NetworkMode string                `json:"network_mode,omitempty"`
 	Devices     []string              `json:"devices,omitempty"`
 	CapAdd      []string              `json:"cap_add,omitempty"`
+	Entrypoint  string                `json:"entrypoint,omitempty"`
+	// LaunchAuthorization is a coordinator-signed one-time request credential consumed by the HTTP handler and never passed to Docker.
+	LaunchAuthorization string `json:"launch_authorization,omitempty"`
 }
 
 // ContainerResponse represents a container deployment response.
@@ -249,6 +257,7 @@ var safeInventoryLabelKeys = map[string]struct{}{
 	LabelModelRevision:  {},
 	LabelImageDigest:    {},
 	LabelRuntimePatch:   {},
+	LabelSourceRevision: {},
 }
 
 func parseDockerLabels(raw string) map[string]string {
@@ -363,7 +372,9 @@ func runContainerWithContext(ctx context.Context, req ContainerRequest, cleanupD
 			if req.Volumes == nil {
 				req.Volumes = make(map[string]string)
 			}
-			ensureHFCacheVolume(req.Volumes)
+			if req.Labels[LabelBKCID] != bkc.Qwen38FlashNextNVFP4DualGB10ID {
+				ensureHFCacheVolume(req.Volumes)
+			}
 			modelArg := req.Model
 			if ggufPath != "" {
 				// vLLM 0.6+ loads GGUF directly when --model points at the
@@ -374,9 +385,11 @@ func runContainerWithContext(ctx context.Context, req ContainerRequest, cleanupD
 			}
 			req.ExtraArgs = withVLLMModelArg(req.ExtraArgs, modelArg)
 		}
-		req.Ports = normalizeServicePorts(req.Ports, "8000")
-		req.ExtraArgs = withHostArg(req.ExtraArgs, "--host", "0.0.0.0")
-		req.ExtraArgs = withVLLMToolCallArgs(req.ExtraArgs, req.Model)
+		if req.Labels[LabelBKCID] != bkc.Qwen38FlashNextNVFP4DualGB10ID {
+			req.Ports = normalizeServicePorts(req.Ports, "8000")
+			req.ExtraArgs = withHostArg(req.ExtraArgs, "--host", "0.0.0.0")
+			req.ExtraArgs = withVLLMToolCallArgs(req.ExtraArgs, req.Model)
+		}
 	}
 
 	sglangImage := isSGLangImage(req.Image)
@@ -394,7 +407,10 @@ func runContainerWithContext(ctx context.Context, req ContainerRequest, cleanupD
 	if err := applyPinnedSGLangRuntimePatch(&req); err != nil {
 		return nil, err
 	}
-	if sglangImage {
+	if err := applyPinnedQwen38RuntimePatch(ctx, &req); err != nil {
+		return nil, err
+	}
+	if sglangImage || req.Labels[LabelBKCID] == bkc.Qwen38FlashNextNVFP4DualGB10ID {
 		if err := validateContainerRuntime(req); err != nil {
 			return nil, err
 		}
@@ -405,6 +421,26 @@ func runContainerWithContext(ctx context.Context, req ContainerRequest, cleanupD
 	}
 	if err := prepareLegacyLaunchNonce(&req); err != nil {
 		return nil, err
+	}
+	if report := releaseQwen38PageCacheForLaunch(req, adviseDropPageCacheForLaunch); report.Attempted {
+		log.Printf("Qwen3.8 checkpoint page cache: %s", report.String())
+		if report.Failure != "" {
+			return nil, fmt.Errorf("validate Qwen3.8 page-cache release targets: %s", report.Failure)
+		}
+	}
+	if req.Labels[LabelBKCID] == bkc.Qwen38FlashNextNVFP4DualGB10ID {
+		releaseAdmission, err := qwenGPUAdmission.acquire(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("wait for Qwen3.8 GPU admission: %w", err)
+		}
+		defer releaseAdmission()
+		tenants, err := inspectGPUComputeTenantsForLaunch(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("verify idle GPU immediately before Qwen3.8 docker run: %w", err)
+		}
+		if len(tenants) != 0 {
+			return nil, fmt.Errorf("GPU has an active compute tenant immediately before Qwen3.8 docker run")
+		}
 	}
 
 	args := buildDockerRunArgs(req, containerName)
@@ -629,7 +665,11 @@ func buildDockerRunArgs(req ContainerRequest, containerName string) []string {
 	if restartPolicy == config.RestartPolicyDefault {
 		restartPolicy = config.RestartPolicyUnlessStopped
 	}
-	args = append(args, "--restart", string(restartPolicy), req.Image)
+	args = append(args, "--restart", string(restartPolicy))
+	if req.Entrypoint != "" {
+		args = append(args, "--entrypoint", req.Entrypoint)
+	}
+	args = append(args, req.Image)
 	if req.ExtraArgs != "" {
 		args = append(args, strings.Fields(req.ExtraArgs)...)
 	}
@@ -672,6 +712,9 @@ func validateContainerRuntime(req ContainerRequest) error {
 		if arg == "" || strings.ContainsAny(arg, "\x00\r\n") {
 			return fmt.Errorf("invalid structured container argument")
 		}
+	}
+	if req.Entrypoint != "" && (req.Entrypoint != "python3" || req.Labels[LabelBKCID] != bkc.Qwen38FlashNextNVFP4DualGB10ID) {
+		return fmt.Errorf("container entrypoint override is reserved for the pinned Qwen3.8 runtime bootstrap")
 	}
 	for key, value := range req.Labels {
 		if strings.TrimSpace(key) == "" || strings.ContainsAny(key+value, "\r\n") {
@@ -724,7 +767,101 @@ func restartContainer(idOrName string) error {
 	return restartContainerWithContext(context.Background(), idOrName)
 }
 
+type restartContainerDeps struct {
+	inspect          func(context.Context, string) (string, string, map[string]string, error)
+	qwenSnapshotPath func(context.Context, string) (string, error)
+	validateSnapshot func(string, string) error
+	qwenAdmission    func(context.Context) (func(), error)
+	computeTenants   func(context.Context) ([]gpuComputeTenant, error)
+	restart          func(context.Context, string) error
+}
+
+var liveRestartContainerDeps = restartContainerDeps{
+	inspect:          inspectContainerIdentityWithContext,
+	qwenSnapshotPath: inspectQwen38SnapshotPathWithContext,
+	validateSnapshot: validatePinnedQwenSnapshot,
+	qwenAdmission:    func(ctx context.Context) (func(), error) { return qwenGPUAdmission.acquire(ctx) },
+	computeTenants:   inspectGPUComputeTenants,
+	restart:          runDockerRestartWithContext,
+}
+
 func restartContainerWithContext(ctx context.Context, idOrName string) error {
+	return restartContainerWithDeps(ctx, idOrName, liveRestartContainerDeps)
+}
+
+func restartContainerWithDeps(ctx context.Context, idOrName string, deps restartContainerDeps) error {
+	id, _, labels, err := deps.inspect(ctx, idOrName)
+	if err != nil {
+		return fmt.Errorf("inspect container before restart: %w", err)
+	}
+	restartTarget := idOrName
+	if labels[LabelBKCID] == bkc.Qwen38FlashNextNVFP4DualGB10ID {
+		role := labels[LabelRole]
+		if role != bkc.MultiDeviceRoleHead && role != bkc.MultiDeviceRoleWorker {
+			return fmt.Errorf("refuse Qwen3.8 restart with invalid deployment role")
+		}
+		if labels[LabelModelRevision] != bkc.Qwen38FlashNextNVFP4Revision {
+			return fmt.Errorf("refuse Qwen3.8 restart without pinned model revision")
+		}
+		releaseAdmission, err := deps.qwenAdmission(ctx)
+		if err != nil {
+			return fmt.Errorf("wait for Qwen3.8 GPU admission before restart: %w", err)
+		}
+		defer releaseAdmission()
+		snapshotPath, err := deps.qwenSnapshotPath(ctx, id)
+		if err != nil {
+			return fmt.Errorf("inspect pinned Qwen3.8 snapshot before restart: %w", err)
+		}
+		if err := deps.validateSnapshot(snapshotPath, labels[LabelModelRevision]); err != nil {
+			return fmt.Errorf("verify pinned Qwen3.8 snapshot before restart: %w", err)
+		}
+		tenants, err := deps.computeTenants(ctx)
+		if err != nil {
+			return fmt.Errorf("verify idle GPU immediately before Qwen3.8 restart: %w", err)
+		}
+		if len(tenants) != 0 {
+			return fmt.Errorf("GPU has an active compute tenant immediately before Qwen3.8 restart")
+		}
+		restartTarget = id
+	}
+	return deps.restart(ctx, restartTarget)
+}
+
+func inspectQwen38SnapshotPathWithContext(ctx context.Context, id string) (string, error) {
+	output, err := exec.CommandContext(ctx, "docker", "inspect", "--format={{json .Mounts}}", id).CombinedOutput()
+	if err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return "", fmt.Errorf("docker inspect canceled: %w", contextErr)
+		}
+		return "", fmt.Errorf("docker inspect mounts failed: %w", err)
+	}
+	var mounts []struct {
+		Type        string `json:"Type"`
+		Source      string `json:"Source"`
+		Destination string `json:"Destination"`
+		RW          bool   `json:"RW"`
+	}
+	if err := json.Unmarshal(output, &mounts); err != nil {
+		return "", fmt.Errorf("decode docker container mounts: %w", err)
+	}
+	var repositoryRoot string
+	for _, mount := range mounts {
+		if mount.Destination != bkc.Qwen38FlashNextContainerRoot {
+			continue
+		}
+		clean := filepath.Clean(mount.Source)
+		if repositoryRoot != "" || mount.Type != "bind" || mount.RW || !filepath.IsAbs(clean) || clean == string(filepath.Separator) || filepath.Base(clean) != bkc.Qwen38FlashNextHFCacheDirectory {
+			return "", fmt.Errorf("container does not have one exact read-only pinned Hugging Face repository mount")
+		}
+		repositoryRoot = clean
+	}
+	if repositoryRoot == "" {
+		return "", fmt.Errorf("container is missing the pinned Hugging Face repository mount")
+	}
+	return filepath.Join(repositoryRoot, "snapshots", bkc.Qwen38FlashNextNVFP4Revision), nil
+}
+
+func runDockerRestartWithContext(ctx context.Context, idOrName string) error {
 	cmd := exec.CommandContext(ctx, "docker", "restart", idOrName)
 	if err := cmd.Run(); err != nil {
 		if contextErr := ctx.Err(); contextErr != nil {
@@ -1053,6 +1190,13 @@ func validateImagePlatform(ctx context.Context, image string) error {
 	}
 
 	if !supported {
+		if len(platforms) == 0 && strings.Contains(image, "@sha256:") {
+			// A platform-specific OCI/Docker manifest does not carry its own
+			// architecture; that lives in the referenced config blob. Pinned
+			// coordinated images are already staged, so inspect the local image
+			// instead of rejecting an immutable single-platform digest as unknown.
+			return validatePulledImageArchitecture(ctx, image)
+		}
 		return fmt.Errorf("image %s does not support host platform %s/%s (supported: %s)", image, runtime.GOOS, runtime.GOARCH, strings.Join(platforms, ", "))
 	}
 

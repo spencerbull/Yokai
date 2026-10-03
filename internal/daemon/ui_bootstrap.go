@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/spencerbull/yokai/internal/config"
 	"github.com/spencerbull/yokai/internal/docker"
+	"github.com/spencerbull/yokai/internal/launchauth"
 	"github.com/spencerbull/yokai/internal/monitoring"
 	sshpkg "github.com/spencerbull/yokai/internal/ssh"
 )
@@ -96,7 +98,13 @@ func (d *Daemon) handleBootstrapDevice(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = os.RemoveAll(filepath.Dir(binaryPath)) }()
 
-	if err := sshpkg.DeployAgent(client, binaryPath, agentToken); err != nil {
+	if len(d.coordinatorSigningKey) != ed25519.PrivateKeySize {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "coordinator_key_unavailable", "message": "coordinator signing key is not configured"})
+		return
+	}
+	coordinatorPublicKey := launchauth.EncodePublicKey(d.coordinatorSigningKey.Public().(ed25519.PublicKey))
+	device := buildDeviceFromRequest(req.deviceUpsertRequest, req.ID)
+	if err := sshpkg.DeployAgent(client, binaryPath, agentToken, device.ID, coordinatorPublicKey); err != nil {
 		log.Printf("bootstrap device %s failed: deploy agent: %v", req.Host, err)
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "agent_deploy_failed", "message": err.Error()})
 		return
@@ -114,7 +122,6 @@ func (d *Daemon) handleBootstrapDevice(w http.ResponseWriter, r *http.Request) {
 	}
 
 	nextCfg := cloneConfigCurrent(d)
-	device := buildDeviceFromRequest(req.deviceUpsertRequest, req.ID)
 	device.AgentToken = agentToken
 	device.AgentPort = req.AgentPort
 	device.MonitoringInstalled = monitoringInstalled

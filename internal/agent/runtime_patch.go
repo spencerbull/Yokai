@@ -39,6 +39,9 @@ var glm53FlashRuntimePatchSpecs = []sglangRuntimePatchSpec{
 
 func applyPinnedSGLangRuntimePatch(req *ContainerRequest) error {
 	patchLabel := strings.TrimSpace(req.Labels[LabelRuntimePatch])
+	if req.Labels[LabelBKCID] == bkc.Qwen38FlashNextNVFP4DualGB10ID && patchLabel == bkc.Qwen38RuntimePatchSetLabel() {
+		return nil
+	}
 	if patchLabel == "" {
 		if req.Labels[LabelBKCID] == bkc.GLM53FlashNVFP4DualGB10ID {
 			return fmt.Errorf("pinned GLM-5.3-Flash BKC is missing its required runtime patch label")
