@@ -11,9 +11,10 @@ import (
 type Workload string
 
 const (
-	WorkloadVLLM     Workload = "vllm"
-	WorkloadSGLang   Workload = "sglang"
-	WorkloadLlamaCpp Workload = "llamacpp"
+	WorkloadVLLM       Workload = "vllm"
+	WorkloadSGLang     Workload = "sglang"
+	WorkloadTensorFold Workload = "tensorfold"
+	WorkloadLlamaCpp   Workload = "llamacpp"
 )
 
 // Device profile tags used on BKC entries. These identify the NVIDIA/AMD GPUs
@@ -152,6 +153,30 @@ type MultiDeviceDeployment struct {
 	RuntimePatches       []MultiDeviceRuntimePatch `json:"runtime_patches,omitempty"`
 	Roles                []MultiDeviceRole         `json:"roles"`
 	RequiredCapabilities []string                  `json:"required_capabilities"`
+	Driver               string                    `json:"driver,omitempty"`
+	Recipe               *MultiDeviceRecipe        `json:"recipe,omitempty"`
+}
+
+// MultiDeviceRecipe is immutable, non-secret provenance and serving policy for
+// a trusted upstream recipe executed by the head node on behalf of the group.
+// Runtime addresses and SSH users remain deployment inputs.
+type MultiDeviceRecipe struct {
+	Repository          string `json:"repository"`
+	Commit              string `json:"commit"`
+	ImageTag            string `json:"image_tag"`
+	ImageDigest         string `json:"image_digest"`
+	DrafterModel        string `json:"drafter_model"`
+	DrafterRevision     string `json:"drafter_revision"`
+	ContextTokens       int    `json:"context_tokens"`
+	ParallelRequests    int    `json:"parallel_requests"`
+	KVCache             string `json:"kv_cache"`
+	Dense               string `json:"dense"`
+	Drafter             string `json:"drafter"`
+	Vision              bool   `json:"vision"`
+	MemoryReserveGiB    string `json:"memory_reserve_gib"`
+	KVPoolGiB           string `json:"kv_pool_gib"`
+	NCCLRails           int    `json:"nccl_rails"`
+	ReadinessTimeoutSec int    `json:"readiness_timeout_s"`
 }
 
 // MultiDeviceRuntimePatch records immutable source provenance for a narrowly
@@ -247,6 +272,10 @@ func cloneMultiDeviceConfig(cfg Config) Config {
 	metadata.RuntimePatches = append([]MultiDeviceRuntimePatch(nil), cfg.MultiDevice.RuntimePatches...)
 	metadata.Roles = append([]MultiDeviceRole(nil), cfg.MultiDevice.Roles...)
 	metadata.RequiredCapabilities = append([]string(nil), cfg.MultiDevice.RequiredCapabilities...)
+	if cfg.MultiDevice.Recipe != nil {
+		recipe := *cfg.MultiDevice.Recipe
+		metadata.Recipe = &recipe
+	}
 	cfg.MultiDevice = &metadata
 	return cfg
 }

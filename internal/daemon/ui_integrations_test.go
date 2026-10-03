@@ -1,8 +1,10 @@
 package daemon
 
 import (
+	"encoding/json"
 	"testing"
 
+	"github.com/spencerbull/yokai/internal/bkc"
 	"github.com/spencerbull/yokai/internal/config"
 )
 
@@ -89,5 +91,22 @@ func TestYokaiModelNameIncludesDeviceTag(t *testing.T) {
 	}
 	if got := yokaiModelName("model", ""); got != "model (yokai)" {
 		t.Fatalf("unexpected fallback device tag: %q", got)
+	}
+}
+
+func TestLiveOpenAIEndpointCandidatesIncludeTensorFoldHead(t *testing.T) {
+	t.Parallel()
+
+	devices := []config.Device{{ID: "dev-kyber", Label: "kyber", Host: "kyber.example"}}
+	// Decode the agent's /metrics container shape, which discovery reads
+	// from the aggregator cache.
+	var containers []agentContainerRecord
+	if err := json.Unmarshal([]byte(`[{"id":"tensorfold:yokai-deployment-d1-g1-head","name":"yokai-deployment-d1-g1-head","image":"`+bkc.GLM53FlashEXL3TensorFoldImage+`","status":"running","ports":{"8888":"8888"}}]`), &containers); err != nil {
+		t.Fatal(err)
+	}
+
+	candidates := liveOpenAIEndpointCandidates(devices, map[string]map[int]struct{}{}, map[string][]agentContainerRecord{"dev-kyber": containers})
+	if len(candidates) != 1 || candidates[0].ServiceType != "tensorfold" || candidates[0].Port != 8888 {
+		t.Fatalf("TensorFold head was not offered as an OpenAI endpoint: %#v", candidates)
 	}
 }

@@ -7,6 +7,47 @@ import (
 	"testing"
 )
 
+func TestGLM53FlashEXL3TensorFoldDualGB10Recipe(t *testing.T) {
+	cfg, ok := LookupID(GLM53FlashEXL3TensorFoldDualGB10ID)
+	if !ok {
+		t.Fatal("pinned TensorFold multi-device BKC not found")
+	}
+	if err := ValidateMultiDeviceRecipe(cfg); err != nil {
+		t.Fatalf("validate pinned TensorFold recipe: %v", err)
+	}
+	if cfg.Workload != WorkloadTensorFold {
+		t.Fatalf("workload = %q, want %q", cfg.Workload, WorkloadTensorFold)
+	}
+	if cfg.ModelID != GLM53FlashEXL3TensorFoldModel || cfg.Image != GLM53FlashEXL3TensorFoldImage {
+		t.Fatalf("immutable model/image provenance drifted: model=%q image=%q", cfg.ModelID, cfg.Image)
+	}
+	md := cfg.MultiDevice
+	if md == nil || md.Driver != MultiDeviceDriverHeadRecipe || md.Backend != MultiDeviceBackendTensorFoldRecipe {
+		t.Fatalf("unexpected TensorFold orchestration metadata: %#v", md)
+	}
+	if md.Recipe == nil {
+		t.Fatal("TensorFold recipe provenance is missing")
+	}
+	if md.Recipe.Repository != GLM53FlashEXL3TensorFoldRecipeRepository || md.Recipe.Commit != GLM53FlashEXL3TensorFoldRecipeCommit {
+		t.Fatalf("recipe provenance drifted: %#v", md.Recipe)
+	}
+	if md.Recipe.ImageDigest != GLM53FlashEXL3TensorFoldImageDigest || md.Recipe.DrafterRevision != GLM53FlashEXL3TensorFoldDrafterRevision {
+		t.Fatalf("image/drafter provenance drifted: %#v", md.Recipe)
+	}
+	if md.WorldSize != 2 || md.TensorParallelSize != 2 || md.ServicePort != 8888 || cfg.Port != "8888" {
+		t.Fatalf("topology or service port drifted: %#v", md)
+	}
+	if md.Recipe.ContextTokens != 1048576 || md.Recipe.ParallelRequests != 4 || md.Recipe.KVCache != "fp8" || md.Recipe.Dense != "q4" || md.Recipe.Drafter != "dflash2" || !md.Recipe.Vision {
+		t.Fatalf("serving policy drifted: %#v", md.Recipe)
+	}
+	if md.Recipe.MemoryReserveGiB != "14.5" || md.Recipe.KVPoolGiB != "12.5" || md.Recipe.NCCLRails != 1 {
+		t.Fatalf("memory or single-rail policy drifted: %#v", md.Recipe)
+	}
+	if !strings.Contains(strings.ToLower(strings.Join(cfg.Notes, " ")), "non-commercial") {
+		t.Fatalf("DFlash2 non-commercial notice missing: %#v", cfg.Notes)
+	}
+}
+
 func TestGLM53FlashNVFP4DualGB10Recipe(t *testing.T) {
 	cfg, ok := LookupID(GLM53FlashNVFP4DualGB10ID)
 	if !ok {

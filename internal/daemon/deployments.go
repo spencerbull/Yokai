@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -248,6 +249,33 @@ type deploymentLaunchPayload struct {
 	LaunchAuthorization string                `json:"launch_authorization,omitempty"`
 }
 
+type tensorFoldResourcePayload struct {
+	Name              string `json:"name"`
+	DeploymentID      string `json:"deployment_id"`
+	Generation        int    `json:"generation"`
+	Role              string `json:"role"`
+	WorkerUser        string `json:"worker_user,omitempty"`
+	WorkerAddress     string `json:"worker_address,omitempty"`
+	HeadFabricAddress string `json:"head_fabric_address,omitempty"`
+	ServiceAddress    string `json:"service_address,omitempty"`
+	ServicePort       int    `json:"service_port,omitempty"`
+	Repository        string `json:"repository"`
+	Commit            string `json:"commit"`
+}
+
+type tensorFoldAgentResource struct {
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Status       string `json:"status"`
+	Ownership    string `json:"ownership"`
+	Managed      bool   `json:"managed"`
+	DeploymentID string `json:"deployment_id"`
+	Generation   int    `json:"generation"`
+	Role         string `json:"role"`
+}
+
+var tensorFoldResourceNamePattern = regexp.MustCompile(`^yokai-deployment-(.+)-g([1-9][0-9]*)-(head|worker)$`)
+
 func (ops *daemonDeploymentOperations) Preflight(ctx context.Context, request deployments.PreflightRequest, requiredCapabilities, targetDevices []string) error {
 	binding := request.Binding
 	d := ops.daemon
@@ -322,6 +350,37 @@ func (ops *daemonDeploymentOperations) Preflight(ctx context.Context, request de
 	if err := ops.postJSON(ctx, binding.DeviceID, "/deployments/preflight", payload, nil, deployments.DefaultDeploymentPreflightRPCTimeout); err != nil {
 		return classifyAgentPreflightError(err)
 	}
+	if request.Driver == bkc.MultiDeviceDriverHeadRecipe {
+		if request.Recipe == nil {
+			return deployments.WrapError(deployments.ErrorValidation, "TensorFold preflight", fmt.Errorf("recipe metadata is missing"))
+		}
+		deploymentID, generation, role, err := parseTensorFoldResourceName(request.CandidateName)
+		if err != nil || role != binding.Role {
+			return deployments.WrapError(deployments.ErrorValidation, "TensorFold preflight", fmt.Errorf("candidate identity is inconsistent"))
+		}
+		recipePayload := tensorFoldResourcePayload{
+			Name: request.CandidateName, DeploymentID: deploymentID, Generation: generation, Role: role,
+			Repository: request.Recipe.Repository, Commit: request.Recipe.Commit,
+		}
+		if request.Head {
+			d.mu.RLock()
+			worker := d.cfg.FindDevice(request.Recipe.WorkerDeviceID)
+			if worker == nil {
+				d.mu.RUnlock()
+				return deployments.WrapError(deployments.ErrorValidation, "TensorFold preflight", fmt.Errorf("worker device is not configured"))
+			}
+			workerCopy := *worker
+			d.mu.RUnlock()
+			recipePayload.WorkerUser = workerCopy.SSHUser
+			recipePayload.WorkerAddress = request.Recipe.WorkerAddress
+			recipePayload.HeadFabricAddress = request.Recipe.HeadFabricAddress
+			recipePayload.ServiceAddress = request.Recipe.ServiceAddress
+			recipePayload.ServicePort = request.Recipe.ServicePort
+		}
+		if err := ops.postJSON(ctx, binding.DeviceID, "/deployments/tensorfold/preflight", recipePayload, nil, deployments.DefaultDeploymentPreflightRPCTimeout); err != nil {
+			return classifyAgentPreflightError(err)
+		}
+	}
 	return nil
 }
 
@@ -368,10 +427,30 @@ func classifyAgentPreflightDependency(operation string, err error) error {
 }
 
 func (ops *daemonDeploymentOperations) Pull(ctx context.Context, binding deployments.Binding, image string) error {
+	if image == bkc.GLM53FlashEXL3TensorFoldImage {
+		return nil
+	}
 	return deploymentAgentOperationError("pull candidate image", ops.postJSON(ctx, binding.DeviceID, "/images/pull", map[string]string{"image": image}, nil, deployments.DefaultImagePullRPCTimeout), false)
 }
 
 func (ops *daemonDeploymentOperations) Inspect(ctx context.Context, deviceID, containerID string) (deployments.ObservedContainer, error) {
+	if strings.HasPrefix(containerID, "tensorfold:") {
+		resource, err := ops.getTensorFoldResource(ctx, deviceID, strings.TrimPrefix(containerID, "tensorfold:"))
+		if err != nil {
+			return deployments.ObservedContainer{}, deploymentAgentOperationError("inspect TensorFold resource", err, true)
+		}
+		return observedTensorFoldResource(resource), nil
+	}
+	if tensorFoldResourceNamePattern.MatchString(containerID) {
+		resource, resourceErr := ops.getTensorFoldResource(ctx, deviceID, containerID)
+		if resourceErr == nil {
+			return observedTensorFoldResource(resource), nil
+		}
+		var responseErr *agentHTTPError
+		if !errors.As(resourceErr, &responseErr) || responseErr.Status != http.StatusNotFound {
+			return deployments.ObservedContainer{}, deploymentAgentOperationError("inspect TensorFold resource", resourceErr, true)
+		}
+	}
 	var inventory agentInventory
 	if err := ops.getJSON(ctx, deviceID, "/containers?scope=all", &inventory); err != nil {
 		return deployments.ObservedContainer{}, deploymentAgentOperationError("read agent container inventory", err, true)
@@ -426,10 +505,16 @@ func (ops *daemonDeploymentOperations) Stop(ctx context.Context, deviceID, conta
 }
 
 func (ops *daemonDeploymentOperations) StopManaged(ctx context.Context, deployment deployments.Deployment, member deployments.Member) error {
+	if isTensorFoldDeployment(deployment) {
+		return ops.mutateTensorFoldResource(ctx, http.MethodPost, "/stop", member)
+	}
 	return ops.mutateDeploymentMember(ctx, http.MethodPost, "stop", deployment, member)
 }
 
 func (ops *daemonDeploymentOperations) Launch(ctx context.Context, binding deployments.Binding, candidate deployments.Candidate) (deployments.ObservedContainer, error) {
+	if candidate.Driver == bkc.MultiDeviceDriverHeadRecipe {
+		return ops.launchTensorFoldResource(ctx, binding, candidate)
+	}
 	ports := map[string]string{}
 	if candidate.Port != "" {
 		ports[candidate.Port] = candidate.Port
@@ -488,6 +573,99 @@ func launchAuthorizationPayload(payload deploymentLaunchPayload) launchauth.Requ
 	}
 }
 
+func (ops *daemonDeploymentOperations) launchTensorFoldResource(ctx context.Context, binding deployments.Binding, candidate deployments.Candidate) (deployments.ObservedContainer, error) {
+	if candidate.Recipe == nil {
+		return deployments.ObservedContainer{}, deployments.WrapError(deployments.ErrorValidation, "launch TensorFold resource", fmt.Errorf("recipe metadata is missing"))
+	}
+	deploymentID, generation, role, err := parseTensorFoldResourceName(candidate.Name)
+	if err != nil || role != candidate.Role || candidate.Labels["io.yokai.deployment.id"] != deploymentID || candidate.Labels["io.yokai.deployment.generation"] != strconv.Itoa(generation) || candidate.Labels["io.yokai.deployment.role"] != role {
+		return deployments.ObservedContainer{}, deployments.WrapError(deployments.ErrorValidation, "launch TensorFold resource", fmt.Errorf("candidate identity is inconsistent"))
+	}
+	payload := tensorFoldResourcePayload{
+		Name: candidate.Name, DeploymentID: deploymentID, Generation: generation, Role: role,
+		Repository: candidate.Recipe.Repository, Commit: candidate.Recipe.Commit,
+	}
+	if role == bkc.MultiDeviceRoleHead {
+		ops.daemon.mu.RLock()
+		worker := ops.daemon.cfg.FindDevice(candidate.Recipe.WorkerDeviceID)
+		if worker == nil {
+			ops.daemon.mu.RUnlock()
+			return deployments.ObservedContainer{}, deployments.WrapError(deployments.ErrorValidation, "launch TensorFold resource", fmt.Errorf("worker device is not configured"))
+		}
+		workerCopy := *worker
+		ops.daemon.mu.RUnlock()
+		if strings.TrimSpace(workerCopy.SSHUser) == "" {
+			return deployments.ObservedContainer{}, deployments.WrapError(deployments.ErrorValidation, "launch TensorFold resource", fmt.Errorf("worker device has no SSH user"))
+		}
+		workerName := fmt.Sprintf("yokai-deployment-%s-g%d-worker", deploymentID, generation)
+		workerResource, inspectErr := ops.getTensorFoldResource(ctx, candidate.Recipe.WorkerDeviceID, workerName)
+		if inspectErr != nil {
+			return deployments.ObservedContainer{}, deploymentAgentOperationError("verify TensorFold worker reservation", inspectErr, true)
+		}
+		if workerResource.DeploymentID != deploymentID || workerResource.Generation != generation || workerResource.Role != bkc.MultiDeviceRoleWorker || !workerResource.Managed || workerResource.Ownership != "managed" {
+			return deployments.ObservedContainer{}, deployments.WrapError(deployments.ErrorConflict, "verify TensorFold worker reservation", fmt.Errorf("worker reservation identity mismatch"))
+		}
+		payload.WorkerUser = workerCopy.SSHUser
+		payload.WorkerAddress = candidate.Recipe.WorkerAddress
+		payload.HeadFabricAddress = candidate.Recipe.HeadFabricAddress
+		payload.ServiceAddress = candidate.Recipe.ServiceAddress
+		payload.ServicePort = candidate.Recipe.ServicePort
+	}
+	var response tensorFoldAgentResource
+	launchCtx, cancel := detachedDeploymentLaunchContext(ctx)
+	defer cancel()
+	if err := ops.postJSON(launchCtx, binding.DeviceID, "/deployments/tensorfold/resources", payload, &response, deployments.DefaultCandidateLaunchRPCTimeout); err != nil {
+		return deployments.ObservedContainer{}, deploymentAgentOperationError("launch TensorFold resource", err, false)
+	}
+	if response.Name != candidate.Name || response.DeploymentID != deploymentID || response.Generation != generation || response.Role != role || !response.Managed || response.Ownership != "managed" {
+		return deployments.ObservedContainer{}, deployments.WrapError(deployments.ErrorConflict, "launch TensorFold resource", fmt.Errorf("agent returned mismatched resource identity"))
+	}
+	return observedTensorFoldResource(response), nil
+}
+
+func parseTensorFoldResourceName(name string) (string, int, string, error) {
+	matches := tensorFoldResourceNamePattern.FindStringSubmatch(name)
+	if len(matches) != 4 {
+		return "", 0, "", fmt.Errorf("invalid TensorFold resource name")
+	}
+	generation, err := strconv.Atoi(matches[2])
+	if err != nil {
+		return "", 0, "", err
+	}
+	return matches[1], generation, matches[3], nil
+}
+
+func tensorFoldResourcePath(name, suffix string) (string, error) {
+	deploymentID, generation, role, err := parseTensorFoldResourceName(name)
+	if err != nil {
+		return "", err
+	}
+	query := url.Values{}
+	query.Set("deployment_id", deploymentID)
+	query.Set("generation", strconv.Itoa(generation))
+	query.Set("role", role)
+	return "/deployments/tensorfold/resources/" + url.PathEscape(name) + suffix + "?" + query.Encode(), nil
+}
+
+func (ops *daemonDeploymentOperations) getTensorFoldResource(ctx context.Context, deviceID, name string) (tensorFoldAgentResource, error) {
+	path, err := tensorFoldResourcePath(name, "")
+	if err != nil {
+		return tensorFoldAgentResource{}, err
+	}
+	var resource tensorFoldAgentResource
+	if err := ops.getJSON(ctx, deviceID, path, &resource); err != nil {
+		return tensorFoldAgentResource{}, err
+	}
+	return resource, nil
+}
+
+func observedTensorFoldResource(resource tensorFoldAgentResource) deployments.ObservedContainer {
+	return deployments.ObservedContainer{
+		ID: resource.ID, Name: resource.Name, Status: resource.Status, Ownership: deployments.Ownership(resource.Ownership),
+		Managed: resource.Managed, Generation: resource.Generation, DeploymentID: resource.DeploymentID, Role: resource.Role,
+	}
+}
+
 func detachedDeploymentLaunchContext(parent context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.WithoutCancel(parent), deployments.DefaultCandidateLaunchRPCTimeout)
 }
@@ -523,7 +701,28 @@ func (ops *daemonDeploymentOperations) WaitRunning(ctx context.Context, deviceID
 	}
 }
 
-func (ops *daemonDeploymentOperations) Test(_ context.Context, deviceID, containerID, apiKey string) (deployments.TestResult, error) {
+func (ops *daemonDeploymentOperations) Test(ctx context.Context, deviceID, containerID, apiKey string) (deployments.TestResult, error) {
+	if strings.HasPrefix(containerID, "tensorfold:") {
+		if apiKey != "" {
+			return deployments.TestResult{}, deployments.WrapError(deployments.ErrorValidation, "test TensorFold resource", fmt.Errorf("api key is not supported"))
+		}
+		name := strings.TrimPrefix(containerID, "tensorfold:")
+		path, err := tensorFoldResourcePath(name, "/test")
+		if err != nil {
+			return deployments.TestResult{}, err
+		}
+		var result struct {
+			OK           bool   `json:"ok"`
+			MetricsReady bool   `json:"metrics_ready"`
+			Message      string `json:"message"`
+			Model        string `json:"model"`
+			Response     string `json:"response"`
+		}
+		if err := ops.postJSON(ctx, deviceID, path, nil, &result, deployments.DefaultMemberMutationRPCTimeout); err != nil {
+			return deployments.TestResult{}, deploymentAgentOperationError("test TensorFold resource", err, false)
+		}
+		return deployments.TestResult{OK: result.OK, MetricsReady: result.MetricsReady, Message: result.Message, Model: result.Model, Response: result.Response}, nil
+	}
 	result, err := ops.daemon.aggregator.TestContainerWithMetrics(deviceID, containerID, apiKey)
 	if err != nil {
 		return deployments.TestResult{}, deploymentAgentOperationError("test rank-0 service", err, false)
@@ -532,6 +731,21 @@ func (ops *daemonDeploymentOperations) Test(_ context.Context, deviceID, contain
 }
 
 func (ops *daemonDeploymentOperations) CaptureManagedLogs(ctx context.Context, deployment deployments.Deployment, member deployments.Member, exactRedaction string) (deployments.LogTailCapture, error) {
+	if isTensorFoldDeployment(deployment) {
+		path, err := tensorFoldResourcePath(member.Name, "/logs/tail")
+		if err != nil {
+			return deployments.LogTailCapture{}, err
+		}
+		var response struct {
+			Tail      string `json:"tail"`
+			Truncated bool   `json:"truncated"`
+		}
+		if err := ops.postJSON(ctx, member.DeviceID, path, nil, &response, deployments.DefaultLogCaptureRPCTimeout); err != nil {
+			return deployments.LogTailCapture{}, deploymentAgentOperationError("capture TensorFold logs", err, false)
+		}
+		tail, truncated := deployments.SanitizeLogTail(response.Tail, exactRedaction)
+		return deployments.LogTailCapture{Tail: tail, Truncated: response.Truncated || truncated}, nil
+	}
 	query := url.Values{}
 	query.Set("generation", strconv.Itoa(member.Generation))
 	query.Set("role", member.Role)
@@ -555,6 +769,14 @@ func (ops *daemonDeploymentOperations) Remove(ctx context.Context, deviceID, con
 }
 
 func (ops *daemonDeploymentOperations) RemoveManaged(ctx context.Context, deployment deployments.Deployment, member deployments.Member) error {
+	if isTensorFoldDeployment(deployment) {
+		err := ops.mutateTensorFoldResource(ctx, http.MethodDelete, "", member)
+		var responseErr *agentHTTPError
+		if errors.As(err, &responseErr) && responseErr.Status == http.StatusNotFound {
+			return nil
+		}
+		return err
+	}
 	err := ops.mutateDeploymentMember(ctx, http.MethodDelete, "", deployment, member)
 	var responseErr *agentHTTPError
 	if errors.As(err, &responseErr) && responseErr.Status == http.StatusNotFound {
@@ -568,7 +790,22 @@ func (ops *daemonDeploymentOperations) Restart(ctx context.Context, deviceID, co
 }
 
 func (ops *daemonDeploymentOperations) RestartManaged(ctx context.Context, deployment deployments.Deployment, member deployments.Member) error {
+	if isTensorFoldDeployment(deployment) {
+		return ops.mutateTensorFoldResource(ctx, http.MethodPost, "/restart", member)
+	}
 	return ops.mutateDeploymentMember(ctx, http.MethodPost, "restart", deployment, member)
+}
+
+func isTensorFoldDeployment(deployment deployments.Deployment) bool {
+	return deployment.BKCID == bkc.GLM53FlashEXL3TensorFoldDualGB10ID
+}
+
+func (ops *daemonDeploymentOperations) mutateTensorFoldResource(ctx context.Context, method, suffix string, member deployments.Member) error {
+	path, err := tensorFoldResourcePath(member.Name, suffix)
+	if err != nil {
+		return deployments.WrapError(deployments.ErrorValidation, "mutate TensorFold resource", err)
+	}
+	return deploymentAgentOperationError("mutate TensorFold resource", ops.requestJSON(ctx, method, member.DeviceID, path, nil, nil, deploymentMemberMutationTimeout(method, strings.TrimPrefix(suffix, "/"), bkc.GLM53FlashEXL3TensorFoldDualGB10ID)), false)
 }
 
 func (ops *daemonDeploymentOperations) mutateDeploymentMember(ctx context.Context, method, action string, deployment deployments.Deployment, member deployments.Member) error {

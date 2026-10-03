@@ -566,6 +566,89 @@ func TestDeploymentLaunchRPCOutlivesCallerCancellation(t *testing.T) {
 	}
 }
 
+func TestTensorFoldDaemonOperationsUseRecipeResourceAPI(t *testing.T) {
+	var requests []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		requests = append(requests, request.Method+" "+request.URL.String())
+		switch {
+		case request.Method == http.MethodPost && request.URL.Path == "/deployments/tensorfold/resources":
+			var body map[string]any
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			name, _ := body["name"].(string)
+			role, _ := body["role"].(string)
+			writeJSON(w, http.StatusCreated, map[string]any{
+				"id": "tensorfold:" + name, "name": name, "status": "running", "ownership": "managed", "managed": true,
+				"deployment_id": "dep-test", "generation": 1, "role": role,
+			})
+		case request.Method == http.MethodGet && strings.HasPrefix(request.URL.Path, "/deployments/tensorfold/resources/"):
+			writeJSON(w, http.StatusOK, map[string]any{
+				"id": "tensorfold:yokai-deployment-dep-test-g1-worker", "name": "yokai-deployment-dep-test-g1-worker",
+				"status": "running", "ownership": "managed", "managed": true, "deployment_id": "dep-test", "generation": 1, "role": "worker",
+			})
+		case request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/test"):
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "metrics_ready": true, "model": bkc.GLM53FlashEXL3TensorFoldServedModel, "response": "OK"})
+		default:
+			t.Fatalf("unexpected recipe request: %s %s", request.Method, request.URL.String())
+		}
+	}))
+	defer server.Close()
+
+	port := server.Listener.Addr().(*net.TCPAddr).Port
+	cfg := config.DefaultConfig()
+	cfg.Devices = []config.Device{{ID: "spark-a", SSHUser: "dell"}, {ID: "spark-b", SSHUser: "dell"}}
+	tunnels := NewTunnelPool(cfg)
+	for _, id := range []string{"spark-a", "spark-b"} {
+		tunnels.tunnels[id] = &tunnel{deviceID: id, localPort: port, connected: true}
+	}
+	d := &Daemon{cfg: cfg, tunnels: tunnels, aggregator: NewAggregator(cfg, tunnels)}
+	ops := &daemonDeploymentOperations{daemon: d}
+
+	worker := deployments.Candidate{
+		Name: "yokai-deployment-dep-test-g1-worker", Role: "worker", Driver: bkc.MultiDeviceDriverHeadRecipe,
+		Labels: map[string]string{"io.yokai.deployment.id": "dep-test", "io.yokai.deployment.generation": "1", "io.yokai.deployment.role": "worker"},
+		Recipe: &deployments.RecipeCandidate{Repository: bkc.GLM53FlashEXL3TensorFoldRecipeRepository, Commit: bkc.GLM53FlashEXL3TensorFoldRecipeCommit},
+	}
+	workerObserved, err := ops.Launch(context.Background(), deployments.Binding{DeviceID: "spark-b", Role: "worker"}, worker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if workerObserved.ID != "tensorfold:"+worker.Name || !workerObserved.Managed || workerObserved.Role != "worker" {
+		t.Fatalf("worker resource launch mismatch: %#v", workerObserved)
+	}
+
+	head := deployments.Candidate{
+		Name: "yokai-deployment-dep-test-g1-head", Role: "head", Driver: bkc.MultiDeviceDriverHeadRecipe,
+		Labels: map[string]string{"io.yokai.deployment.id": "dep-test", "io.yokai.deployment.generation": "1", "io.yokai.deployment.role": "head"},
+		Recipe: &deployments.RecipeCandidate{
+			Repository: bkc.GLM53FlashEXL3TensorFoldRecipeRepository, Commit: bkc.GLM53FlashEXL3TensorFoldRecipeCommit,
+			WorkerDeviceID: "spark-b", WorkerAddress: "192.168.201.1", HeadFabricAddress: "192.168.201.2", ServiceAddress: "192.168.1.191", ServicePort: 8888,
+		},
+	}
+	headObserved, err := ops.Launch(context.Background(), deployments.Binding{DeviceID: "spark-a", Role: "head"}, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if headObserved.ID != "tensorfold:"+head.Name || headObserved.Role != "head" {
+		t.Fatalf("head resource launch mismatch: %#v", headObserved)
+	}
+	result, err := ops.Test(context.Background(), "spark-a", headObserved.ID, "")
+	if err != nil || !result.OK || !result.MetricsReady {
+		t.Fatalf("resource readiness dispatch mismatch: result=%#v err=%v", result, err)
+	}
+
+	want := []string{
+		"POST /deployments/tensorfold/resources",
+		"GET /deployments/tensorfold/resources/yokai-deployment-dep-test-g1-worker?deployment_id=dep-test&generation=1&role=worker",
+		"POST /deployments/tensorfold/resources",
+		"POST /deployments/tensorfold/resources/yokai-deployment-dep-test-g1-head/test?deployment_id=dep-test&generation=1&role=head",
+	}
+	if strings.Join(requests, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("recipe dispatch order mismatch:\n%s", strings.Join(requests, "\n"))
+	}
+}
+
 func TestDaemonCapturesManagedLogTailWithTransientRedaction(t *testing.T) {
 	const (
 		deviceID = "spark-a"

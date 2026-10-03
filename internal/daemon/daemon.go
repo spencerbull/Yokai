@@ -564,6 +564,8 @@ func inferServiceType(image, name string) string {
 		return "vllm"
 	case strings.Contains(haystack, "sglang"):
 		return "sglang"
+	case strings.Contains(haystack, "tensorfold"):
+		return "tensorfold"
 	case strings.Contains(haystack, "llama"):
 		return "llamacpp"
 	case strings.Contains(haystack, "comfy"):

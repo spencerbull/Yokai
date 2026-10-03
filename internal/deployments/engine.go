@@ -119,6 +119,7 @@ func (e *Engine) CreateWithOutcome(ctx context.Context, request CreateRequest) (
 		Bindings: cloneBindings(ordered), PreviousMembers: previous, UsesLocalModelSnapshot: request.LocalModelPath != "",
 		RecipeSource: cfg.Source, RecipeRevision: cfg.MultiDevice.SourceRevision, ModelRevision: cfg.MultiDevice.ModelRevision,
 		ImageDigest: pinnedImageDigest(cfg.Image), LaunchOrder: recipeLaunchOrder(cfg), RuntimePatches: runtimePatchProvenance(cfg),
+		Recipe:    recipeProvenance(cfg),
 		CreatedAt: now, UpdatedAt: now,
 	}
 	for _, binding := range ordered {
@@ -127,10 +128,11 @@ func (e *Engine) CreateWithOutcome(ctx context.Context, request CreateRequest) (
 	}
 
 	for index, binding := range ordered {
+		candidate := buildCandidate(deployment, request, cfg, binding, ordered[0].FabricAddress)
 		preflight := PreflightRequest{
 			Binding: binding, CandidateName: deployment.Members[index].Name, LocalModelPath: request.LocalModelPath,
 			ServicePort: cfg.MultiDevice.ServicePort, RendezvousPort: cfg.MultiDevice.RendezvousPort, Head: binding.Role == bkc.MultiDeviceRoleHead,
-			BKCID: cfg.ID, ModelRevision: cfg.MultiDevice.ModelRevision,
+			BKCID: cfg.ID, ModelRevision: cfg.MultiDevice.ModelRevision, Driver: candidate.Driver, Recipe: candidate.Recipe,
 		}
 		if preflightErr := e.Ops.Preflight(ctx, preflight, cfg.MultiDevice.RequiredCapabilities, cfg.TargetDevices); preflightErr != nil {
 			kind := ErrorKindOf(preflightErr)
@@ -191,7 +193,7 @@ func (e *Engine) CreateWithOutcome(ctx context.Context, request CreateRequest) (
 	if err := e.persistProgress(&deployment, PhaseReadiness, "readiness", "", "started", "waiting for both ranks and semantic gates"); err != nil {
 		return e.createRollback(ctx, deployment, err, "persist readiness intent failed", request.APIKey)
 	}
-	readyMembers, testResult, readyErr := e.waitReady(ctx, deployment.Members, request.APIKey, expectedModel(cfg, request.LocalModelPath != ""))
+	readyMembers, testResult, readyErr := e.waitReady(ctx, deployment.Members, request.APIKey, expectedModel(cfg, request.LocalModelPath != ""), deployment.BKCID)
 	deployment.Members = readyMembers
 	if readyErr != nil {
 		return e.createRollback(ctx, deployment, readinessOperationError(readyErr), "candidate readiness failed", request.APIKey)
@@ -227,12 +229,12 @@ func (e *Engine) Get(id string) (Deployment, error) { return e.Store.Get(id) }
 func (e *Engine) Test(ctx context.Context, id, apiKey string) (Deployment, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if err := validateAPIKey(apiKey); err != nil {
-		return Deployment{}, WrapError(ErrorValidation, "validate api key", err)
-	}
 	deployment, err := e.Store.Get(id)
 	if err != nil {
 		return Deployment{}, err
+	}
+	if err := validateDeploymentAPIKey(deployment.BKCID, apiKey); err != nil {
+		return Deployment{}, WrapError(ErrorValidation, "validate api key", err)
 	}
 	head, ok := memberByRole(deployment.Members, bkc.MultiDeviceRoleHead)
 	if !ok {
@@ -282,6 +284,9 @@ func (e *Engine) stopLocked(ctx context.Context, deployment Deployment) (Deploym
 	var stopErrors []string
 	for _, index := range reverseLaunchMemberIndexes(deployment) {
 		member := deployment.Members[index]
+		if isHeadRecipeBKC(deployment.BKCID) && member.Role == bkc.MultiDeviceRoleWorker && len(stopErrors) > 0 {
+			break
+		}
 		if member.Ownership == OwnershipObserved {
 			stopErrors = append(stopErrors, "refused observed "+member.Role)
 			continue
@@ -327,12 +332,12 @@ func (e *Engine) stopLocked(ctx context.Context, deployment Deployment) (Deploym
 func (e *Engine) Start(ctx context.Context, id, apiKey string) (Deployment, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if err := validateAPIKey(apiKey); err != nil {
-		return Deployment{}, WrapError(ErrorValidation, "validate api key", err)
-	}
 	deployment, err := e.Store.Get(id)
 	if err != nil {
 		return Deployment{}, err
+	}
+	if err := validateDeploymentAPIKey(deployment.BKCID, apiKey); err != nil {
+		return Deployment{}, WrapError(ErrorValidation, "validate api key", err)
 	}
 	if deployment.State == StateRunning {
 		needsRecovery := false
@@ -420,7 +425,7 @@ func (e *Engine) Start(ctx context.Context, id, apiKey string) (Deployment, erro
 	if err != nil {
 		return e.failStart(ctx, deployment, err)
 	}
-	readyMembers, result, readyErr := e.waitReady(ctx, deployment.Members, apiKey, expected)
+	readyMembers, result, readyErr := e.waitReady(ctx, deployment.Members, apiKey, expected, deployment.BKCID)
 	deployment.Members = readyMembers
 	if readyErr != nil {
 		return e.failStart(ctx, deployment, readinessOperationError(readyErr))
@@ -451,6 +456,9 @@ func (e *Engine) failStart(ctx context.Context, deployment Deployment, cause err
 	var stopErrors []string
 	for _, index := range reverseLaunchMemberIndexes(deployment) {
 		member := deployment.Members[index]
+		if isHeadRecipeBKC(deployment.BKCID) && member.Role == bkc.MultiDeviceRoleWorker && len(stopErrors) > 0 {
+			break
+		}
 		observed, inspectErr := e.Ops.Inspect(cleanupCtx, member.DeviceID, memberLocator(member))
 		if inspectErr != nil || validateManagedMemberIdentity(deployment, member, observed) != nil {
 			stopErrors = append(stopErrors, member.Role)
@@ -602,9 +610,23 @@ func (e *Engine) rollbackLocked(ctx context.Context, deployment Deployment, safe
 		return deployment, WrapError(ErrorDependency, "persist rollback intent", err)
 	}
 
+	// A head recipe's stop removes every rank's container, so capture all rank
+	// logs before the first removal instead of interleaving capture and removal.
+	headRecipe := isHeadRecipeBKC(deployment.BKCID)
+	if headRecipe {
+		for _, member := range deployment.Members {
+			if candidateMayExist(member.Status) && member.Ownership != OwnershipObserved {
+				e.captureCandidateLogs(ctx, &deployment, result, member, exactRedaction)
+			}
+		}
+	}
+
 	candidatesSafe := true
 	for _, index := range reverseLaunchMemberIndexes(deployment) {
 		member := deployment.Members[index]
+		if headRecipe && member.Role == bkc.MultiDeviceRoleWorker && !candidatesSafe {
+			break
+		}
 		if !candidateMayExist(member.Status) {
 			continue
 		}
@@ -618,7 +640,11 @@ func (e *Engine) rollbackLocked(ctx context.Context, deployment Deployment, safe
 			candidatesSafe = false
 			continue
 		}
-		observed, inspectErr := e.Ops.Inspect(ctx, member.DeviceID, member.Name)
+		selector := member.Name
+		if headRecipe {
+			selector = memberLocator(member)
+		}
+		observed, inspectErr := e.Ops.Inspect(ctx, member.DeviceID, selector)
 		if inspectErr != nil && !errors.Is(inspectErr, ErrContainerNotFound) {
 			result.Errors = append(result.Errors, "inspect "+member.Role+" candidate failed")
 			candidatesSafe = false
@@ -632,33 +658,9 @@ func (e *Engine) rollbackLocked(ctx context.Context, deployment Deployment, safe
 			}
 			member.ContainerID = observed.ID
 		}
-		memberRedaction := ""
-		if member.Role == bkc.MultiDeviceRoleHead {
-			memberRedaction = exactRedaction
+		if !headRecipe {
+			e.captureCandidateLogs(ctx, &deployment, result, member, exactRedaction)
 		}
-		capture, captureErr := e.Ops.CaptureManagedLogs(ctx, deployment, member, memberRedaction)
-		logTail := RankLogTail{
-			Role: member.Role, Rank: member.Rank, DeviceID: member.DeviceID,
-			ContainerID: member.ContainerID, Name: member.Name, CapturedAt: e.Now().UTC(),
-		}
-		if captureErr != nil {
-			logTail.Status = "failed"
-			logTail.Error, _ = SanitizeLogTail(captureErr.Error(), exactRedaction)
-		} else {
-			logTail.Status = "captured"
-			logTail.Tail, logTail.Truncated = SanitizeLogTail(capture.Tail, exactRedaction)
-			logTail.Truncated = logTail.Truncated || capture.Truncated
-		}
-		result.LogTails = upsertRankLogTail(result.LogTails, logTail)
-		deployment.Rollback = result
-		captureStatus := logTail.Status
-		captureDetail := "bounded candidate log tail captured"
-		if captureErr != nil {
-			captureDetail = "bounded candidate log tail capture failed; removal will continue"
-		}
-		// Log capture is diagnostic and best effort. A capture or journal failure
-		// must never block the cleanup barrier or previous-service restoration.
-		_ = e.persistProgress(&deployment, PhaseRollback, "capture_candidate_logs", member.Role, captureStatus, captureDetail)
 		// Always cross the provenance-aware agent deletion endpoint, including
 		// when the preceding read observed absence. That endpoint is also the
 		// completion barrier for an in-flight ambiguous docker run of this exact
@@ -755,6 +757,36 @@ func (e *Engine) rollbackLocked(ctx context.Context, deployment Deployment, safe
 	return deployment, nil
 }
 
+// captureCandidateLogs records a bounded, sanitized log tail for one candidate.
+// Log capture is diagnostic and best effort. A capture or journal failure must
+// never block the cleanup barrier or previous-service restoration.
+func (e *Engine) captureCandidateLogs(ctx context.Context, deployment *Deployment, result *RollbackResult, member Member, exactRedaction string) {
+	memberRedaction := ""
+	if member.Role == bkc.MultiDeviceRoleHead {
+		memberRedaction = exactRedaction
+	}
+	capture, captureErr := e.Ops.CaptureManagedLogs(ctx, *deployment, member, memberRedaction)
+	logTail := RankLogTail{
+		Role: member.Role, Rank: member.Rank, DeviceID: member.DeviceID,
+		ContainerID: member.ContainerID, Name: member.Name, CapturedAt: e.Now().UTC(),
+	}
+	if captureErr != nil {
+		logTail.Status = "failed"
+		logTail.Error, _ = SanitizeLogTail(captureErr.Error(), exactRedaction)
+	} else {
+		logTail.Status = "captured"
+		logTail.Tail, logTail.Truncated = SanitizeLogTail(capture.Tail, exactRedaction)
+		logTail.Truncated = logTail.Truncated || capture.Truncated
+	}
+	result.LogTails = upsertRankLogTail(result.LogTails, logTail)
+	deployment.Rollback = result
+	captureDetail := "bounded candidate log tail captured"
+	if captureErr != nil {
+		captureDetail = "bounded candidate log tail capture failed; removal will continue"
+	}
+	_ = e.persistProgress(deployment, PhaseRollback, "capture_candidate_logs", member.Role, logTail.Status, captureDetail)
+}
+
 func validateManagedMemberIdentity(deployment Deployment, member Member, observed ObservedContainer) error {
 	if member.Ownership != OwnershipManaged || !observed.Managed || observed.Ownership != OwnershipManaged {
 		return fmt.Errorf("%s member is not managed by Yokai", member.Role)
@@ -799,10 +831,15 @@ func upsertRankLogTail(existing []RankLogTail, value RankLogTail) []RankLogTail 
 	return append(existing, value)
 }
 
-func (e *Engine) waitReady(ctx context.Context, members []Member, apiKey, expectedModelID string) ([]Member, TestResult, error) {
+func (e *Engine) waitReady(ctx context.Context, members []Member, apiKey, expectedModelID, bkcID string) ([]Member, TestResult, error) {
 	timeout := e.ReadinessTimeout
 	if timeout <= 0 {
 		timeout = DefaultReadinessTimeout
+	}
+	if timeout == DefaultReadinessTimeout {
+		if cfg, ok := bkc.LookupID(bkcID); ok && cfg.MultiDevice != nil && cfg.MultiDevice.Recipe != nil && cfg.MultiDevice.Recipe.ReadinessTimeoutSec > 0 {
+			timeout = time.Duration(cfg.MultiDevice.Recipe.ReadinessTimeoutSec) * time.Second
+		}
 	}
 	interval := e.ReadinessInterval
 	if interval <= 0 {
@@ -829,7 +866,7 @@ func (e *Engine) waitReady(ctx context.Context, members []Member, apiKey, expect
 			}
 			switch observed.Status {
 			case "running":
-			case "stopped", "exited", "dead":
+			case "stopped", "exited", "dead", "failed":
 				return members, TestResult{}, fmt.Errorf("%s rank exited during readiness", members[index].Role)
 			default:
 				allRunning = false
@@ -964,9 +1001,6 @@ func validateCreateRequest(request CreateRequest) (bkc.Config, error) {
 	if strings.IndexFunc(request.IdempotencyKey, unicode.IsControl) >= 0 {
 		return bkc.Config{}, fmt.Errorf("idempotency_key contains control characters")
 	}
-	if err := validateAPIKey(request.APIKey); err != nil {
-		return bkc.Config{}, err
-	}
 	if request.LocalModelPath != "" {
 		clean := filepath.Clean(request.LocalModelPath)
 		if !filepath.IsAbs(clean) || clean == string(filepath.Separator) || clean != request.LocalModelPath {
@@ -987,6 +1021,16 @@ func validateCreateRequest(request CreateRequest) (bkc.Config, error) {
 		if filepath.Base(request.LocalModelPath) != cfg.MultiDevice.ModelRevision || filepath.Base(filepath.Dir(request.LocalModelPath)) != "snapshots" || filepath.Base(filepath.Dir(filepath.Dir(request.LocalModelPath))) != bkc.Qwen38FlashNextHFCacheDirectory {
 			return bkc.Config{}, fmt.Errorf("local_model_path must be the standard Hugging Face cache snapshot for revision %s", cfg.MultiDevice.ModelRevision)
 		}
+	}
+	if cfg.Workload == bkc.WorkloadTensorFold {
+		if request.APIKey != "" {
+			return bkc.Config{}, fmt.Errorf("api_key is not supported by the pinned TensorFold recipe")
+		}
+		if request.LocalModelPath != "" {
+			return bkc.Config{}, fmt.Errorf("local_model_path is not supported by the pinned TensorFold recipe; it owns exact offline snapshot paths")
+		}
+	} else if err := validateAPIKey(request.APIKey); err != nil {
+		return bkc.Config{}, err
 	}
 	if len(request.Bindings) != len(cfg.MultiDevice.Roles) {
 		return bkc.Config{}, fmt.Errorf("exactly %d role bindings are required", len(cfg.MultiDevice.Roles))
@@ -1198,12 +1242,48 @@ func buildCandidate(deployment Deployment, request CreateRequest, cfg bkc.Config
 		runtime.ShmSize = ""
 		capAdd = []string{"SYS_NICE"}
 	}
-	return Candidate{
+	candidate := Candidate{
 		Role: binding.Role, Rank: rank, Name: fmt.Sprintf("yokai-deployment-%s-g%d-%s", deployment.ID, deployment.Generation, binding.Role),
 		Image: cfg.Image, Model: model, Port: cfg.Port, ExtraArgs: args, Args: structuredArgs,
 		Env: env, Volumes: volumes, Runtime: runtime, Labels: labels,
 		NetworkMode: "host", Devices: []string{"/dev/infiniband:/dev/infiniband"}, CapAdd: capAdd, GPUIDs: "0",
 	}
+	if cfg.MultiDevice.Driver == bkc.MultiDeviceDriverHeadRecipe {
+		candidate.Driver = bkc.MultiDeviceDriverHeadRecipe
+		candidate.Model = bkc.GLM53FlashEXL3TensorFoldServedModel
+		candidate.ExtraArgs = ""
+		candidate.Args = nil
+		candidate.Env = nil
+		candidate.Volumes = nil
+		candidate.NetworkMode = ""
+		candidate.Devices = nil
+		candidate.CapAdd = nil
+		candidate.GPUIDs = ""
+		candidate.Recipe = &RecipeCandidate{
+			Repository: cfg.MultiDevice.Recipe.Repository, Commit: cfg.MultiDevice.Recipe.Commit,
+			WorkerDeviceID:    bindingByRole(request.Bindings, bkc.MultiDeviceRoleWorker).DeviceID,
+			WorkerAddress:     bindingByRole(request.Bindings, bkc.MultiDeviceRoleWorker).FabricAddress,
+			HeadFabricAddress: bindingByRole(request.Bindings, bkc.MultiDeviceRoleHead).FabricAddress,
+			ServiceAddress:    bindingByRole(request.Bindings, bkc.MultiDeviceRoleHead).ServiceAddress,
+			ServicePort:       cfg.MultiDevice.ServicePort,
+		}
+	}
+	return candidate
+}
+
+func isHeadRecipeBKC(id string) bool {
+	cfg, ok := bkc.LookupID(id)
+	return ok && cfg.MultiDevice != nil && cfg.MultiDevice.Driver == bkc.MultiDeviceDriverHeadRecipe
+}
+
+func validateDeploymentAPIKey(bkcID, apiKey string) error {
+	if isHeadRecipeBKC(bkcID) {
+		if apiKey != "" {
+			return fmt.Errorf("api_key is not supported by the pinned TensorFold recipe")
+		}
+		return nil
+	}
+	return validateAPIKey(apiKey)
 }
 
 func renderCandidateArgs(args []string, headAddress, serviceAddress string) []string {
@@ -1238,6 +1318,19 @@ func runtimePatchProvenance(cfg bkc.Config) []RuntimePatchProvenance {
 	return provenance
 }
 
+func recipeProvenance(cfg bkc.Config) *RecipeProvenance {
+	if cfg.MultiDevice == nil || cfg.MultiDevice.Recipe == nil {
+		return nil
+	}
+	recipe := cfg.MultiDevice.Recipe
+	return &RecipeProvenance{
+		Repository: recipe.Repository, Commit: recipe.Commit, ImageDigest: recipe.ImageDigest,
+		ModelRevision: cfg.MultiDevice.ModelRevision, DrafterRevision: recipe.DrafterRevision,
+		ContextTokens: recipe.ContextTokens, ParallelRequests: recipe.ParallelRequests,
+		KVCache: recipe.KVCache, Drafter: recipe.Drafter,
+	}
+}
+
 func plannedMember(binding Binding, candidate Candidate, generation int) Member {
 	return Member{Role: binding.Role, Rank: candidate.Rank, DeviceID: binding.DeviceID, FabricAddress: binding.FabricAddress, ServiceAddress: binding.ServiceAddress, ServicePort: binding.ServicePort, ContainerID: candidate.Name, Name: candidate.Name, Status: "planned", Ownership: OwnershipManaged, Generation: generation}
 }
@@ -1266,6 +1359,11 @@ func memberIndexByRole(members []Member, role string) int {
 func deploymentLaunchOrder(deployment Deployment) []string {
 	if len(deployment.LaunchOrder) != 0 {
 		return append([]string(nil), deployment.LaunchOrder...)
+	}
+	// Records persisted before launch_order existed fall back to the BKC's
+	// declared order, so a recipe-owned group still stops its owner first.
+	if cfg, ok := bkc.LookupID(deployment.BKCID); ok && cfg.MultiDevice != nil && len(cfg.MultiDevice.LaunchOrder) != 0 {
+		return append([]string(nil), cfg.MultiDevice.LaunchOrder...)
 	}
 	return []string{bkc.MultiDeviceRoleHead, bkc.MultiDeviceRoleWorker}
 }

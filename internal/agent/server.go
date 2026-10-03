@@ -41,6 +41,7 @@ var agentDeviceID string
 var coordinatorVerificationKey ed25519.PublicKey
 var launchAuthorizationReplayStore *launchauth.ReplayStore
 var catalog *docker.Catalog
+var activeTensorFoldResources *tensorFoldManager
 
 // Run starts the agent HTTP server on the given port.
 func Run(port string, version string) error {
@@ -49,6 +50,16 @@ func Run(port string, version string) error {
 
 	// Initialize Docker catalog
 	catalog = docker.NewCatalog()
+	tensorFoldRoot, err := tensorFoldStateRoot()
+	if err != nil {
+		return fmt.Errorf("resolve TensorFold state root: %w", err)
+	}
+	tensorFoldResources := newTensorFoldManager(tensorFoldRoot, execTensorFoldRunner{})
+	activeTensorFoldResources = tensorFoldResources
+	if err := tensorFoldResources.reconcileBounded(context.Background()); err != nil {
+		log.Printf("warning: TensorFold resource reconciliation: %v", err)
+	}
+	go tensorFoldResources.supervise(context.Background())
 
 	mux := http.NewServeMux()
 
@@ -73,6 +84,7 @@ func Run(port string, version string) error {
 	mux.HandleFunc("POST /images/pull", requireAuth(handleImagePull))
 	mux.HandleFunc("POST /deployments/preflight", requireAuth(handleDeploymentPreflight))
 	mux.HandleFunc("GET /images/tags/{image...}", requireAuth(handleImageTags))
+	registerTensorFoldRoutes(mux, tensorFoldResources)
 
 	addr := ":" + port
 	log.Printf("yokai agent %s starting on %s", version, addr)
@@ -252,6 +264,13 @@ func handleMetrics(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("warning: failed to list containers for metrics: %v", err)
 	} else {
+		if activeTensorFoldResources != nil {
+			if resources, resourceErr := activeTensorFoldResources.serviceInventory(r.Context()); resourceErr == nil {
+				containers = append(containers, resources...)
+			} else {
+				log.Printf("warning: failed to list TensorFold resources for metrics: %v", resourceErr)
+			}
+		}
 		metrics.Containers = mergeContainerMetrics(metrics.Containers, containers)
 	}
 
@@ -339,6 +358,11 @@ func mergeContainerMetrics(metricContainers []ContainerMetrics, dockerContainers
 
 func shortContainerID(id string) string {
 	id = strings.TrimSpace(id)
+	// TensorFold resource IDs are names, not Docker hex IDs; truncating them
+	// collides ranks and breaks test/log routing.
+	if strings.HasPrefix(id, tensorFoldResourceID("")) {
+		return id
+	}
 	if len(id) > 12 {
 		return id[:12]
 	}
@@ -358,6 +382,14 @@ func handleContainers(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "docker_error", err.Error())
 		return
+	}
+	if activeTensorFoldResources != nil {
+		resources, resourceErr := activeTensorFoldResources.inventory(r.Context())
+		if resourceErr != nil {
+			writeError(w, http.StatusInternalServerError, "tensorfold_inventory_error", resourceErr.Error())
+			return
+		}
+		containers = append(containers, resources...)
 	}
 
 	resp := map[string]interface{}{
@@ -710,6 +742,20 @@ func handleContainerTest(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "missing_id", "Container ID is required")
 		return
 	}
+	if strings.HasPrefix(id, "tensorfold:") && activeTensorFoldResources != nil {
+		resource, err := activeTensorFoldResources.observe(r.Context(), strings.TrimPrefix(id, "tensorfold:"))
+		if err != nil {
+			writeError(w, http.StatusConflict, "tensorfold_resource_invalid", err.Error())
+			return
+		}
+		result, err := activeTensorFoldResources.testResource(r.Context(), resource)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, "tensorfold_readiness_failed", err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+		return
+	}
 
 	containers, err := listContainersScope(InventoryScopeAll)
 	if err != nil {
@@ -759,6 +805,26 @@ func handleContainerLogs(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if id == "" {
 		writeError(w, http.StatusBadRequest, "missing_id", "Container ID is required")
+		return
+	}
+	if strings.HasPrefix(id, "tensorfold:") && activeTensorFoldResources != nil {
+		resource, err := activeTensorFoldResources.inspect(strings.TrimPrefix(id, "tensorfold:"))
+		if err != nil {
+			writeError(w, http.StatusConflict, "tensorfold_resource_invalid", err.Error())
+			return
+		}
+		tail, _, err := activeTensorFoldResources.logs(r.Context(), resource)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "tensorfold_logs_failed", err.Error())
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		for _, line := range strings.Split(tail, "\n") {
+			if line != "" {
+				_, _ = fmt.Fprintf(w, "data: %s\n\n", line)
+			}
+		}
 		return
 	}
 	if rejectGenericGroupedLogs(w, r.Context(), id) {

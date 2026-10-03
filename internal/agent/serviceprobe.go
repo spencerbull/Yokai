@@ -45,7 +45,7 @@ func testContainerServiceWithOptions(container Container, requireMetrics bool, a
 
 	var result *ServiceTestResult
 	switch {
-	case isVLLMImage(container.Image), isSGLangImage(container.Image), isLlamaCppImage(container.Image):
+	case isVLLMImage(container.Image), isSGLangImage(container.Image), isTensorFoldImage(container.Image), isLlamaCppImage(container.Image):
 		result, err = testOpenAICompatibleServiceWithAPIKey(baseURL, inferServiceKindFromImage(container.Image), apiKey)
 	case isComfyUIImage(container.Image):
 		result, err = testComfyUIService(baseURL)
@@ -74,8 +74,10 @@ func (m *VLLMMetrics) hasNativeFamily(serviceType string) bool {
 		return m.HasSGLangNativeMetric
 	case "vllm":
 		return m.HasVLLMNativeMetric
+	case "tensorfold":
+		return m.HasTensorFoldNativeMetric
 	default:
-		return m.HasSGLangNativeMetric || m.HasVLLMNativeMetric
+		return m.HasSGLangNativeMetric || m.HasVLLMNativeMetric || m.HasTensorFoldNativeMetric
 	}
 }
 
@@ -109,6 +111,8 @@ func inferServiceKindFromImage(image string) string {
 		return "vllm"
 	case isSGLangImage(image):
 		return "sglang"
+	case isTensorFoldImage(image):
+		return "tensorfold"
 	case isLlamaCppImage(image):
 		return "llamacpp"
 	case isComfyUIImage(image):

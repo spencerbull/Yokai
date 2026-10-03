@@ -87,7 +87,11 @@ func runDeploymentsCreate(args []string) {
 	if err != nil {
 		exitError(fmt.Sprintf("loading config: %v", err))
 	}
-	data, err := newDeploymentDaemonClient(cfg).post("/deployments", bytes.NewReader(body))
+	client := newDeploymentDaemonClient(cfg)
+	if catalog, ok := bkc.LookupID(request.BKCID); ok && catalog.Workload == bkc.WorkloadTensorFold {
+		client.http.Timeout = deployments.TensorFoldClientRequestTimeout
+	}
+	data, err := client.post("/deployments", bytes.NewReader(body))
 	if err != nil {
 		exitError(err.Error())
 	}
@@ -100,7 +104,6 @@ func buildDeploymentCreateRequest(values deploymentCreateFlags, getenv func(stri
 		"--head-device": values.headDevice, "--head-fabric": values.headFabric,
 		"--head-service-address": values.headServiceAddress, "--head-service-port": values.headServicePort,
 		"--worker-device": values.workerDevice, "--worker-fabric": values.workerFabric,
-		"--api-key-env": values.apiKeyEnv,
 	}
 	for flagName, value := range required {
 		if strings.TrimSpace(value) == "" {
@@ -124,9 +127,21 @@ func buildDeploymentCreateRequest(values deploymentCreateFlags, getenv func(stri
 	if err != nil || servicePort < 1 || servicePort > 65535 {
 		return deployments.CreateRequest{}, fmt.Errorf("head service port must be between 1 and 65535")
 	}
-	apiKey := getenv(values.apiKeyEnv)
-	if apiKey == "" {
-		return deployments.CreateRequest{}, fmt.Errorf("environment variable %s is empty", values.apiKeyEnv)
+	apiKey := ""
+	catalogConfig, isCatalogBKC := bkc.LookupID(values.bkcID)
+	isTensorFold := isCatalogBKC && catalogConfig.Workload == bkc.WorkloadTensorFold
+	if isTensorFold {
+		if strings.TrimSpace(values.apiKeyEnv) != "" {
+			return deployments.CreateRequest{}, fmt.Errorf("--api-key-env is not supported by the pinned TensorFold recipe")
+		}
+	} else {
+		if strings.TrimSpace(values.apiKeyEnv) == "" {
+			return deployments.CreateRequest{}, fmt.Errorf("--api-key-env is required")
+		}
+		apiKey = getenv(values.apiKeyEnv)
+		if apiKey == "" {
+			return deployments.CreateRequest{}, fmt.Errorf("environment variable %s is empty", values.apiKeyEnv)
+		}
 	}
 	headGID, workerGID := 0, 0
 	if values.bkcID == bkc.Qwen38FlashNextNVFP4DualGB10ID {
@@ -219,7 +234,7 @@ func runDeploymentKeyAction(action string, args []string) {
 	apiKeyEnv := fs.String("api-key-env", "", keyHelp)
 	_ = fs.Parse(args)
 	if fs.NArg() != 1 || strings.TrimSpace(fs.Arg(0)) == "" {
-		exitError(fmt.Sprintf("usage: yokai deployments %s --api-key-env NAME <deployment-id>", action))
+		exitError(fmt.Sprintf("usage: yokai deployments %s [--api-key-env NAME] <deployment-id>", action))
 	}
 	request, err := buildDeploymentTestRequest(*apiKeyEnv, os.Getenv)
 	if err != nil {
@@ -234,7 +249,11 @@ func runDeploymentKeyAction(action string, args []string) {
 		exitError(fmt.Sprintf("loading config: %v", err))
 	}
 	path := fmt.Sprintf("/deployments/%s/%s", url.PathEscape(fs.Arg(0)), action)
-	data, err := newDeploymentDaemonClient(cfg).post(path, bytes.NewReader(body))
+	client := newDeploymentDaemonClient(cfg)
+	if strings.TrimSpace(*apiKeyEnv) == "" {
+		client.http.Timeout = deployments.TensorFoldClientRequestTimeout
+	}
+	data, err := client.post(path, bytes.NewReader(body))
 	if err != nil {
 		exitError(err.Error())
 	}
@@ -243,7 +262,7 @@ func runDeploymentKeyAction(action string, args []string) {
 
 func buildDeploymentTestRequest(apiKeyEnv string, getenv func(string) string) (deployments.TestRequest, error) {
 	if strings.TrimSpace(apiKeyEnv) == "" {
-		return deployments.TestRequest{}, fmt.Errorf("--api-key-env is required")
+		return deployments.TestRequest{}, nil
 	}
 	apiKey := getenv(apiKeyEnv)
 	if apiKey == "" {

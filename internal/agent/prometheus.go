@@ -14,6 +14,13 @@ func handlePrometheusMetrics(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("warning: failed to list containers for Prometheus metrics: %v", err)
 	}
+	if activeTensorFoldResources != nil {
+		if resources, resourceErr := activeTensorFoldResources.serviceInventory(r.Context()); resourceErr == nil {
+			containers = append(containers, resources...)
+		} else {
+			log.Printf("warning: failed to list TensorFold resources for Prometheus metrics: %v", resourceErr)
+		}
+	}
 
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
@@ -93,7 +100,7 @@ func renderPrometheusMetrics(metrics *SystemMetrics, containers []Container) str
 		infoLabels["image"] = container.Image
 		writePrometheusSample(&b, "yokai_service_info", infoLabels, "1")
 
-		if (backend != "vllm" && backend != "sglang") || container.VLLMMetrics == nil {
+		if (backend != "vllm" && backend != "sglang" && backend != "tensorfold") || container.VLLMMetrics == nil {
 			continue
 		}
 
@@ -195,6 +202,8 @@ func inferenceBackend(container Container) string {
 		return "vllm"
 	case isSGLangImage(container.Image):
 		return "sglang"
+	case isTensorFoldImage(container.Image):
+		return "tensorfold"
 	case isLlamaCppImage(container.Image):
 		return "llamacpp"
 	case isComfyUIImage(container.Image):

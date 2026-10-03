@@ -6,33 +6,51 @@ import (
 )
 
 const (
-	GLM53FlashNVFP4DualGB10ID         = "glm-5-3-flash-nvfp4-dual-gb10"
-	GLM53FlashNVFP4Model              = "LibertAIDAI/GLM-5.3-Flash-NVFP4"
-	GLM53FlashNVFP4Revision           = "aa28e1f54130286c95fee10d0705c74ce8743734"
-	GLM53FlashNVFP4Image              = "lmsysorg/sglang@sha256:73f9294b78e38d8cc297bfed16daec8ac192b126a2d1fb9055e259a632c68f00"
-	GLM53FlashNVFP4ImageDigest        = "73f9294b78e38d8cc297bfed16daec8ac192b126a2d1fb9055e259a632c68f00"
-	MultiDeviceBackendTorch           = "torch_distributed"
-	MultiDeviceBackendVLLM            = "vllm_multi_node"
-	MultiDeviceRoleHead               = "head"
-	MultiDeviceRoleWorker             = "worker"
-	MultiDeviceRoleRankPlaceholder    = "{ROLE_RANK}"
-	MultiDeviceHeadAddrPlaceholder    = "{HEAD_FABRIC_ADDRESS}"
-	GLM53FlashNVFP4RendezvousPort     = 25000
-	GLM53FlashNVFP4ServicePort        = 8000
-	GLM53FlashNVFP4GuardSeconds       = 3600
-	GLM53FlashRuntimePatchLabel       = "sglang-unbalanced-model-loading-timeout-3600-v1"
-	GLM53FlashRuntimePatchPath        = "/sgl-workspace/sglang/python/sglang/srt/model_executor/model_runner_components/load_model_utils.py"
-	GLM53FlashRuntimePatchOldLine     = "UNBALANCED_MODEL_LOADING_TIMEOUT_S = 480  # leave more time for post data processing"
-	GLM53FlashRuntimePatchNewLine     = "UNBALANCED_MODEL_LOADING_TIMEOUT_S = 3600  # align asymmetric cold loads with Yokai guards"
-	GLM53FlashRuntimePatchOldSHA      = "f0193bfaab96053919e3a260f9ccb10e2137ad108cfae03816c867628f611e1f"
-	GLM53FlashRuntimePatchNewSHA      = "fc3ae35cce5f712fd3681dc4bcef05157df6d232ac991ce60b78dae492784ff5"
-	GLM53FlashDSAGB10TilePatchLabel   = "sglang-dsa-gb10-tile-tp2-v1"
-	GLM53FlashDSAGB10TilePatchPath    = "/sgl-workspace/sglang/python/sglang/kernels/ops/attention/dsa/tilelang_kernel.py"
-	GLM53FlashDSAGB10TilePatchOldLine = "            num_heads, d_v, tail_dim, topk, sm_scale=sm_scale, return_lse=return_lse"
-	GLM53FlashDSAGB10TilePatchNewLine = "            num_heads, d_v, tail_dim, topk, sm_scale=sm_scale, return_lse=return_lse, **({'block_I': 32, 'num_stages': 1, 'threads': 128} if tail_dim == 0 else {})"
-	GLM53FlashDSAGB10TilePatchOldSHA  = "526988aa5fd8fa61529f2d3cf245d1061e30982d2bd0d6e64ea2e51e31f30f7f"
-	GLM53FlashDSAGB10TilePatchNewSHA  = "3150ec691843c84bb5db9ed5bf763c4da03842fde4666489e107bf7a9fcddd7b"
-	GLM53FlashTileSharedMemoryBytes   = 100352
+	GLM53FlashEXL3TensorFoldDualGB10ID       = "glm-5-3-flash-exl3-tensorfold-dual-gb10"
+	GLM53FlashEXL3TensorFoldModel            = "Mia-AiLab/GLM-5.3-Flash-EXL3-4bpw-TensorFold"
+	GLM53FlashEXL3TensorFoldModelRevision    = "078455ffe6472f9a52fbc1139f58b9db2881b25c"
+	GLM53FlashEXL3TensorFoldDrafter          = "incoai/GLM-5.3-Flash-DFlash2"
+	GLM53FlashEXL3TensorFoldDrafterRevision  = "bf582e4eacc1810f76656d1811693ff6c6737d2a"
+	GLM53FlashEXL3TensorFoldRecipeRepository = "https://github.com/MiaAI-Lab/GLM-5.3-Flash-EXL3-2x-DGX-Sparks-TensorFold.git"
+	GLM53FlashEXL3TensorFoldRecipeCommit     = "cf28cc4f8038be322cdeda220c6f1c8ace8f27d1"
+	GLM53FlashEXL3TensorFoldImageRepository  = "ghcr.io/miaai-lab/glm-5.3-flash-exl3-2x-dgx-sparks-tensorfold"
+	GLM53FlashEXL3TensorFoldImageTag         = "v0.6.0-5e01f1bb74d8"
+	GLM53FlashEXL3TensorFoldImagePatchHash   = "5e01f1bb74d8"
+	GLM53FlashEXL3TensorFoldImageDigest      = "14f15591eae5d6a540f09218d3852068962fe5381371bbfefe0e9194cd834529"
+	GLM53FlashEXL3TensorFoldImage            = GLM53FlashEXL3TensorFoldImageRepository + "@sha256:" + GLM53FlashEXL3TensorFoldImageDigest
+	GLM53FlashEXL3TensorFoldServedModel      = "GLM-5.3-Flash-EXL3"
+	GLM53FlashEXL3TensorFoldServicePort      = 8888
+	GLM53FlashEXL3TensorFoldRendezvousPort   = 29551
+	MultiDeviceDriverContainers              = "per_rank_containers"
+	MultiDeviceDriverHeadRecipe              = "head_recipe"
+	MultiDeviceBackendTensorFoldRecipe       = "tensorfold_recipe"
+	GLM53FlashNVFP4DualGB10ID                = "glm-5-3-flash-nvfp4-dual-gb10"
+	GLM53FlashNVFP4Model                     = "LibertAIDAI/GLM-5.3-Flash-NVFP4"
+	GLM53FlashNVFP4Revision                  = "aa28e1f54130286c95fee10d0705c74ce8743734"
+	GLM53FlashNVFP4Image                     = "lmsysorg/sglang@sha256:73f9294b78e38d8cc297bfed16daec8ac192b126a2d1fb9055e259a632c68f00"
+	GLM53FlashNVFP4ImageDigest               = "73f9294b78e38d8cc297bfed16daec8ac192b126a2d1fb9055e259a632c68f00"
+	MultiDeviceBackendTorch                  = "torch_distributed"
+	MultiDeviceBackendVLLM                   = "vllm_multi_node"
+	MultiDeviceRoleHead                      = "head"
+	MultiDeviceRoleWorker                    = "worker"
+	MultiDeviceRoleRankPlaceholder           = "{ROLE_RANK}"
+	MultiDeviceHeadAddrPlaceholder           = "{HEAD_FABRIC_ADDRESS}"
+	GLM53FlashNVFP4RendezvousPort            = 25000
+	GLM53FlashNVFP4ServicePort               = 8000
+	GLM53FlashNVFP4GuardSeconds              = 3600
+	GLM53FlashRuntimePatchLabel              = "sglang-unbalanced-model-loading-timeout-3600-v1"
+	GLM53FlashRuntimePatchPath               = "/sgl-workspace/sglang/python/sglang/srt/model_executor/model_runner_components/load_model_utils.py"
+	GLM53FlashRuntimePatchOldLine            = "UNBALANCED_MODEL_LOADING_TIMEOUT_S = 480  # leave more time for post data processing"
+	GLM53FlashRuntimePatchNewLine            = "UNBALANCED_MODEL_LOADING_TIMEOUT_S = 3600  # align asymmetric cold loads with Yokai guards"
+	GLM53FlashRuntimePatchOldSHA             = "f0193bfaab96053919e3a260f9ccb10e2137ad108cfae03816c867628f611e1f"
+	GLM53FlashRuntimePatchNewSHA             = "fc3ae35cce5f712fd3681dc4bcef05157df6d232ac991ce60b78dae492784ff5"
+	GLM53FlashDSAGB10TilePatchLabel          = "sglang-dsa-gb10-tile-tp2-v1"
+	GLM53FlashDSAGB10TilePatchPath           = "/sgl-workspace/sglang/python/sglang/kernels/ops/attention/dsa/tilelang_kernel.py"
+	GLM53FlashDSAGB10TilePatchOldLine        = "            num_heads, d_v, tail_dim, topk, sm_scale=sm_scale, return_lse=return_lse"
+	GLM53FlashDSAGB10TilePatchNewLine        = "            num_heads, d_v, tail_dim, topk, sm_scale=sm_scale, return_lse=return_lse, **({'block_I': 32, 'num_stages': 1, 'threads': 128} if tail_dim == 0 else {})"
+	GLM53FlashDSAGB10TilePatchOldSHA         = "526988aa5fd8fa61529f2d3cf245d1061e30982d2bd0d6e64ea2e51e31f30f7f"
+	GLM53FlashDSAGB10TilePatchNewSHA         = "3150ec691843c84bb5db9ed5bf763c4da03842fde4666489e107bf7a9fcddd7b"
+	GLM53FlashTileSharedMemoryBytes          = 100352
 )
 
 // RuntimePatchSetLabel derives the immutable composite label carried into the
@@ -82,6 +100,14 @@ var multiDeviceCapabilities = []string{
 	"container.cap_add",
 }
 
+var tensorFoldRecipeCapabilities = []string{
+	"deployments.v1",
+	"deployments.preflight.v1",
+	"deployments.recipe.tensorfold.v1",
+	"deployments.recipe.reservations.v1",
+	"deployments.recipe.logs.v1",
+}
+
 var glm53FabricEnv = map[string]string{
 	"GLOO_SOCKET_IFNAME":       "enP2p1s0f0np0",
 	"NCCL_SOCKET_IFNAME":       "enP2p1s0f0np0",
@@ -105,6 +131,9 @@ func ValidateMultiDeviceRecipe(cfg Config) error {
 	md := cfg.MultiDevice
 	if md == nil {
 		return fmt.Errorf("bkc %s is not a multi-device recipe", cfg.ID)
+	}
+	if cfg.Workload == WorkloadTensorFold {
+		return validateTensorFoldRecipe(cfg)
 	}
 	if (cfg.Workload != WorkloadSGLang || md.Backend != MultiDeviceBackendTorch) &&
 		(cfg.Workload != WorkloadVLLM || md.Backend != MultiDeviceBackendVLLM) {
@@ -220,6 +249,54 @@ func sameRoleSet(left, right []string) bool {
 		}
 	}
 	return true
+}
+
+func validateTensorFoldRecipe(cfg Config) error {
+	md := cfg.MultiDevice
+	if cfg.ID != GLM53FlashEXL3TensorFoldDualGB10ID || cfg.ModelID != GLM53FlashEXL3TensorFoldModel || cfg.Image != GLM53FlashEXL3TensorFoldImage {
+		return fmt.Errorf("bkc %s immutable TensorFold provenance mismatch", cfg.ID)
+	}
+	if md.Driver != MultiDeviceDriverHeadRecipe || md.Backend != MultiDeviceBackendTensorFoldRecipe {
+		return fmt.Errorf("bkc %s requires the TensorFold head-recipe driver", cfg.ID)
+	}
+	if md.WorldSize != 2 || md.TensorParallelSize != 2 || md.GPUsPerNode != 1 {
+		return fmt.Errorf("bkc %s requires two one-GPU nodes with TP=2", cfg.ID)
+	}
+	if md.RendezvousPort != GLM53FlashEXL3TensorFoldRendezvousPort || md.ServicePort != GLM53FlashEXL3TensorFoldServicePort || cfg.Port != "8888" {
+		return fmt.Errorf("bkc %s TensorFold ports drifted", cfg.ID)
+	}
+	if md.ModelRevision != GLM53FlashEXL3TensorFoldModelRevision || md.ServedModelName != GLM53FlashEXL3TensorFoldServedModel || len(md.RuntimePatches) != 0 {
+		return fmt.Errorf("bkc %s TensorFold model provenance drifted", cfg.ID)
+	}
+	if !equalStrings(md.LaunchOrder, []string{MultiDeviceRoleWorker, MultiDeviceRoleHead}) {
+		return fmt.Errorf("bkc %s must reserve the worker before launching the head recipe", cfg.ID)
+	}
+	if md.SourceRevision != "" || md.RequiresLocalModel || md.RequiresFabricConfig || len(md.CommonArgs) != 0 || len(md.RoleArgs) != 0 {
+		return fmt.Errorf("bkc %s must leave execution inputs to the pinned upstream recipe", cfg.ID)
+	}
+	if len(md.Roles) != 2 || md.Roles[0] != (MultiDeviceRole{Name: MultiDeviceRoleHead, Rank: 0, API: true}) || md.Roles[1] != (MultiDeviceRole{Name: MultiDeviceRoleWorker, Rank: 1, API: false}) {
+		return fmt.Errorf("bkc %s must define ordered head and worker roles", cfg.ID)
+	}
+	if !equalStrings(md.RequiredCapabilities, tensorFoldRecipeCapabilities) {
+		return fmt.Errorf("bkc %s TensorFold capabilities mismatch", cfg.ID)
+	}
+	r := md.Recipe
+	if r == nil || r.Repository != GLM53FlashEXL3TensorFoldRecipeRepository || r.Commit != GLM53FlashEXL3TensorFoldRecipeCommit || r.ImageTag != GLM53FlashEXL3TensorFoldImageTag || r.ImageDigest != GLM53FlashEXL3TensorFoldImageDigest {
+		return fmt.Errorf("bkc %s immutable TensorFold recipe source mismatch", cfg.ID)
+	}
+	if r.DrafterModel != GLM53FlashEXL3TensorFoldDrafter || r.DrafterRevision != GLM53FlashEXL3TensorFoldDrafterRevision {
+		return fmt.Errorf("bkc %s immutable DFlash2 provenance mismatch", cfg.ID)
+	}
+	if r.ContextTokens != 1048576 || r.ParallelRequests != 4 || r.KVCache != "fp8" || r.Dense != "q4" || r.Drafter != "dflash2" || !r.Vision {
+		return fmt.Errorf("bkc %s TensorFold serving policy drifted", cfg.ID)
+	}
+	if r.MemoryReserveGiB != "14.5" || r.KVPoolGiB != "12.5" || r.NCCLRails != 1 || r.ReadinessTimeoutSec != 14400 {
+		return fmt.Errorf("bkc %s TensorFold memory, rail, or readiness policy drifted", cfg.ID)
+	}
+	if strings.TrimSpace(cfg.ExtraArgs) != "" || len(cfg.Env) != 0 || len(cfg.Volumes) != 0 {
+		return fmt.Errorf("bkc %s must leave execution inputs to the pinned upstream recipe", cfg.ID)
+	}
+	return nil
 }
 
 func equalStrings(left, right []string) bool {
