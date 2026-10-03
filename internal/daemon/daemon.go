@@ -43,6 +43,7 @@ func Run(version string) error {
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
+
 	// Record our PID so `yokai upgrade` can locate and restart this process
 	// after replacing the binary (see internal/upgrade). Removed on exit.
 	if err := WritePidFile(); err != nil {

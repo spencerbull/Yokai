@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -206,6 +207,35 @@ func TestPinnedSnapshotRejectsSameSizeTamperedLFSBlob(t *testing.T) {
 	err := validateQwen38SnapshotObject(snapshotPath, repositoryRoot, name, qwen38SnapshotObject{blob: digest, size: int64(len(original))})
 	if err == nil || !strings.Contains(err.Error(), "hash mismatch") {
 		t.Fatalf("same-size tampered LFS blob was accepted: %v", err)
+	}
+}
+
+func TestPinnedSnapshotVerificationReleasesOnlyVerifiedPageCache(t *testing.T) {
+	repository, objects := qwenPageCacheFixture(t)
+	snapshot := filepath.Join(repository, "snapshots", bkc.Qwen38FlashNextNVFP4Revision)
+	object := objects["model.safetensors"]
+	var advised []string
+	previous := adviseDropVerifiedSnapshotPageCache
+	adviseDropVerifiedSnapshotPageCache = func(file *os.File) error {
+		advised = append(advised, filepath.Base(file.Name()))
+		return errors.New("advice unavailable")
+	}
+	t.Cleanup(func() { adviseDropVerifiedSnapshotPageCache = previous })
+
+	if err := validateQwen38SnapshotObject(snapshot, repository, "model.safetensors", object); err != nil {
+		t.Fatalf("best-effort page-cache advice failed verification: %v", err)
+	}
+	if len(advised) != 1 || advised[0] != object.blob {
+		t.Fatalf("verified snapshot object was not released from page cache: %v", advised)
+	}
+
+	advised = nil
+	tampered := qwen38SnapshotObject{blob: strings.Repeat("0", 64), size: object.size}
+	if err := verifyQwen38SnapshotObjectDigest(filepath.Join(repository, "blobs", object.blob), tampered); err == nil {
+		t.Fatal("mismatched digest was accepted")
+	}
+	if len(advised) != 0 {
+		t.Fatalf("unverified object reached page-cache release: %v", advised)
 	}
 }
 

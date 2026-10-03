@@ -141,11 +141,20 @@ func TestSameContainerIDRequiresBothPrefixesAtLeastTwelveCharacters(t *testing.T
 
 func TestDeploymentMemberDeleteTimeoutOutlivesLaunchCleanupBarrier(t *testing.T) {
 	minimum := deployments.DefaultCandidateLaunchCommandTimeout + deployments.DefaultCandidateLaunchSettleTimeout
-	if got := deploymentMemberMutationTimeout(http.MethodDelete); got <= minimum {
+	if got := deploymentMemberMutationTimeout(http.MethodDelete, "", bkc.GLM53FlashNVFP4DualGB10ID); got <= minimum {
 		t.Fatalf("managed delete timeout %s does not outlive launch cleanup barrier %s", got, minimum)
 	}
-	if got := deploymentMemberMutationTimeout(http.MethodPost); got != deployments.DefaultMemberMutationRPCTimeout {
+	if got := deploymentMemberMutationTimeout(http.MethodPost, "restart", bkc.GLM53FlashNVFP4DualGB10ID); got != deployments.DefaultMemberMutationRPCTimeout {
 		t.Fatalf("ordinary member mutation timeout changed unexpectedly: %s", got)
+	}
+}
+
+func TestQwenMemberRestartTimeoutCoversFullSnapshotVerification(t *testing.T) {
+	if got := deploymentMemberMutationTimeout(http.MethodPost, "restart", bkc.Qwen38FlashNextNVFP4DualGB10ID); got < deployments.DefaultDeploymentPreflightRPCTimeout {
+		t.Fatalf("Qwen rank restart timeout %s is shorter than the full-checkpoint preflight budget %s", got, deployments.DefaultDeploymentPreflightRPCTimeout)
+	}
+	if got := deploymentMemberMutationTimeout(http.MethodPost, "stop", bkc.Qwen38FlashNextNVFP4DualGB10ID); got != deployments.DefaultMemberMutationRPCTimeout {
+		t.Fatalf("Qwen rank stop timeout changed unexpectedly: %s", got)
 	}
 }
 

@@ -589,13 +589,22 @@ func resolveQwen38SnapshotObject(snapshotPath, resolvedRoot, name string, object
 	return resolved, nil
 }
 
+// adviseDropVerifiedSnapshotPageCache is best-effort: streaming the full
+// checkpoint for verification fills the page cache, which GB10 unified memory
+// does not report as free to vLLM's startup check (preflight and every restart).
+var adviseDropVerifiedSnapshotPageCache = adviseDropPageCache
+
 func verifyQwen38SnapshotObjectDigest(path string, object qwen38SnapshotObject) error {
 	file, err := os.Open(path)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = file.Close() }()
-	return verifyQwen38SnapshotObjectFile(file, object)
+	if err := verifyQwen38SnapshotObjectFile(file, object); err != nil {
+		return err
+	}
+	_ = adviseDropVerifiedSnapshotPageCache(file)
+	return nil
 }
 
 func verifyQwen38SnapshotObjectFile(file *os.File, object qwen38SnapshotObject) error {

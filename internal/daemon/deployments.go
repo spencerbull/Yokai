@@ -581,12 +581,17 @@ func (ops *daemonDeploymentOperations) mutateDeploymentMember(ctx context.Contex
 		path += "/" + action
 	}
 	path += "?" + query.Encode()
-	return deploymentAgentOperationError("mutate deployment member", ops.requestJSON(ctx, method, member.DeviceID, path, nil, nil, deploymentMemberMutationTimeout(method)), false)
+	return deploymentAgentOperationError("mutate deployment member", ops.requestJSON(ctx, method, member.DeviceID, path, nil, nil, deploymentMemberMutationTimeout(method, action, deployment.BKCID)), false)
 }
 
-func deploymentMemberMutationTimeout(method string) time.Duration {
+func deploymentMemberMutationTimeout(method, action, bkcID string) time.Duration {
 	if method == http.MethodDelete {
 		return deployments.DefaultCandidateLaunchRPCTimeout
+	}
+	// Every Qwen3.8 rank restart re-verifies the complete pinned checkpoint
+	// before docker restart, the same work preflight is budgeted for.
+	if action == "restart" && bkcID == bkc.Qwen38FlashNextNVFP4DualGB10ID {
+		return deployments.DefaultDeploymentPreflightRPCTimeout
 	}
 	return deployments.DefaultMemberMutationRPCTimeout
 }
