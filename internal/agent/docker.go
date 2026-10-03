@@ -1325,7 +1325,7 @@ func probeContainerHealth(ports map[string]string, image, serviceAddress string)
 
 	// For known inference servers, try their /health endpoint
 	imageLower := strings.ToLower(image)
-	if strings.Contains(imageLower, "vllm") || strings.Contains(imageLower, "sglang") || strings.Contains(imageLower, "llama") {
+	if strings.Contains(imageLower, "vllm") || strings.Contains(imageLower, "sglang") || strings.Contains(imageLower, "llama") || isTensorFoldImage(image) {
 		client := &http.Client{Timeout: 2 * time.Second}
 		resp, err := client.Get("http://" + addr + "/health")
 		if err != nil {

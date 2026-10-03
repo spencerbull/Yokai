@@ -175,6 +175,9 @@ export function inferServiceType(name: string, image?: string) {
   if (haystack.includes("sglang")) {
     return "sglang"
   }
+  if (haystack.includes("tensorfold")) {
+    return "tensorfold"
+  }
   if (haystack.includes("llama")) {
     return "llamacpp"
   }

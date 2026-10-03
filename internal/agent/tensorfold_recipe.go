@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -147,6 +148,7 @@ type tensorFoldManager struct {
 	mu                  sync.Mutex
 	processes           map[string]*tensorFoldLaunch
 	httpClient          *http.Client
+	metricsHTTPClient   *http.Client
 	serviceBaseURL      func(tensorFoldResource) string
 	beforeWaiterCleanup func()
 	sshExecutable       string
@@ -156,8 +158,9 @@ func newTensorFoldManager(root string, runner tensorFoldCommandRunner) *tensorFo
 	sshExecutable, _ := exec.LookPath("ssh")
 	return &tensorFoldManager{
 		root: root, runner: runner, pinnedFiles: tensorFoldPinnedRecipeFiles, processes: make(map[string]*tensorFoldLaunch),
-		sshExecutable: sshExecutable,
-		httpClient:    &http.Client{Timeout: 3 * time.Minute},
+		sshExecutable:     sshExecutable,
+		httpClient:        &http.Client{Timeout: 3 * time.Minute},
+		metricsHTTPClient: inventoryMetricsHTTPClient,
 		serviceBaseURL: func(resource tensorFoldResource) string {
 			return "http://" + net.JoinHostPort(resource.ServiceAddress, strconv.Itoa(resource.ServicePort))
 		},
@@ -541,6 +544,16 @@ func (m *tensorFoldManager) reconcile(ctx context.Context) error {
 	return errors.Join(joined...)
 }
 
+// A reconcile pass shells out to docker and SSH; bound it so a hung remote
+// command cannot stall agent startup or supervision indefinitely.
+const tensorFoldReconcileTimeout = 2 * time.Minute
+
+func (m *tensorFoldManager) reconcileBounded(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, tensorFoldReconcileTimeout)
+	defer cancel()
+	return m.reconcile(ctx)
+}
+
 func (m *tensorFoldManager) supervise(ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -549,7 +562,7 @@ func (m *tensorFoldManager) supervise(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			_ = m.reconcile(ctx)
+			_ = m.reconcileBounded(ctx)
 		}
 	}
 }
@@ -616,7 +629,9 @@ func (m *tensorFoldManager) inventory(ctx context.Context) ([]Container, error) 
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
 			continue
 		}
-		resource, err := m.inspect(strings.TrimSuffix(entry.Name(), ".json"))
+		// Records are replaced by atomic rename, so inventory reads without the
+		// manager lock and never waits behind a long create/stop/restart.
+		resource, err := m.readResource(strings.TrimSuffix(entry.Name(), ".json"))
 		if err != nil {
 			return nil, err
 		}
@@ -642,7 +657,7 @@ func (m *tensorFoldManager) inventory(ctx context.Context) ([]Container, error) 
 			container.Labels[LabelServiceAddress] = resource.ServiceAddress
 			container.Labels[LabelServicePort] = strconv.Itoa(resource.ServicePort)
 			if resource.Status == "running" {
-				metrics, scrapeErr := scrapeVLLMMetricsURLWithClient(m.httpClient, m.serviceBaseURL(resource)+"/metrics", "")
+				metrics, scrapeErr := scrapeVLLMMetricsURLWithClient(m.metricsHTTPClient, m.serviceBaseURL(resource)+"/metrics", "")
 				if scrapeErr == nil {
 					metrics.Model = bkc.GLM53FlashEXL3TensorFoldServedModel
 					container.VLLMMetrics = metrics
@@ -718,7 +733,6 @@ func (m *tensorFoldManager) waitForProcess(name string, launch *tensorFoldLaunch
 
 func (m *tensorFoldManager) ensurePinnedRecipe(ctx context.Context) error {
 	recipeDir := m.recipePath()
-	freshCheckout := false
 	if err := ensureOwnedTensorFoldDirectory(m.root); err != nil {
 		return err
 	}
@@ -726,27 +740,11 @@ func (m *tensorFoldManager) ensurePinnedRecipe(ctx context.Context) error {
 		return err
 	}
 	if _, err := os.Lstat(recipeDir); errors.Is(err, os.ErrNotExist) {
-		if err := ensureOwnedTensorFoldDirectory(recipeDir); err != nil {
+		if err := m.stagePinnedRecipe(ctx); err != nil {
 			return err
 		}
-		for _, command := range [][]string{
-			{"git", "init", "--quiet"},
-			{"git", "remote", "add", "origin", bkc.GLM53FlashEXL3TensorFoldRecipeRepository},
-			{"git", "fetch", "--quiet", "--depth", "1", "origin", bkc.GLM53FlashEXL3TensorFoldRecipeCommit},
-			{"git", "checkout", "--quiet", "--detach", "FETCH_HEAD"},
-		} {
-			if _, err := m.runner.Run(ctx, recipeDir, m.commandEnvironment(false), command[0], command[1:]...); err != nil {
-				return fmt.Errorf("stage pinned TensorFold recipe: %w", err)
-			}
-		}
-		freshCheckout = true
 	} else if err != nil {
 		return err
-	}
-	if freshCheckout {
-		if err := m.normalizeFreshPinnedRecipePermissions(); err != nil {
-			return err
-		}
 	}
 	if info, err := os.Lstat(recipeDir); err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("TensorFold recipe directory is missing or unsafe")
@@ -769,9 +767,37 @@ func (m *tensorFoldManager) ensurePinnedRecipe(ctx context.Context) error {
 	return m.verifyPinnedRecipeFiles()
 }
 
-func (m *tensorFoldManager) normalizeFreshPinnedRecipePermissions() error {
+// stagePinnedRecipe fetches into a sibling staging directory and renames it
+// into place only after the checkout completes, so an interrupted fetch never
+// leaves a partial recipe that every later create would reject.
+func (m *tensorFoldManager) stagePinnedRecipe(ctx context.Context) error {
+	staging, err := os.MkdirTemp(filepath.Dir(m.recipePath()), ".staging-")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.RemoveAll(staging) }()
+	if err := validateOwnedTensorFoldDirectory(staging); err != nil {
+		return err
+	}
+	for _, command := range [][]string{
+		{"git", "init", "--quiet"},
+		{"git", "remote", "add", "origin", bkc.GLM53FlashEXL3TensorFoldRecipeRepository},
+		{"git", "fetch", "--quiet", "--depth", "1", "origin", bkc.GLM53FlashEXL3TensorFoldRecipeCommit},
+		{"git", "checkout", "--quiet", "--detach", "FETCH_HEAD"},
+	} {
+		if _, err := m.runner.Run(ctx, staging, m.commandEnvironment(false), command[0], command[1:]...); err != nil {
+			return fmt.Errorf("stage pinned TensorFold recipe: %w", err)
+		}
+	}
+	if err := m.normalizeFreshPinnedRecipePermissions(staging); err != nil {
+		return err
+	}
+	return os.Rename(staging, m.recipePath())
+}
+
+func (m *tensorFoldManager) normalizeFreshPinnedRecipePermissions(recipeDir string) error {
 	for relative := range m.pinnedFiles {
-		path := filepath.Join(m.recipePath(), filepath.FromSlash(relative))
+		path := filepath.Join(recipeDir, filepath.FromSlash(relative))
 		info, err := os.Lstat(path)
 		if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
 			return fmt.Errorf("pinned TensorFold file %s is missing or unsafe", relative)
@@ -1287,8 +1313,14 @@ func validateTensorFoldResourceRequest(request tensorFoldResourceRequest, head b
 	worker := net.ParseIP(request.WorkerAddress)
 	headFabric := net.ParseIP(request.HeadFabricAddress)
 	service := net.ParseIP(request.ServiceAddress)
-	if !validPrivateDeploymentIP(worker) || !validPrivateDeploymentIP(headFabric) || !validPrivateDeploymentIP(service) {
-		return fmt.Errorf("worker, head fabric, and service addresses must be explicit private IPs")
+	// The recipe renders unbracketed user@host SSH/rsync targets and pins an
+	// IPv4 RoCE v2 GID, so every topology address must be plain IPv4; Is4 also
+	// rejects IPv4-mapped IPv6 spellings.
+	for _, address := range []string{request.WorkerAddress, request.HeadFabricAddress, request.ServiceAddress} {
+		parsed, err := netip.ParseAddr(address)
+		if err != nil || !parsed.Is4() || !validPrivateDeploymentIP(net.ParseIP(address)) {
+			return fmt.Errorf("worker, head fabric, and service addresses must be explicit private IPv4 addresses")
+		}
 	}
 	if worker.Equal(headFabric) || service.Equal(worker) || service.Equal(headFabric) {
 		return fmt.Errorf("TensorFold fabric and service addresses must be distinct")

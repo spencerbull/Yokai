@@ -377,7 +377,7 @@ func (ops *daemonDeploymentOperations) Preflight(ctx context.Context, request de
 			recipePayload.ServiceAddress = request.Recipe.ServiceAddress
 			recipePayload.ServicePort = request.Recipe.ServicePort
 		}
-		if err := ops.postJSON(ctx, binding.DeviceID, "/deployments/tensorfold/preflight", recipePayload, nil, 30*time.Second); err != nil {
+		if err := ops.postJSON(ctx, binding.DeviceID, "/deployments/tensorfold/preflight", recipePayload, nil, deployments.DefaultDeploymentPreflightRPCTimeout); err != nil {
 			return classifyAgentPreflightError(err)
 		}
 	}

@@ -610,10 +610,21 @@ func (e *Engine) rollbackLocked(ctx context.Context, deployment Deployment, safe
 		return deployment, WrapError(ErrorDependency, "persist rollback intent", err)
 	}
 
+	// A head recipe's stop removes every rank's container, so capture all rank
+	// logs before the first removal instead of interleaving capture and removal.
+	headRecipe := isHeadRecipeBKC(deployment.BKCID)
+	if headRecipe {
+		for _, member := range deployment.Members {
+			if candidateMayExist(member.Status) && member.Ownership != OwnershipObserved {
+				e.captureCandidateLogs(ctx, &deployment, result, member, exactRedaction)
+			}
+		}
+	}
+
 	candidatesSafe := true
 	for _, index := range reverseLaunchMemberIndexes(deployment) {
 		member := deployment.Members[index]
-		if isHeadRecipeBKC(deployment.BKCID) && member.Role == bkc.MultiDeviceRoleWorker && !candidatesSafe {
+		if headRecipe && member.Role == bkc.MultiDeviceRoleWorker && !candidatesSafe {
 			break
 		}
 		if !candidateMayExist(member.Status) {
@@ -630,7 +641,7 @@ func (e *Engine) rollbackLocked(ctx context.Context, deployment Deployment, safe
 			continue
 		}
 		selector := member.Name
-		if isHeadRecipeBKC(deployment.BKCID) {
+		if headRecipe {
 			selector = memberLocator(member)
 		}
 		observed, inspectErr := e.Ops.Inspect(ctx, member.DeviceID, selector)
@@ -647,33 +658,9 @@ func (e *Engine) rollbackLocked(ctx context.Context, deployment Deployment, safe
 			}
 			member.ContainerID = observed.ID
 		}
-		memberRedaction := ""
-		if member.Role == bkc.MultiDeviceRoleHead {
-			memberRedaction = exactRedaction
+		if !headRecipe {
+			e.captureCandidateLogs(ctx, &deployment, result, member, exactRedaction)
 		}
-		capture, captureErr := e.Ops.CaptureManagedLogs(ctx, deployment, member, memberRedaction)
-		logTail := RankLogTail{
-			Role: member.Role, Rank: member.Rank, DeviceID: member.DeviceID,
-			ContainerID: member.ContainerID, Name: member.Name, CapturedAt: e.Now().UTC(),
-		}
-		if captureErr != nil {
-			logTail.Status = "failed"
-			logTail.Error, _ = SanitizeLogTail(captureErr.Error(), exactRedaction)
-		} else {
-			logTail.Status = "captured"
-			logTail.Tail, logTail.Truncated = SanitizeLogTail(capture.Tail, exactRedaction)
-			logTail.Truncated = logTail.Truncated || capture.Truncated
-		}
-		result.LogTails = upsertRankLogTail(result.LogTails, logTail)
-		deployment.Rollback = result
-		captureStatus := logTail.Status
-		captureDetail := "bounded candidate log tail captured"
-		if captureErr != nil {
-			captureDetail = "bounded candidate log tail capture failed; removal will continue"
-		}
-		// Log capture is diagnostic and best effort. A capture or journal failure
-		// must never block the cleanup barrier or previous-service restoration.
-		_ = e.persistProgress(&deployment, PhaseRollback, "capture_candidate_logs", member.Role, captureStatus, captureDetail)
 		// Always cross the provenance-aware agent deletion endpoint, including
 		// when the preceding read observed absence. That endpoint is also the
 		// completion barrier for an in-flight ambiguous docker run of this exact
@@ -770,6 +757,36 @@ func (e *Engine) rollbackLocked(ctx context.Context, deployment Deployment, safe
 	return deployment, nil
 }
 
+// captureCandidateLogs records a bounded, sanitized log tail for one candidate.
+// Log capture is diagnostic and best effort. A capture or journal failure must
+// never block the cleanup barrier or previous-service restoration.
+func (e *Engine) captureCandidateLogs(ctx context.Context, deployment *Deployment, result *RollbackResult, member Member, exactRedaction string) {
+	memberRedaction := ""
+	if member.Role == bkc.MultiDeviceRoleHead {
+		memberRedaction = exactRedaction
+	}
+	capture, captureErr := e.Ops.CaptureManagedLogs(ctx, *deployment, member, memberRedaction)
+	logTail := RankLogTail{
+		Role: member.Role, Rank: member.Rank, DeviceID: member.DeviceID,
+		ContainerID: member.ContainerID, Name: member.Name, CapturedAt: e.Now().UTC(),
+	}
+	if captureErr != nil {
+		logTail.Status = "failed"
+		logTail.Error, _ = SanitizeLogTail(captureErr.Error(), exactRedaction)
+	} else {
+		logTail.Status = "captured"
+		logTail.Tail, logTail.Truncated = SanitizeLogTail(capture.Tail, exactRedaction)
+		logTail.Truncated = logTail.Truncated || capture.Truncated
+	}
+	result.LogTails = upsertRankLogTail(result.LogTails, logTail)
+	deployment.Rollback = result
+	captureDetail := "bounded candidate log tail captured"
+	if captureErr != nil {
+		captureDetail = "bounded candidate log tail capture failed; removal will continue"
+	}
+	_ = e.persistProgress(deployment, PhaseRollback, "capture_candidate_logs", member.Role, logTail.Status, captureDetail)
+}
+
 func validateManagedMemberIdentity(deployment Deployment, member Member, observed ObservedContainer) error {
 	if member.Ownership != OwnershipManaged || !observed.Managed || observed.Ownership != OwnershipManaged {
 		return fmt.Errorf("%s member is not managed by Yokai", member.Role)
@@ -849,7 +866,7 @@ func (e *Engine) waitReady(ctx context.Context, members []Member, apiKey, expect
 			}
 			switch observed.Status {
 			case "running":
-			case "stopped", "exited", "dead":
+			case "stopped", "exited", "dead", "failed":
 				return members, TestResult{}, fmt.Errorf("%s rank exited during readiness", members[index].Role)
 			default:
 				allRunning = false

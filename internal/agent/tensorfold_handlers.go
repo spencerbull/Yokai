@@ -1,10 +1,12 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -212,7 +214,15 @@ func (m *tensorFoldManager) preflight(ctx context.Context, request tensorFoldRes
 	if err := m.verifyTensorFoldImageProvenance(ctx, resource, true); err != nil {
 		return err
 	}
-	return m.verifyTensorFoldFabric(ctx, resource)
+	if err := m.verifyTensorFoldFabric(ctx, resource); err != nil {
+		return err
+	}
+	// Stage and verify the exact checkout here, before the engine stops any
+	// previous service, so an unreachable or drifted recipe is a preflight
+	// rejection rather than a cutover followed by rollback.
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.ensurePinnedRecipe(ctx)
 }
 
 func (m *tensorFoldManager) verifyTensorFoldImageProvenance(ctx context.Context, resource tensorFoldResource, worker bool) error {
@@ -382,7 +392,7 @@ func (m *tensorFoldManager) restart(ctx context.Context, name string) error {
 
 func (m *tensorFoldManager) logs(ctx context.Context, resource tensorFoldResource) (string, bool, error) {
 	var data []byte
-	var err error
+	readTruncated := false
 	if resource.Role == "head" {
 		path := m.logPath(resource.Name)
 		info, statErr := os.Lstat(path)
@@ -398,13 +408,47 @@ func (m *tensorFoldManager) logs(ctx context.Context, resource tensorFoldResourc
 		if err := rejectTensorFoldSymlinkComponents(path, false); err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || !tensorFoldFileOwnedByCurrentUser(info) || info.Mode().Perm()&0o077 != 0 {
 			return "", false, fmt.Errorf("TensorFold supervisor log path is unsafe")
 		}
-		data, err = os.ReadFile(path)
+		var err error
+		if data, readTruncated, err = readTensorFoldLogTail(path); err != nil {
+			return "", false, err
+		}
 	} else {
-		data, err = m.runner.Run(ctx, "", m.commandEnvironment(false), "docker", "logs", "--tail", strconv.Itoa(deployments.MaxLogTailLines), tensorFoldContainerName)
-	}
-	if err != nil {
-		return "", false, err
+		var err error
+		if data, err = m.runner.Run(ctx, "", m.commandEnvironment(false), "docker", "logs", "--tail", strconv.Itoa(deployments.MaxLogTailLines), tensorFoldContainerName); err != nil {
+			return "", false, err
+		}
 	}
 	tail, truncated := deployments.SanitizeLogTail(string(data), "")
-	return tail, truncated, nil
+	return tail, truncated || readTruncated, nil
+}
+
+// tensorFoldLogReadLimit bounds the supervisor log suffix loaded into memory.
+// The supervisor log appends across restarts, so it can grow without bound;
+// four times the persisted tail leaves room for sanitization to drop bytes.
+const tensorFoldLogReadLimit = 4 * deployments.MaxLogTailBytes
+
+func readTensorFoldLogTail(path string) ([]byte, bool, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, false, err
+	}
+	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, false, err
+	}
+	offset := info.Size() - tensorFoldLogReadLimit
+	if offset <= 0 {
+		data, err := io.ReadAll(io.LimitReader(file, tensorFoldLogReadLimit))
+		return data, false, err
+	}
+	data, err := io.ReadAll(io.NewSectionReader(file, offset, tensorFoldLogReadLimit))
+	if err != nil {
+		return nil, false, err
+	}
+	// Drop the partial line at the seek boundary.
+	if newline := bytes.IndexByte(data, '\n'); newline >= 0 {
+		data = data[newline+1:]
+	}
+	return data, true, nil
 }

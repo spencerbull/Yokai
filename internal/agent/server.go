@@ -56,7 +56,7 @@ func Run(port string, version string) error {
 	}
 	tensorFoldResources := newTensorFoldManager(tensorFoldRoot, execTensorFoldRunner{})
 	activeTensorFoldResources = tensorFoldResources
-	if err := tensorFoldResources.reconcile(context.Background()); err != nil {
+	if err := tensorFoldResources.reconcileBounded(context.Background()); err != nil {
 		log.Printf("warning: TensorFold resource reconciliation: %v", err)
 	}
 	go tensorFoldResources.supervise(context.Background())

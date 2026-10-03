@@ -565,12 +565,34 @@ func TestTensorFoldReadinessRollbackStopsHeadBeforeReleasingWorker(t *testing.T)
 			cleanup = append(cleanup, event)
 		}
 	}
+	// The head recipe's stop deletes both rank containers, so every rank's logs
+	// must be captured before the head removal.
 	want := []string{
-		"logs:kyber:new-head", "remove:kyber:new-head",
-		"logs:beskar:new-worker", "remove:beskar:new-worker",
+		"logs:kyber:new-head", "logs:beskar:new-worker",
+		"remove:kyber:new-head", "remove:beskar:new-worker",
 	}
 	if !reflect.DeepEqual(cleanup, want) {
-		t.Fatalf("TensorFold rollback released worker before head cleanup: got %v want %v", cleanup, want)
+		t.Fatalf("TensorFold rollback cleanup order mismatch: got %v want %v", cleanup, want)
+	}
+}
+
+type failedHeadOperations struct{ *fakeOperations }
+
+func (f failedHeadOperations) Inspect(ctx context.Context, deviceID, containerID string) (ObservedContainer, error) {
+	observed, err := f.fakeOperations.Inspect(ctx, deviceID, containerID)
+	if err == nil && observed.Role == bkc.MultiDeviceRoleHead {
+		observed.Status = "failed"
+	}
+	return observed, err
+}
+
+func TestTensorFoldReadinessFailsFastWhenHeadRecipeFails(t *testing.T) {
+	ops := failedHeadOperations{&fakeOperations{}}
+	engine, _, _ := newTestEngine(t, ops)
+	engine.ReadinessTimeout = time.Hour
+	_, err := engine.Create(context.Background(), validTensorFoldRequest())
+	if err == nil || !strings.Contains(err.Error(), "head rank exited during readiness") {
+		t.Fatalf("failed head recipe did not end readiness immediately: %v", err)
 	}
 }
 

@@ -141,6 +141,10 @@ describe("inferServiceType", () => {
     expect(inferServiceType("yokai-sglang-qwen3-8", "lmsysorg/sglang:latest")).toBe("sglang")
     expect(inferServiceType("custom-runtime", "lmsysorg/sglang@sha256:abc123")).toBe("sglang")
   })
+
+  test("classifies TensorFold resources by image", () => {
+    expect(inferServiceType("yokai-deployment-d1-g1-head", "ghcr.io/miaai-lab/glm-5.3-flash-exl3-2x-dgx-sparks-tensorfold@sha256:abc123")).toBe("tensorfold")
+  })
 })
 
 describe("isAlertService", () => {
