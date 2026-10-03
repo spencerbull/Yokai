@@ -19,7 +19,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/spencerbull/yokai/internal/bkc"
@@ -101,19 +100,13 @@ func (p *execTensorFoldProcess) Stop() error {
 	if p.command.Process == nil {
 		return nil
 	}
-	if err := syscall.Kill(-p.command.Process.Pid, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
-		return err
-	}
-	return nil
+	return tensorFoldSignalProcessGroup(p.command.Process.Pid, false)
 }
 func (p *execTensorFoldProcess) Kill() error {
 	if p.command.Process == nil {
 		return nil
 	}
-	if err := syscall.Kill(-p.command.Process.Pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
-		return err
-	}
-	return nil
+	return tensorFoldSignalProcessGroup(p.command.Process.Pid, true)
 }
 
 type execTensorFoldRunner struct{}
@@ -138,7 +131,9 @@ func (execTensorFoldRunner) Start(ctx context.Context, dir string, env []string,
 	command.Env = env
 	command.Stdout = output
 	command.Stderr = output
-	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := tensorFoldConfigureCommand(command); err != nil {
+		return nil, err
+	}
 	if err := command.Start(); err != nil {
 		return nil, err
 	}
@@ -396,11 +391,8 @@ func (m *tensorFoldManager) joinTensorFoldLaunchLocked(ctx context.Context, reso
 // SIGKILL is the expected result of our deliberate launcher cancellation,
 // not a cleanup failure. Preserve all other exit and cancellation errors.
 func tensorFoldExpectedKillResult(err error) error {
-	var exitError *exec.ExitError
-	if errors.As(err, &exitError) {
-		if status, ok := exitError.Sys().(syscall.WaitStatus); ok && status.Signaled() && status.Signal() == syscall.SIGKILL {
-			return nil
-		}
+	if tensorFoldExitWasIntentionalKill(err) {
+		return nil
 	}
 	return err
 }
@@ -758,7 +750,7 @@ func (m *tensorFoldManager) ensurePinnedRecipe(ctx context.Context) error {
 	}
 	if info, err := os.Lstat(recipeDir); err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("TensorFold recipe directory is missing or unsafe")
-	} else if stat, ok := info.Sys().(*syscall.Stat_t); !ok || int(stat.Uid) != os.Geteuid() {
+	} else if !tensorFoldFileOwnedByCurrentUser(info) {
 		return fmt.Errorf("TensorFold recipe directory is not owned by the agent user")
 	}
 	revision, err := m.runner.Run(ctx, recipeDir, m.commandEnvironment(false), "git", "-C", recipeDir, "rev-parse", "HEAD")
@@ -784,7 +776,7 @@ func (m *tensorFoldManager) normalizeFreshPinnedRecipePermissions() error {
 		if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
 			return fmt.Errorf("pinned TensorFold file %s is missing or unsafe", relative)
 		}
-		if stat, ok := info.Sys().(*syscall.Stat_t); !ok || int(stat.Uid) != os.Geteuid() {
+		if !tensorFoldFileOwnedByCurrentUser(info) {
 			return fmt.Errorf("pinned TensorFold file %s is not owned by the agent user", relative)
 		}
 		if err := os.Chmod(path, info.Mode().Perm()&^0o022); err != nil {
@@ -812,7 +804,7 @@ func (m *tensorFoldManager) verifyPinnedRecipeFiles() error {
 		if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
 			return fmt.Errorf("pinned TensorFold file %s is missing or unsafe", relative)
 		}
-		if stat, ok := info.Sys().(*syscall.Stat_t); !ok || int(stat.Uid) != os.Geteuid() {
+		if !tensorFoldFileOwnedByCurrentUser(info) {
 			return fmt.Errorf("pinned TensorFold file %s is not owned by the agent user", relative)
 		}
 		if info.Mode().Perm()&0o022 != 0 {
@@ -839,8 +831,7 @@ func (m *tensorFoldManager) verifyPinnedRecipeForExecution(resource tensorFoldRe
 	if err != nil {
 		return err
 	}
-	stat, owned := info.Sys().(*syscall.Stat_t)
-	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || !owned || int(stat.Uid) != os.Geteuid() || info.Mode().Perm() != 0o600 {
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || !tensorFoldFileOwnedByCurrentUser(info) || info.Mode().Perm() != 0o600 {
 		return fmt.Errorf("TensorFold recipe environment is unsafe")
 	}
 	request := tensorFoldResourceRequest{
@@ -870,8 +861,7 @@ func (m *tensorFoldManager) openLog(name string) (*os.File, error) {
 		return nil, err
 	}
 	if info, err := os.Lstat(m.logPath(name)); err == nil {
-		stat, owned := info.Sys().(*syscall.Stat_t)
-		if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || !owned || int(stat.Uid) != os.Geteuid() {
+		if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || !tensorFoldFileOwnedByCurrentUser(info) {
 			return nil, fmt.Errorf("TensorFold supervisor log path is unsafe")
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -972,8 +962,7 @@ func (m *tensorFoldManager) verifyTensorFoldSSHTransport(resource tensorFoldReso
 		if err != nil {
 			return err
 		}
-		stat, owned := info.Sys().(*syscall.Stat_t)
-		if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || !owned || int(stat.Uid) != os.Geteuid() || info.Mode().Perm() != file.mode {
+		if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || !tensorFoldFileOwnedByCurrentUser(info) || info.Mode().Perm() != file.mode {
 			return fmt.Errorf("TensorFold SSH transport %s is unsafe", file.name)
 		}
 		data, err := os.ReadFile(path)
@@ -1048,8 +1037,7 @@ func (m *tensorFoldManager) readResource(name string) (tensorFoldResource, error
 	if err != nil {
 		return tensorFoldResource{}, err
 	}
-	stat, owned := info.Sys().(*syscall.Stat_t)
-	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || !owned || int(stat.Uid) != os.Geteuid() || info.Mode().Perm()&0o077 != 0 {
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || !tensorFoldFileOwnedByCurrentUser(info) || info.Mode().Perm()&0o077 != 0 {
 		return tensorFoldResource{}, fmt.Errorf("TensorFold resource record is unsafe")
 	}
 	data, err := os.ReadFile(path)
@@ -1133,8 +1121,7 @@ func validateOwnedTensorFoldDirectory(path string) error {
 	if err != nil {
 		return err
 	}
-	stat, owned := info.Sys().(*syscall.Stat_t)
-	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || !owned || int(stat.Uid) != os.Geteuid() {
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || !tensorFoldFileOwnedByCurrentUser(info) {
 		return fmt.Errorf("TensorFold state directory is unsafe")
 	}
 	if info.Mode().Perm()&0o077 != 0 {

@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/spencerbull/yokai/internal/bkc"
@@ -396,8 +395,7 @@ func (m *tensorFoldManager) logs(ctx context.Context, resource tensorFoldResourc
 		if err := validateOwnedTensorFoldDirectory(filepath.Dir(path)); err != nil {
 			return "", false, err
 		}
-		stat, owned := info.Sys().(*syscall.Stat_t)
-		if err := rejectTensorFoldSymlinkComponents(path, false); err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || !owned || int(stat.Uid) != os.Geteuid() || info.Mode().Perm()&0o077 != 0 {
+		if err := rejectTensorFoldSymlinkComponents(path, false); err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || !tensorFoldFileOwnedByCurrentUser(info) || info.Mode().Perm()&0o077 != 0 {
 			return "", false, fmt.Errorf("TensorFold supervisor log path is unsafe")
 		}
 		data, err = os.ReadFile(path)
