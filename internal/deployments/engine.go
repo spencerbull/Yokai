@@ -1360,6 +1360,11 @@ func deploymentLaunchOrder(deployment Deployment) []string {
 	if len(deployment.LaunchOrder) != 0 {
 		return append([]string(nil), deployment.LaunchOrder...)
 	}
+	// Records persisted before launch_order existed fall back to the BKC's
+	// declared order, so a recipe-owned group still stops its owner first.
+	if cfg, ok := bkc.LookupID(deployment.BKCID); ok && cfg.MultiDevice != nil && len(cfg.MultiDevice.LaunchOrder) != 0 {
+		return append([]string(nil), cfg.MultiDevice.LaunchOrder...)
+	}
 	return []string{bkc.MultiDeviceRoleHead, bkc.MultiDeviceRoleWorker}
 }
 

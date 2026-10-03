@@ -596,6 +596,16 @@ func TestTensorFoldReadinessFailsFastWhenHeadRecipeFails(t *testing.T) {
 	}
 }
 
+func TestTensorFoldRecordWithoutLaunchOrderStillStopsHeadFirst(t *testing.T) {
+	deployment := Deployment{
+		BKCID:   bkc.GLM53FlashEXL3TensorFoldDualGB10ID,
+		Members: []Member{{Role: bkc.MultiDeviceRoleHead}, {Role: bkc.MultiDeviceRoleWorker}},
+	}
+	if got := reverseLaunchMemberIndexes(deployment); !reflect.DeepEqual(got, []int{0, 1}) {
+		t.Fatalf("legacy TensorFold record released the worker before the head: %v", got)
+	}
+}
+
 func TestCreateRejectsDuplicateDeviceBeforeMutation(t *testing.T) {
 	ops := &fakeOperations{}
 	engine, store, _ := newTestEngine(t, ops)
