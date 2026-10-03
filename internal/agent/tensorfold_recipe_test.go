@@ -339,8 +339,12 @@ func TestTensorFoldReadinessProvesEffectivePolicyAndSmoke(t *testing.T) {
 		Repository: request.Repository, Commit: request.Commit, WorkerUser: request.WorkerUser,
 		WorkerAddress: request.WorkerAddress, HeadFabricAddress: request.HeadFabricAddress,
 		ServiceAddress: request.ServiceAddress, ServicePort: request.ServicePort,
-		LaunchID:        strings.Repeat("a", 64),
-		LaunchStartedAt: time.Now().Add(-time.Minute).UTC(),
+		LaunchID:          strings.Repeat("a", 64),
+		LaunchStartedAt:   time.Now().Add(-time.Minute).UTC(),
+		ReadinessDeadline: time.Now().Add(time.Hour).UTC(),
+	}
+	if err := manager.writeResource(resource); err != nil {
+		t.Fatal(err)
 	}
 	result, err := manager.testResource(context.Background(), resource)
 	if err != nil {
@@ -348,6 +352,9 @@ func TestTensorFoldReadinessProvesEffectivePolicyAndSmoke(t *testing.T) {
 	}
 	if !result.OK || !result.MetricsReady || result.Model != bkc.GLM53FlashEXL3TensorFoldServedModel || !strings.EqualFold(result.Response, "ok") {
 		t.Fatalf("readiness result mismatch: %#v", result)
+	}
+	if current, err := manager.inspect(resource.Name); err != nil || !current.ReadinessDeadline.IsZero() {
+		t.Fatalf("proven readiness did not retire the agent deadline: %#v err=%v", current.ReadinessDeadline, err)
 	}
 }
 

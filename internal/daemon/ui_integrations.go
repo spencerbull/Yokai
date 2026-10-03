@@ -214,11 +214,9 @@ func liveOpenAIEndpointCandidates(devices []config.Device, claimedPorts map[stri
 				DeviceID:     device.ID,
 				DeviceLabel:  firstNonEmpty(device.Label, device.ID),
 				DisplayModel: "",
-				// Grouped heads bind only their explicit service address,
-				// which may differ from the device's management host.
-				Host:        firstNonEmpty(strings.TrimSpace(container.Labels["io.yokai.service.address"]), device.Host),
-				Port:        port,
-				ServiceType: serviceType,
+				Host:         device.Host,
+				Port:         port,
+				ServiceType:  serviceType,
 			})
 		}
 	}

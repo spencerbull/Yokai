@@ -172,24 +172,36 @@ func TestTensorFoldRemoveDeletesSupervisorLogAndTransport(t *testing.T) {
 	}
 }
 
-func TestTensorFoldPreparationDeadlineStopsUnservedLaunch(t *testing.T) {
-	manager := newTensorFoldManager(t.TempDir(), noTensorFoldContainersRunner(t))
-	manager.fenceProcesses = func(string) error { return nil }
-	head := resourceFromTensorFoldRequest(validTensorFoldResourceRequest(true), "starting")
-	head.LaunchStartedAt = time.Now().Add(-tensorFoldPreparationDeadline - time.Minute).UTC()
-	stageTensorFoldExecutionFixture(t, manager, head)
-	if err := manager.writeResource(head); err != nil {
-		t.Fatal(err)
+func TestTensorFoldReadinessDeadlineStopsUnprovenLaunch(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		deadline time.Time
+		want     string
+	}{
+		{name: "unproven past deadline", deadline: time.Now().Add(-time.Minute), want: "stopped"},
+		{name: "unproven before deadline", deadline: time.Now().Add(time.Hour), want: "starting"},
+		// Records predating the deadline, and proven-ready launches, carry none.
+		{name: "no deadline", want: "starting"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			manager := newTensorFoldManager(t.TempDir(), noTensorFoldContainersRunner(t))
+			manager.fenceProcesses = func(string) error { return nil }
+			head := resourceFromTensorFoldRequest(validTensorFoldResourceRequest(true), "starting")
+			head.LaunchStartedAt = time.Now().Add(-2 * tensorFoldPreparationDeadline).UTC()
+			head.ReadinessDeadline = test.deadline
+			stageTensorFoldExecutionFixture(t, manager, head)
+			if err := manager.writeResource(head); err != nil {
+				t.Fatal(err)
+			}
+			trackTestTensorFoldProcess(t, manager, head, &fakeTensorFoldProcess{done: make(chan error, 1)})
+			if err := manager.reconcile(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if current, err := manager.inspect(head.Name); err != nil || current.Status != test.want {
+				t.Fatalf("status = %#v err=%v, want %s", current.Status, err, test.want)
+			}
+		})
 	}
-	process := &fakeTensorFoldProcess{done: make(chan error, 1)}
-	trackTestTensorFoldProcess(t, manager, head, process)
-	if err := manager.reconcile(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if current, err := manager.inspect(head.Name); err != nil || current.Status != "stopped" {
-		t.Fatalf("hung preparation kept the node past its deadline: resource=%#v err=%v", current, err)
-	}
-
 	if tensorFoldPreparationDeadline <= 14400*time.Second {
 		t.Fatal("agent deadline must trail the coordinator's readiness timeout")
 	}

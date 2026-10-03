@@ -99,10 +99,32 @@ func (m *tensorFoldManager) testResource(ctx context.Context, resource tensorFol
 	if err := m.testTensorFoldStream(ctx, baseURL+"/v1/chat/completions", smoke); err != nil {
 		return nil, err
 	}
+	if err := m.markReady(resource); err != nil {
+		return nil, fmt.Errorf("persist TensorFold readiness: %w", err)
+	}
 	return &ServiceTestResult{
 		OK: true, ServiceType: "tensorfold", Message: "TensorFold effective policy and chat probes passed",
 		Model: bkc.GLM53FlashEXL3TensorFoldServedModel, Response: strings.TrimSpace(completion.Choices[0].Message.Content), MetricsReady: true,
 	}, nil
+}
+
+// markReady records proven semantic readiness, retiring this launch's
+// agent-side deadline.
+func (m *tensorFoldManager) markReady(resource tensorFoldResource) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	current, err := m.readResource(resource.Name)
+	if err != nil {
+		return err
+	}
+	if !sameTensorFoldGeneration(resource, current) {
+		return fmt.Errorf("TensorFold launch changed during readiness probing")
+	}
+	if current.ReadinessDeadline.IsZero() {
+		return nil
+	}
+	current.ReadinessDeadline = time.Time{}
+	return m.writeResource(current)
 }
 
 func (m *tensorFoldManager) verifyRecipeContainer(ctx context.Context, resource tensorFoldResource, worker bool) error {

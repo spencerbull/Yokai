@@ -24,7 +24,6 @@ type agentContainerRecord struct {
 	Image  string            `json:"image"`
 	Status string            `json:"status"`
 	Ports  map[string]string `json:"ports"`
-	Labels map[string]string `json:"labels,omitempty"`
 }
 
 func (d *Daemon) ensureConfiguredServices(device config.Device) (int, error) {

@@ -74,6 +74,9 @@ type tensorFoldResource struct {
 	HeadContainerID   string    `json:"head_container_id,omitempty"`
 	WorkerContainerID string    `json:"worker_container_id,omitempty"`
 	LaunchStartedAt   time.Time `json:"launch_started_at,omitempty"`
+	// ReadinessDeadline is when the agent stops a launch that has not proven
+	// semantic readiness. Zero once ready, and on records predating it.
+	ReadinessDeadline time.Time `json:"readiness_deadline,omitempty"`
 	UpdatedAt         time.Time `json:"updated_at"`
 }
 
@@ -247,6 +250,7 @@ func (m *tensorFoldManager) create(ctx context.Context, request tensorFoldResour
 	}
 	resource.Status = "starting"
 	resource.LaunchStartedAt = time.Now().UTC()
+	resource.ReadinessDeadline = resource.LaunchStartedAt.Add(tensorFoldPreparationDeadline)
 	if err := m.writeResource(resource); err != nil {
 		return tensorFoldResource{}, err
 	}
@@ -500,6 +504,15 @@ func (m *tensorFoldManager) reconcile(ctx context.Context) error {
 		if resource.Role != bkc.MultiDeviceRoleHead || resource.Status == "stopped" {
 			continue
 		}
+		if !resource.ReadinessDeadline.IsZero() && time.Now().After(resource.ReadinessDeadline) {
+			// Running containers are not readiness. The coordinator owns the
+			// readiness gate and normally rolls back first; this frees the
+			// node only when no coordinator is left to do so.
+			if err := m.stopGeneration(ctx, resource); err != nil {
+				joined = append(joined, fmt.Errorf("resource %s stop after readiness deadline: %w", name, err))
+			}
+			continue
+		}
 		m.mu.Lock()
 		launch := m.processes[name]
 		launchActive := launch != nil && launch.id == resource.LaunchID
@@ -518,15 +531,6 @@ func (m *tensorFoldManager) reconcile(ctx context.Context) error {
 				joined = append(joined, fmt.Errorf("resource %s active preparation observation: %w", name, errors.Join(localErr, workerErr)))
 				continue
 			}
-			serving := localExists && workerExists && localRunning && workerRunning
-			if !serving && time.Since(resource.LaunchStartedAt) >= tensorFoldPreparationDeadline {
-				// The coordinator owns readiness and normally rolls back first;
-				// this only frees the node when no coordinator is left to do so.
-				if err := m.stopGeneration(ctx, resource); err != nil {
-					joined = append(joined, fmt.Errorf("resource %s stop after preparation deadline: %w", name, err))
-				}
-				continue
-			}
 			expected := resource
 			if localExists {
 				resource.HeadContainerID = localID
@@ -534,7 +538,7 @@ func (m *tensorFoldManager) reconcile(ctx context.Context) error {
 			if workerExists {
 				resource.WorkerContainerID = workerID
 			}
-			if serving {
+			if localExists && workerExists && localRunning && workerRunning {
 				resource.Status = "running"
 			}
 			_, _, writeErr := m.compareAndWriteResource(expected, resource)

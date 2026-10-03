@@ -380,6 +380,7 @@ func (m *tensorFoldManager) restart(ctx context.Context, name string) error {
 	}
 	resource.Status = "starting"
 	resource.LaunchStartedAt = time.Now().UTC()
+	resource.ReadinessDeadline = resource.LaunchStartedAt.Add(tensorFoldPreparationDeadline)
 	if err := m.writeResource(resource); err != nil {
 		_ = logFile.Close()
 		return err
