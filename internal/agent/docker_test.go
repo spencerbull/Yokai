@@ -1112,6 +1112,30 @@ func TestDefaultArgsRespectUserOverrides(t *testing.T) {
 	}
 }
 
+func TestScrapeTensorFoldRoundsTotal(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("tensorfold:requests_running 3\ntensorfold:rounds_total 99\n"))
+	}))
+	defer server.Close()
+
+	port := strings.TrimPrefix(server.URL, "http://127.0.0.1:")
+	metrics, err := scrapeVLLMMetrics(port)
+	if err != nil {
+		t.Fatalf("scrape TensorFold metrics: %v", err)
+	}
+	if !metrics.HasTensorFoldRoundsTotal || metrics.TensorFoldRoundsTotal != 99 {
+		t.Fatalf("rounds_total not parsed: %#v", metrics)
+	}
+	if !metrics.HasRequestsRunning || metrics.RequestsRunning != 3 {
+		t.Fatalf("requests_running not parsed: %#v", metrics)
+	}
+	if !metrics.HasTensorFoldNativeMetric {
+		t.Fatalf("native metric family not detected: %#v", metrics)
+	}
+}
+
 func TestScrapeSGLangMetrics(t *testing.T) {
 	t.Parallel()
 

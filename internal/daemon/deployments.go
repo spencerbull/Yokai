@@ -427,7 +427,7 @@ func classifyAgentPreflightDependency(operation string, err error) error {
 }
 
 func (ops *daemonDeploymentOperations) Pull(ctx context.Context, binding deployments.Binding, image string) error {
-	if image == bkc.GLM53FlashEXL3TensorFoldImage {
+	if image == bkc.GLM53FlashEXL3TensorFoldImage || image == bkc.GLM53FlashEXL3TensorFoldImageV14 {
 		return nil
 	}
 	return deploymentAgentOperationError("pull candidate image", ops.postJSON(ctx, binding.DeviceID, "/images/pull", map[string]string{"image": image}, nil, deployments.DefaultImagePullRPCTimeout), false)
@@ -797,7 +797,7 @@ func (ops *daemonDeploymentOperations) RestartManaged(ctx context.Context, deplo
 }
 
 func isTensorFoldDeployment(deployment deployments.Deployment) bool {
-	return deployment.BKCID == bkc.GLM53FlashEXL3TensorFoldDualGB10ID
+	return deployment.BKCID == bkc.GLM53FlashEXL3TensorFoldDualGB10ID || deployment.BKCID == bkc.GLM53FlashEXL3TensorFoldDualGB10V14ID
 }
 
 func (ops *daemonDeploymentOperations) mutateTensorFoldResource(ctx context.Context, method, suffix string, member deployments.Member) error {

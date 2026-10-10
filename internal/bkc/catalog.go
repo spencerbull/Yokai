@@ -177,6 +177,12 @@ type MultiDeviceRecipe struct {
 	KVPoolGiB           string `json:"kv_pool_gib"`
 	NCCLRails           int    `json:"nccl_rails"`
 	ReadinessTimeoutSec int    `json:"readiness_timeout_s"`
+	// WatchdogExit is the value rendered as TF_GLM_MULTI_WATCHDOG_EXIT.
+	// Empty means the variable is omitted (legacy v1.4 default of "0").
+	WatchdogExit string `json:"watchdog_exit,omitempty"`
+	// WatchdogSeconds is the value rendered as TF_GLM_MULTI_WATCHDOG_S.
+	// Empty means the variable is omitted.
+	WatchdogSeconds string `json:"watchdog_seconds,omitempty"`
 }
 
 // MultiDeviceRuntimePatch records immutable source provenance for a narrowly

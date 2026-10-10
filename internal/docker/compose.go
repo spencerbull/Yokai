@@ -30,6 +30,7 @@ func GenerateMonitoringCompose(cfg MonitoringConfig) string {
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./prometheus/secrets:/etc/prometheus/secrets:ro
+      - ./prometheus/rules:/etc/prometheus/rules:ro
       - prometheus_data:/prometheus
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
@@ -120,6 +121,9 @@ func GeneratePrometheusConfig(cfg MonitoringConfig) string {
   scrape_interval: 15s
   evaluation_interval: 15s
 
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
 scrape_configs:
   - job_name: 'node'
     static_configs:
@@ -146,3 +150,19 @@ scrape_configs:
 
 	return config.String()
 }
+
+// TensorFoldAlertRulesYAML is the Prometheus rule file rendered and seeded by
+// the monitoring install. A hung generation leaves requests in flight while
+// generation rounds stop advancing.
+const TensorFoldAlertRulesYAML = `groups:
+  - name: yokai.tensorfold
+    rules:
+      - alert: TensorFoldGenerationHang
+        expr: max by (instance, service) (yokai_tensorfold_requests_running) > 0 and max by (instance, service) (increase(yokai_tensorfold_rounds_total[2m])) == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "TensorFold generation hang suspected on {{ $labels.instance }}"
+          description: "In-flight TensorFold requests are present but no generation rounds advanced in the last 2 minutes."
+`

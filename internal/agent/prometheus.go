@@ -74,6 +74,8 @@ func renderPrometheusMetrics(metrics *SystemMetrics, containers []Container) str
 	writeMetricHeader(&b, "yokai_llm_generated_tokens_total", "Total generated output tokens", "counter")
 	writeMetricHeader(&b, "yokai_llm_cached_prompt_tokens_total", "Total cached prompt tokens reused", "counter")
 	writeMetricHeader(&b, "yokai_llm_ttft_seconds", "Time to first token", "histogram")
+	writeMetricHeader(&b, "yokai_tensorfold_requests_running", "TensorFold requests currently running", "gauge")
+	writeMetricHeader(&b, "yokai_tensorfold_rounds_total", "Total TensorFold generation rounds", "counter")
 
 	sort.Slice(containers, func(i, j int) bool {
 		return containers[i].Name < containers[j].Name
@@ -134,6 +136,15 @@ func renderPrometheusMetrics(metrics *SystemMetrics, containers []Container) str
 			}
 			writePrometheusSample(&b, "yokai_llm_ttft_seconds_sum", labels, formatFloat(vllm.TTFTSum))
 			writePrometheusSample(&b, "yokai_llm_ttft_seconds_count", labels, formatFloat(vllm.TTFTCount))
+		}
+
+		if backend == "tensorfold" {
+			if vllm.HasRequestsRunning {
+				writePrometheusSample(&b, "yokai_tensorfold_requests_running", labels, formatFloat(vllm.RequestsRunning))
+			}
+			if vllm.HasTensorFoldRoundsTotal {
+				writePrometheusSample(&b, "yokai_tensorfold_rounds_total", labels, formatFloat(vllm.TensorFoldRoundsTotal))
+			}
 		}
 	}
 

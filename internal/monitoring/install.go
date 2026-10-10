@@ -16,13 +16,14 @@ type remoteClient interface {
 
 // RemoteFiles describes the monitoring stack files that should be seeded on the remote host.
 type RemoteFiles struct {
-	TmpDir          string
-	ComposeYAML     string
-	PrometheusYAML  string
-	AgentToken      string
-	DashboardJSON   string
-	DatasourceYAML  string
-	DashboardYAML   string
+	TmpDir         string
+	ComposeYAML    string
+	PrometheusYAML string
+	AgentToken     string
+	DashboardJSON  string
+	DatasourceYAML string
+	DashboardYAML  string
+	AlertRulesYAML string
 }
 
 // SeedRemoteFiles uploads the compose, Prometheus, Grafana provisioning, and secret files.
@@ -44,6 +45,9 @@ func SeedRemoteFiles(client remoteClient, files RemoteFiles) (string, error) {
 	if files.DashboardYAML == "" {
 		files.DashboardYAML = assetspkg.GrafanaDashboardProvisioning
 	}
+	if files.AlertRulesYAML == "" {
+		files.AlertRulesYAML = assetspkg.TensorFoldAlertRulesYAML
+	}
 
 	remoteDirs := []string{
 		files.TmpDir,
@@ -51,17 +55,19 @@ func SeedRemoteFiles(client remoteClient, files RemoteFiles) (string, error) {
 		filepath.Join(files.TmpDir, "grafana", "provisioning", "dashboards"),
 		filepath.Join(files.TmpDir, "grafana", "dashboards"),
 		filepath.Join(files.TmpDir, "prometheus", "secrets"),
+		filepath.Join(files.TmpDir, "prometheus", "rules"),
 	}
 	if _, err := client.Exec("mkdir -p " + strings.Join(remoteDirs, " ")); err != nil {
 		return "", fmt.Errorf("creating monitoring directories: %w", err)
 	}
 
 	uploads := map[string]string{
-		filepath.Join(files.TmpDir, "docker-compose.yml"):                               files.ComposeYAML,
-		filepath.Join(files.TmpDir, "prometheus.yml"):                                   files.PrometheusYAML,
+		filepath.Join(files.TmpDir, "docker-compose.yml"):                                       files.ComposeYAML,
+		filepath.Join(files.TmpDir, "prometheus.yml"):                                           files.PrometheusYAML,
+		filepath.Join(files.TmpDir, "prometheus", "rules", "yokai.yml"):                         files.AlertRulesYAML,
 		filepath.Join(files.TmpDir, "grafana", "provisioning", "datasources", "prometheus.yml"): files.DatasourceYAML,
-		filepath.Join(files.TmpDir, "grafana", "provisioning", "dashboards", "dashboard.yml"):  files.DashboardYAML,
-		filepath.Join(files.TmpDir, "grafana", "dashboards", "gpu-dashboard.json"):               files.DashboardJSON,
+		filepath.Join(files.TmpDir, "grafana", "provisioning", "dashboards", "dashboard.yml"):   files.DashboardYAML,
+		filepath.Join(files.TmpDir, "grafana", "dashboards", "gpu-dashboard.json"):              files.DashboardJSON,
 	}
 
 	for remotePath, contents := range uploads {

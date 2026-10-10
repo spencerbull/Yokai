@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/spencerbull/yokai/internal/bkc"
 )
 
 // stagingTensorFoldRunner answers every preflight probe like a healthy pair of
@@ -37,30 +39,30 @@ func newStagingTensorFoldManager(t *testing.T, fetchFailures *int) *tensorFoldMa
 	body := []byte("pinned start\n")
 	sum := sha256.Sum256(body)
 	manager := newTensorFoldManager(t.TempDir(), stagingTensorFoldRunner(body, fetchFailures))
-	manager.pinnedFiles = map[string]string{"start.sh": hex.EncodeToString(sum[:])}
+	manager.pinnedFilesOverride = map[string]string{"start.sh": hex.EncodeToString(sum[:])}
 	return manager
 }
 
 func TestTensorFoldInterruptedRecipeFetchLeavesNoPartialCheckout(t *testing.T) {
 	fetchFailures := 1
 	manager := newStagingTensorFoldManager(t, &fetchFailures)
-	if err := manager.ensurePinnedRecipe(context.Background()); err == nil || !strings.Contains(err.Error(), "stage pinned TensorFold recipe") {
+	if err := manager.ensurePinnedRecipe(context.Background(), bkc.GLM53FlashEXL3TensorFoldRecipeCommit); err == nil || !strings.Contains(err.Error(), "stage pinned TensorFold recipe") {
 		t.Fatalf("failed fetch was not reported as a staging failure: %v", err)
 	}
-	if _, err := os.Lstat(manager.recipePath()); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Lstat(manager.recipePath(bkc.GLM53FlashEXL3TensorFoldRecipeCommit)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("failed fetch left a partial recipe checkout: %v", err)
 	}
-	entries, err := os.ReadDir(filepath.Dir(manager.recipePath()))
+	entries, err := os.ReadDir(filepath.Dir(manager.recipePath(bkc.GLM53FlashEXL3TensorFoldRecipeCommit)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(entries) != 0 {
 		t.Fatalf("failed fetch left staging debris: %v", entries)
 	}
-	if err := manager.ensurePinnedRecipe(context.Background()); err != nil {
+	if err := manager.ensurePinnedRecipe(context.Background(), bkc.GLM53FlashEXL3TensorFoldRecipeCommit); err != nil {
 		t.Fatalf("retry after a transient fetch failure did not recover: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(manager.recipePath(), "start.sh")); err != nil {
+	if _, err := os.Stat(filepath.Join(manager.recipePath(bkc.GLM53FlashEXL3TensorFoldRecipeCommit), "start.sh")); err != nil {
 		t.Fatalf("retry did not install the pinned checkout: %v", err)
 	}
 }
@@ -82,7 +84,7 @@ func TestTensorFoldHeadPreflightStagesAndVerifiesPinnedRecipe(t *testing.T) {
 	if err := healthy.preflight(context.Background(), request); err != nil {
 		t.Fatalf("healthy head preflight failed: %v", err)
 	}
-	if err := healthy.verifyPinnedRecipeFiles(); err != nil {
+	if err := healthy.verifyPinnedRecipeFiles(bkc.GLM53FlashEXL3TensorFoldRecipeCommit); err != nil {
 		t.Fatalf("head preflight did not leave a verified checkout: %v", err)
 	}
 }

@@ -120,18 +120,18 @@ func TestTensorFoldManagerOwnsReservationAndHeadRecipeLifecycle(t *testing.T) {
 	runner := &fakeTensorFoldRunner{}
 	manager := newTensorFoldManager(root, runner)
 	workerManager := newTensorFoldManager(t.TempDir(), runner)
-	recipeDir := manager.recipePath()
+	recipeDir := manager.recipePath(bkc.GLM53FlashEXL3TensorFoldRecipeCommit)
 	if err := os.MkdirAll(filepath.Join(recipeDir, "scripts"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	manager.pinnedFiles = make(map[string]string)
-	for _, name := range []string{"README.md", "CHANGELOG.md", "scripts/config.sh", "scripts/local.sh.example", "scripts/nodes.sh", "scripts/prepare.sh", "start.sh", "stop.sh"} {
+	manager.pinnedFilesOverride = make(map[string]string)
+	for _, name := range []string{"README.md", "CHANGELOG.md", "scripts/config.sh", "scripts/banner.sh", "scripts/local.sh.example", "scripts/nodes.sh", "scripts/prepare.sh", "start.sh", "stop.sh"} {
 		body := []byte("pinned " + name + "\n")
 		if err := os.WriteFile(filepath.Join(recipeDir, name), body, 0o600); err != nil {
 			t.Fatal(err)
 		}
 		sum := sha256.Sum256(body)
-		manager.pinnedFiles[name] = hex.EncodeToString(sum[:])
+		manager.pinnedFilesOverride[name] = hex.EncodeToString(sum[:])
 	}
 
 	worker := validTensorFoldResourceRequest(false)
@@ -299,7 +299,7 @@ func TestTensorFoldReadinessProvesEffectivePolicyAndSmoke(t *testing.T) {
 		case "/health":
 			_, _ = io.WriteString(w, `{}`)
 		case "/metrics":
-			_, _ = io.WriteString(w, "tensorfold:requests_running 0\ntensorfold_health:context_length 1048576\ntensorfold_health:streams_max 4\ntensorfold_health:pool_tokens 2922496\n")
+			_, _ = io.WriteString(w, "tensorfold:requests_running 0\ntensorfold:rounds_total 42\ntensorfold_health:context_length 1048576\ntensorfold_health:streams_max 4\ntensorfold_health:pool_tokens 2922496\n")
 		case "/v1/chat/completions":
 			data, _ := io.ReadAll(r.Body)
 			if strings.Contains(string(data), `"stream":true`) {
@@ -601,11 +601,11 @@ func TestTensorFoldFreshCheckoutNormalizesGroupWritablePinnedFiles(t *testing.T)
 		return nil, nil
 	})
 	manager = newTensorFoldManager(t.TempDir(), runner)
-	manager.pinnedFiles = map[string]string{"CHANGELOG.md": hex.EncodeToString(sum[:])}
-	if err := manager.ensurePinnedRecipe(context.Background()); err != nil {
+	manager.pinnedFilesOverride = map[string]string{"CHANGELOG.md": hex.EncodeToString(sum[:])}
+	if err := manager.ensurePinnedRecipe(context.Background(), bkc.GLM53FlashEXL3TensorFoldRecipeCommit); err != nil {
 		t.Fatalf("fresh checkout did not normalize inherited group write permission: %v", err)
 	}
-	info, err := os.Stat(filepath.Join(manager.recipePath(), "CHANGELOG.md"))
+	info, err := os.Stat(filepath.Join(manager.recipePath(bkc.GLM53FlashEXL3TensorFoldRecipeCommit), "CHANGELOG.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -633,7 +633,7 @@ func TestTensorFoldPinnedRecipeRejectsIgnoredAdditions(t *testing.T) {
 	})
 	manager := newTensorFoldManager(t.TempDir(), runner)
 	stageTensorFoldExecutionFixture(t, manager, resource)
-	if err := manager.ensurePinnedRecipe(context.Background()); err == nil || !strings.Contains(err.Error(), "unowned changes") {
+	if err := manager.ensurePinnedRecipe(context.Background(), bkc.GLM53FlashEXL3TensorFoldRecipeCommit); err == nil || !strings.Contains(err.Error(), "unowned changes") {
 		t.Fatalf("ignored recipe addition was accepted: %v", err)
 	}
 	if !inspectedIgnored {
@@ -658,6 +658,14 @@ func resourceFromTensorFoldRequest(request tensorFoldResourceRequest, status str
 
 func tensorFoldInspectFixture(host, rank string) []byte {
 	return tensorFoldInspectFixtureWithLaunchID(host, rank, strings.Repeat("a", 64))
+}
+
+func tensorFoldInspectFixtureV14(host, rank string) []byte {
+	id := strings.Repeat("1", 64)
+	if rank == "1" {
+		id = strings.Repeat("2", 64)
+	}
+	return bytes.ReplaceAll(tensorFoldInspectFixtureWithIdentity(host, rank, strings.Repeat("a", 64), id), []byte(bkc.GLM53FlashEXL3TensorFoldImage), []byte(bkc.GLM53FlashEXL3TensorFoldImageV14))
 }
 
 func tensorFoldInspectFixtureWithLaunchID(host, rank, launchID string) []byte {
@@ -746,7 +754,7 @@ func validTensorFoldResourceRequest(head bool) tensorFoldResourceRequest {
 
 func stageTensorFoldExecutionFixture(t *testing.T, manager *tensorFoldManager, resource tensorFoldResource) {
 	t.Helper()
-	recipeDir := manager.recipePath()
+	recipeDir := manager.recipePath(resource.Commit)
 	if err := os.MkdirAll(filepath.Join(recipeDir, "scripts"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -755,7 +763,7 @@ func stageTensorFoldExecutionFixture(t *testing.T, manager *tensorFoldManager, r
 		t.Fatal(err)
 	}
 	sum := sha256.Sum256(body)
-	manager.pinnedFiles = map[string]string{"stop.sh": hex.EncodeToString(sum[:])}
+	manager.pinnedFilesOverride = map[string]string{"stop.sh": hex.EncodeToString(sum[:])}
 	request := tensorFoldResourceRequest{
 		Name: resource.Name, DeploymentID: resource.DeploymentID, Generation: resource.Generation, Role: resource.Role,
 		WorkerUser: resource.WorkerUser, WorkerAddress: resource.WorkerAddress, HeadFabricAddress: resource.HeadFabricAddress,
@@ -791,8 +799,9 @@ func TestTensorFoldRecipeEnvironmentPinsPolicyAndPrivateBind(t *testing.T) {
 		"MODEL_REVISION=078455ffe6472f9a52fbc1139f58b9db2881b25c",
 		"DFLASH2_ID=incoai/GLM-5.3-Flash-DFlash2",
 		"DFLASH2_REVISION=bf582e4eacc1810f76656d1811693ff6c6737d2a",
-		"TF_GLM_MULTI_WATCHDOG_EXIT=0",
-		"IMAGE=ghcr.io/miaai-lab/glm-5.3-flash-exl3-2x-dgx-sparks-tensorfold@sha256:14f15591eae5d6a540f09218d3852068962fe5381371bbfefe0e9194cd834529",
+		"TF_GLM_MULTI_WATCHDOG_EXIT=1",
+		"TF_GLM_MULTI_WATCHDOG_S=120",
+		"IMAGE=ghcr.io/miaai-lab/glm-5.3-flash-exl3-2x-dgx-sparks-tensorfold@sha256:bc34d7d63f978cf601f42863b284bc95a567c50c10e9adb0866a635be568bf5f",
 		"PULL=1",
 	}
 	for _, want := range wants {
@@ -804,6 +813,28 @@ func TestTensorFoldRecipeEnvironmentPinsPolicyAndPrivateBind(t *testing.T) {
 		if strings.Contains(env, forbidden) {
 			t.Fatalf("generated recipe environment contains forbidden setting %q", forbidden)
 		}
+	}
+}
+
+func TestTensorFoldRecipeEnvironmentV14RollbackPinsLegacyWatchdog(t *testing.T) {
+	req := tensorFoldResourceRequest{
+		Name: "yokai-deployment-dep-456-g1-head", DeploymentID: "dep-456", Generation: 1, Role: bkc.MultiDeviceRoleHead,
+		WorkerUser: "dell", WorkerAddress: "192.168.201.1", HeadFabricAddress: "192.168.201.2", ServiceAddress: "192.168.1.191", ServicePort: 8888,
+		Repository: bkc.GLM53FlashEXL3TensorFoldRecipeRepository, Commit: bkc.GLM53FlashEXL3TensorFoldRecipeCommitV14,
+	}
+	env, err := renderTensorFoldRecipeEnvironment(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(env, "TF_GLM_MULTI_WATCHDOG_EXIT=0\n") {
+		t.Fatalf("v1-4 env should have WATCHDOG_EXIT=0:\n%s", env)
+	}
+	if strings.Contains(env, "TF_GLM_MULTI_WATCHDOG_S=") {
+		t.Fatalf("v1-4 env should not have WATCHDOG_S override:\n%s", env)
+	}
+	wantImage := "IMAGE=" + bkc.GLM53FlashEXL3TensorFoldImageV14 + "\n"
+	if !strings.Contains(env, wantImage) {
+		t.Fatalf("v1-4 env should use v1-4 image: want %q\n%s", wantImage, env)
 	}
 }
 
@@ -837,7 +868,7 @@ func TestTensorFoldRecipeRequestRejectsInjectionAndProvenanceDrift(t *testing.T)
 }
 
 func TestTensorFoldPinnedRecipeFilesAreComplete(t *testing.T) {
-	want := map[string]string{
+	wantV14 := map[string]string{
 		"README.md":                "e852819f6634e770426fdc6aee2d4adf5a929a4ee9a1b2fa5f559df63505895d",
 		"CHANGELOG.md":             "9c40743b270bdb6688ff0a24c2e23e924d6e0d2552c33d9a3e73a60b3376a746",
 		"scripts/config.sh":        "9cfc3a5bac37c48b48db5d2a96c1e775d5be8e18842dc5d17b71db2032282fc4",
@@ -848,12 +879,113 @@ func TestTensorFoldPinnedRecipeFilesAreComplete(t *testing.T) {
 		"start.sh":                 "72f3f96c90373e5a1f24898c78b539f943b418b7f0be52b1a1b0ef8c30a88118",
 		"stop.sh":                  "84168a2f184a6e72cf848c5db5f8c2d585e1481671af6a21e3227583966ea5ef",
 	}
-	if len(tensorFoldPinnedRecipeFiles) != len(want) {
-		t.Fatalf("pinned critical file count = %d, want %d", len(tensorFoldPinnedRecipeFiles), len(want))
+	wantV110 := map[string]string{
+		"README.md":                "32364e8760e687431457dfb972c6e85d9229607c8bc5dab5a4420742272b5de8",
+		"CHANGELOG.md":             "2fd5120dafd0e2098eb8fa37457bfdc327bc53c9b37d458754d599967325a2d1",
+		"scripts/config.sh":        "ccf093bc53c9023ca0b7a87e0cad835cf7c33673726cfb01599bbf3b3667a7c5",
+		"scripts/banner.sh":        "d05fef4009bceba9764097edc259590a18c48bc72b290681cab398ace95ab0c8",
+		"scripts/local.sh.example": "49f63656725e0c9d21b019eda9507b240776978fe137505fe0cbf5d2d23332df",
+		"scripts/nodes.sh":         "5a5b8e1425cfea152caf1ea762923ed3926d30bea691b2241f17e6ae5904bc7a",
+		"scripts/prepare.sh":       "0934ef783a596c3eb5bff8cede4d578e438223e15effc8a894b70549fae9ad24",
+		"start.sh":                 "7c65a1698481e4da879bd6f1e4093fc098482d9e32e69f93c73d11599fa0cf5b",
+		"stop.sh":                  "84168a2f184a6e72cf848c5db5f8c2d585e1481671af6a21e3227583966ea5ef",
 	}
-	for path, hash := range want {
-		if tensorFoldPinnedRecipeFiles[path] != hash {
-			t.Fatalf("pinned hash for %s = %q, want %q", path, tensorFoldPinnedRecipeFiles[path], hash)
+	t.Run("v1-4", func(t *testing.T) {
+		got := tensorFoldPinnedRecipeFilesByCommit[bkc.GLM53FlashEXL3TensorFoldRecipeCommitV14]
+		if len(got) != len(wantV14) {
+			t.Fatalf("v1-4 pinned file count = %d, want %d", len(got), len(wantV14))
 		}
+		for path, hash := range wantV14 {
+			if got[path] != hash {
+				t.Fatalf("v1-4 pinned hash for %s = %q, want %q", path, got[path], hash)
+			}
+		}
+	})
+	t.Run("v1-10", func(t *testing.T) {
+		got := tensorFoldPinnedRecipeFilesByCommit[bkc.GLM53FlashEXL3TensorFoldRecipeCommit]
+		if len(got) != len(wantV110) {
+			t.Fatalf("v1-10 pinned file count = %d, want %d", len(got), len(wantV110))
+		}
+		for path, hash := range wantV110 {
+			if got[path] != hash {
+				t.Fatalf("v1-10 pinned hash for %s = %q, want %q", path, got[path], hash)
+			}
+		}
+	})
+	t.Run("unknown commit fails closed", func(t *testing.T) {
+		if _, ok := tensorFoldPinnedRecipeFilesByCommit["deadbeef"]; ok {
+			t.Fatal("unknown commit should not be pinned")
+		}
+	})
+}
+
+func TestTensorFoldV14StopUsesOwnRecipeDirAfterV110Preflight(t *testing.T) {
+	var stopDir string
+	var stopped bool
+	runner := tensorFoldRunnerFunc(func(_ context.Context, dir string, _ []string, name string, args ...string) ([]byte, error) {
+		joined := strings.Join(args, " ")
+		switch {
+		case name == "docker" && len(args) > 0 && args[0] == "ps":
+			if stopped {
+				return nil, nil
+			}
+			return []byte(strings.Repeat("1", 64) + "\n"), nil
+		case name == "ssh" && strings.Contains(joined, "docker ps"):
+			if stopped {
+				return nil, nil
+			}
+			return []byte(strings.Repeat("2", 64) + "\n"), nil
+		case name == "docker" && len(args) > 0 && args[0] == "inspect":
+			return tensorFoldInspectFixtureV14("192.168.1.191", "0"), nil
+		case name == "ssh" && strings.Contains(joined, "docker inspect"):
+			return tensorFoldInspectFixtureV14("", "1"), nil
+		case name == "./stop.sh":
+			stopDir = dir
+			stopped = true
+			return nil, nil
+		default:
+			return nil, fmt.Errorf("unexpected command %s %v", name, args)
+		}
+	})
+	manager := newTensorFoldManager(t.TempDir(), runner)
+
+	// Stage a v1.4 recipe directory with a valid stop.sh.
+	v14Req := validTensorFoldResourceRequest(true)
+	v14Req.Commit = bkc.GLM53FlashEXL3TensorFoldRecipeCommitV14
+	resource := resourceFromTensorFoldRequest(v14Req, "running")
+	stageTensorFoldExecutionFixture(t, manager, resource)
+	if err := manager.writeResource(resource); err != nil {
+		t.Fatal(err)
+	}
+
+	// Also stage a v1.10 recipe directory to simulate a preflight having run.
+	v110Dir := manager.recipePath(bkc.GLM53FlashEXL3TensorFoldRecipeCommit)
+	if err := os.MkdirAll(filepath.Join(v110Dir, "scripts"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(v110Dir, "stop.sh"), []byte("#!/bin/sh\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Stop the v1.4 resource: it must use the v1.4 recipe directory.
+	if err := manager.stop(context.Background(), resource.Name); err != nil {
+		t.Fatalf("v1.4 stop failed: %v", err)
+	}
+	wantDir := manager.recipePath(bkc.GLM53FlashEXL3TensorFoldRecipeCommitV14)
+	if stopDir != wantDir {
+		t.Fatalf("stop used recipe dir %q, want %q", stopDir, wantDir)
+	}
+}
+
+func TestTensorFoldStopFailsClosedForUnknownCommit(t *testing.T) {
+	runner := tensorFoldRunnerFunc(func(_ context.Context, _ string, _ []string, name string, args ...string) ([]byte, error) {
+		return nil, fmt.Errorf("unexpected command %s %v", name, args)
+	})
+	manager := newTensorFoldManager(t.TempDir(), runner)
+	if files := manager.effectivePinnedFiles("deadbeef"); files != nil {
+		t.Fatalf("unknown commit resolved pinned files %v; must fail closed", files)
+	}
+	if err := manager.verifyPinnedRecipeFiles("deadbeef"); err == nil {
+		t.Fatal("verifyPinnedRecipeFiles accepted an unpinned commit")
 	}
 }

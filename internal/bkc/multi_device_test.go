@@ -46,6 +46,64 @@ func TestGLM53FlashEXL3TensorFoldDualGB10Recipe(t *testing.T) {
 	if !strings.Contains(strings.ToLower(strings.Join(cfg.Notes, " ")), "non-commercial") {
 		t.Fatalf("DFlash2 non-commercial notice missing: %#v", cfg.Notes)
 	}
+	if md.Recipe.WatchdogExit != "1" || md.Recipe.WatchdogSeconds != "120" {
+		t.Fatalf("v1-10 watchdog policy drifted: exit=%q seconds=%q", md.Recipe.WatchdogExit, md.Recipe.WatchdogSeconds)
+	}
+}
+
+func TestGLM53FlashEXL3TensorFoldDualGB10V14RollbackRecipe(t *testing.T) {
+	cfg, ok := LookupID(GLM53FlashEXL3TensorFoldDualGB10V14ID)
+	if !ok {
+		t.Fatal("v1-4 rollback TensorFold BKC not found")
+	}
+	if err := ValidateMultiDeviceRecipe(cfg); err != nil {
+		t.Fatalf("validate v1-4 TensorFold recipe: %v", err)
+	}
+	if cfg.Workload != WorkloadTensorFold {
+		t.Fatalf("workload = %q, want %q", cfg.Workload, WorkloadTensorFold)
+	}
+	if cfg.ModelID != GLM53FlashEXL3TensorFoldModel || cfg.Image != GLM53FlashEXL3TensorFoldImageV14 {
+		t.Fatalf("immutable model/image provenance drifted: model=%q image=%q", cfg.ModelID, cfg.Image)
+	}
+	md := cfg.MultiDevice
+	if md == nil || md.Driver != MultiDeviceDriverHeadRecipe || md.Backend != MultiDeviceBackendTensorFoldRecipe {
+		t.Fatalf("unexpected TensorFold orchestration metadata: %#v", md)
+	}
+	if md.Recipe == nil {
+		t.Fatal("TensorFold recipe provenance is missing")
+	}
+	if md.Recipe.Repository != GLM53FlashEXL3TensorFoldRecipeRepository || md.Recipe.Commit != GLM53FlashEXL3TensorFoldRecipeCommitV14 {
+		t.Fatalf("recipe provenance drifted: %#v", md.Recipe)
+	}
+	if md.Recipe.ImageDigest != GLM53FlashEXL3TensorFoldImageDigestV14 || md.Recipe.DrafterRevision != GLM53FlashEXL3TensorFoldDrafterRevision {
+		t.Fatalf("image/drafter provenance drifted: %#v", md.Recipe)
+	}
+	if md.WorldSize != 2 || md.TensorParallelSize != 2 || md.ServicePort != 8888 || cfg.Port != "8888" {
+		t.Fatalf("topology or service port drifted: %#v", md)
+	}
+	if md.Recipe.ContextTokens != 1048576 || md.Recipe.ParallelRequests != 4 || md.Recipe.KVCache != "fp8" || md.Recipe.Dense != "q4" || md.Recipe.Drafter != "dflash2" || !md.Recipe.Vision {
+		t.Fatalf("serving policy drifted: %#v", md.Recipe)
+	}
+	if md.Recipe.MemoryReserveGiB != "14.5" || md.Recipe.KVPoolGiB != "12.5" || md.Recipe.NCCLRails != 1 {
+		t.Fatalf("memory or single-rail policy drifted: %#v", md.Recipe)
+	}
+	if md.Recipe.WatchdogExit != "0" || md.Recipe.WatchdogSeconds != "" {
+		t.Fatalf("v1-4 watchdog policy drifted: exit=%q seconds=%q", md.Recipe.WatchdogExit, md.Recipe.WatchdogSeconds)
+	}
+}
+
+func TestTensorFoldWatchdogForCommit(t *testing.T) {
+	exit, seconds, ok := TensorFoldWatchdogForCommit(GLM53FlashEXL3TensorFoldRecipeCommit)
+	if !ok || exit != "1" || seconds != "120" {
+		t.Fatalf("v1-10 watchdog = (%q,%q,%v), want (1,120,true)", exit, seconds, ok)
+	}
+	exit, seconds, ok = TensorFoldWatchdogForCommit(GLM53FlashEXL3TensorFoldRecipeCommitV14)
+	if !ok || exit != "0" || seconds != "" {
+		t.Fatalf("v1-4 watchdog = (%q,%q,%v), want (0,\"\",true)", exit, seconds, ok)
+	}
+	if _, _, ok = TensorFoldWatchdogForCommit("deadbeef"); ok {
+		t.Fatal("unknown commit returned a watchdog policy")
+	}
 }
 
 func TestGLM53FlashNVFP4DualGB10Recipe(t *testing.T) {

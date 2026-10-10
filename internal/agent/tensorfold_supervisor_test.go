@@ -748,7 +748,7 @@ func TestTensorFoldStopRevalidatesExecutableSources(t *testing.T) {
 		}
 	})
 	manager := newTensorFoldManager(t.TempDir(), runner)
-	recipeDir := manager.recipePath()
+	recipeDir := manager.recipePath(bkc.GLM53FlashEXL3TensorFoldRecipeCommit)
 	if err := os.MkdirAll(filepath.Join(recipeDir, "scripts"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -757,7 +757,7 @@ func TestTensorFoldStopRevalidatesExecutableSources(t *testing.T) {
 		t.Fatal(err)
 	}
 	sum := sha256.Sum256(body)
-	manager.pinnedFiles = map[string]string{"stop.sh": hex.EncodeToString(sum[:])}
+	manager.pinnedFilesOverride = map[string]string{"stop.sh": hex.EncodeToString(sum[:])}
 	request := validTensorFoldResourceRequest(true)
 	environment, err := renderTensorFoldRecipeEnvironment(request)
 	if err != nil {
@@ -822,7 +822,7 @@ func TestTensorFoldEnvironmentWriteRejectsSymlinkedRecipeParent(t *testing.T) {
 	if err := os.Symlink(realRecipes, filepath.Join(manager.root, "recipes")); err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.writeRecipeEnvironment("owned=value\n"); err == nil {
+	if err := manager.writeRecipeEnvironment("owned=value\n", bkc.GLM53FlashEXL3TensorFoldRecipeCommit); err == nil {
 		t.Fatal("recipe environment was written through a symlinked parent")
 	}
 }

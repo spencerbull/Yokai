@@ -58,9 +58,11 @@ type VLLMMetrics struct {
 	TensorFoldContextLength   float64            `json:"tensorfold_context_length,omitempty"`
 	TensorFoldStreamsMax      float64            `json:"tensorfold_streams_max,omitempty"`
 	TensorFoldPoolTokens      float64            `json:"tensorfold_pool_tokens,omitempty"`
+	TensorFoldRoundsTotal     float64            `json:"tensorfold_rounds_total,omitempty"`
 	HasTensorFoldContext      bool               `json:"-"`
 	HasTensorFoldStreamsMax   bool               `json:"-"`
 	HasTensorFoldPoolTokens   bool               `json:"-"`
+	HasTensorFoldRoundsTotal  bool               `json:"-"`
 }
 
 // Container represents a running container.
@@ -1468,6 +1470,10 @@ func scrapeVLLMMetricsURLWithClient(client *http.Client, metricsURL, apiKey stri
 		case "tensorfold_health:pool_tokens":
 			m.TensorFoldPoolTokens = value
 			m.HasTensorFoldPoolTokens = true
+			m.markNativeMetric(name)
+		case "tensorfold:rounds_total":
+			m.TensorFoldRoundsTotal = value
+			m.HasTensorFoldRoundsTotal = true
 			m.markNativeMetric(name)
 		}
 	}
