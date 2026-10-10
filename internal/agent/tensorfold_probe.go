@@ -197,7 +197,8 @@ func (m *tensorFoldManager) inspectRecipeContainerIdentity(ctx context.Context, 
 			return true, record.State.Running, identifier, fmt.Errorf("container creation does not belong to this launch generation")
 		}
 	}
-	if record.Config.Image != bkc.GLM53FlashEXL3TensorFoldImage {
+	pinnedImage, _, ok := tensorFoldPinnedImageForCommit(resource.Commit)
+	if !ok || record.Config.Image != pinnedImage {
 		return true, record.State.Running, identifier, fmt.Errorf("container image is not the pinned digest")
 	}
 	environment := make(map[string]string, len(record.Config.Env))

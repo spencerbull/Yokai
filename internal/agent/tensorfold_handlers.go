@@ -14,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/spencerbull/yokai/internal/bkc"
 	"github.com/spencerbull/yokai/internal/deployments"
 )
 
@@ -222,11 +221,15 @@ func (m *tensorFoldManager) preflight(ctx context.Context, request tensorFoldRes
 	// rejection rather than a cutover followed by rollback.
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.ensurePinnedRecipe(ctx)
+	return m.ensurePinnedRecipe(ctx, request.Commit)
 }
 
 func (m *tensorFoldManager) verifyTensorFoldImageProvenance(ctx context.Context, resource tensorFoldResource, worker bool) error {
-	output, err := m.runTensorFoldNodeCommand(ctx, resource, worker, "docker", "image", "inspect", "--format", `{{ index .Config.Labels "tf.patches" }}`, bkc.GLM53FlashEXL3TensorFoldImage)
+	image, patchHash, ok := tensorFoldPinnedImageForCommit(resource.Commit)
+	if !ok {
+		return fmt.Errorf("TensorFold recipe commit %s is not pinned", resource.Commit)
+	}
+	output, err := m.runTensorFoldNodeCommand(ctx, resource, worker, "docker", "image", "inspect", "--format", `{{ index .Config.Labels "tf.patches" }}`, image)
 	node := "head"
 	if worker {
 		node = "worker"
@@ -234,7 +237,7 @@ func (m *tensorFoldManager) verifyTensorFoldImageProvenance(ctx context.Context,
 	if err != nil {
 		return fmt.Errorf("pinned TensorFold image is not staged on %s: %w", node, err)
 	}
-	if strings.TrimSpace(string(output)) != bkc.GLM53FlashEXL3TensorFoldImagePatchHash {
+	if strings.TrimSpace(string(output)) != patchHash {
 		return fmt.Errorf("pinned TensorFold image patch provenance does not match on %s", node)
 	}
 	return nil
@@ -346,7 +349,7 @@ func (m *tensorFoldManager) restart(ctx context.Context, name string) error {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if err := m.ensurePinnedRecipe(ctx); err != nil {
+	if err := m.ensurePinnedRecipe(ctx, resource.Commit); err != nil {
 		return err
 	}
 	if err := m.verifyHeadLaunchBoundary(ctx, resource); err != nil {
@@ -368,7 +371,7 @@ func (m *tensorFoldManager) restart(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
-	if err := m.writeRecipeEnvironment(environment); err != nil {
+	if err := m.writeRecipeEnvironment(environment, resource.Commit); err != nil {
 		return err
 	}
 	if err := m.ensureTensorFoldSSHTransport(resource); err != nil {
@@ -385,7 +388,7 @@ func (m *tensorFoldManager) restart(ctx context.Context, name string) error {
 		_ = logFile.Close()
 		return err
 	}
-	process, err := m.runner.Start(context.Background(), m.recipePath(), m.commandEnvironment(true, launchID), logFile, "./start.sh")
+	process, err := m.runner.Start(context.Background(), m.recipePath(resource.Commit), m.commandEnvironment(true, launchID), logFile, "./start.sh")
 	if err != nil {
 		_ = logFile.Close()
 		resource.Status = "failed"

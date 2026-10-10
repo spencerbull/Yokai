@@ -1,0 +1,11 @@
+groups:
+  - name: yokai.tensorfold
+    rules:
+      - alert: TensorFoldGenerationHang
+        expr: max by (instance, service) (yokai_tensorfold_requests_running) > 0 and max by (instance, service) (increase(yokai_tensorfold_rounds_total[2m])) == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "TensorFold generation hang suspected on {{ $labels.instance }}"
+          description: "In-flight TensorFold requests are present but no generation rounds advanced in the last 2 minutes."

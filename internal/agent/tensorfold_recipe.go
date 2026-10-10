@@ -68,16 +68,31 @@ func tensorFoldRankLabel(worker bool) string {
 	return "head"
 }
 
-var tensorFoldPinnedRecipeFiles = map[string]string{
-	"README.md":                "e852819f6634e770426fdc6aee2d4adf5a929a4ee9a1b2fa5f559df63505895d",
-	"CHANGELOG.md":             "9c40743b270bdb6688ff0a24c2e23e924d6e0d2552c33d9a3e73a60b3376a746",
-	"scripts/config.sh":        "9cfc3a5bac37c48b48db5d2a96c1e775d5be8e18842dc5d17b71db2032282fc4",
-	"scripts/banner.sh":        "d05fef4009bceba9764097edc259590a18c48bc72b290681cab398ace95ab0c8",
-	"scripts/local.sh.example": "c407b41e0bf3121256e442b6142a04603b808ff49f960c59097b0e5b42eba502",
-	"scripts/nodes.sh":         "21f41546fb61e381fbc0cb3432dd2e74b74d7ea9bc36b18ee617eb0692ab21a5",
-	"scripts/prepare.sh":       "03842903bbf8d879540c588e1507f706a35239b12101151505eb4f9236f01d2c",
-	"start.sh":                 "72f3f96c90373e5a1f24898c78b539f943b418b7f0be52b1a1b0ef8c30a88118",
-	"stop.sh":                  "84168a2f184a6e72cf848c5db5f8c2d585e1481671af6a21e3227583966ea5ef",
+// Pinned recipe file hashes, keyed by recipe commit. The agent verifies the
+// set matching the resource's commit; unknown commits fail closed.
+var tensorFoldPinnedRecipeFilesByCommit = map[string]map[string]string{
+	bkc.GLM53FlashEXL3TensorFoldRecipeCommit: {
+		"README.md":                "32364e8760e687431457dfb972c6e85d9229607c8bc5dab5a4420742272b5de8",
+		"CHANGELOG.md":             "2fd5120dafd0e2098eb8fa37457bfdc327bc53c9b37d458754d599967325a2d1",
+		"scripts/config.sh":        "ccf093bc53c9023ca0b7a87e0cad835cf7c33673726cfb01599bbf3b3667a7c5",
+		"scripts/banner.sh":        "d05fef4009bceba9764097edc259590a18c48bc72b290681cab398ace95ab0c8",
+		"scripts/local.sh.example": "49f63656725e0c9d21b019eda9507b240776978fe137505fe0cbf5d2d23332df",
+		"scripts/nodes.sh":         "5a5b8e1425cfea152caf1ea762923ed3926d30bea691b2241f17e6ae5904bc7a",
+		"scripts/prepare.sh":       "0934ef783a596c3eb5bff8cede4d578e438223e15effc8a894b70549fae9ad24",
+		"start.sh":                 "7c65a1698481e4da879bd6f1e4093fc098482d9e32e69f93c73d11599fa0cf5b",
+		"stop.sh":                  "84168a2f184a6e72cf848c5db5f8c2d585e1481671af6a21e3227583966ea5ef",
+	},
+	bkc.GLM53FlashEXL3TensorFoldRecipeCommitV14: {
+		"README.md":                "e852819f6634e770426fdc6aee2d4adf5a929a4ee9a1b2fa5f559df63505895d",
+		"CHANGELOG.md":             "9c40743b270bdb6688ff0a24c2e23e924d6e0d2552c33d9a3e73a60b3376a746",
+		"scripts/config.sh":        "9cfc3a5bac37c48b48db5d2a96c1e775d5be8e18842dc5d17b71db2032282fc4",
+		"scripts/banner.sh":        "d05fef4009bceba9764097edc259590a18c48bc72b290681cab398ace95ab0c8",
+		"scripts/local.sh.example": "c407b41e0bf3121256e442b6142a04603b808ff49f960c59097b0e5b42eba502",
+		"scripts/nodes.sh":         "21f41546fb61e381fbc0cb3432dd2e74b74d7ea9bc36b18ee617eb0692ab21a5",
+		"scripts/prepare.sh":       "03842903bbf8d879540c588e1507f706a35239b12101151505eb4f9236f01d2c",
+		"start.sh":                 "72f3f96c90373e5a1f24898c78b539f943b418b7f0be52b1a1b0ef8c30a88118",
+		"stop.sh":                  "84168a2f184a6e72cf848c5db5f8c2d585e1481671af6a21e3227583966ea5ef",
+	},
 }
 
 type tensorFoldResourceRequest struct {
@@ -193,7 +208,7 @@ func (execTensorFoldRunner) Start(ctx context.Context, dir string, env []string,
 type tensorFoldManager struct {
 	root                 string
 	runner               tensorFoldCommandRunner
-	pinnedFiles          map[string]string
+	pinnedFilesOverride  map[string]string
 	mu                   sync.Mutex
 	processes            map[string]*tensorFoldLaunch
 	httpClient           *http.Client
@@ -208,7 +223,8 @@ type tensorFoldManager struct {
 func newTensorFoldManager(root string, runner tensorFoldCommandRunner) *tensorFoldManager {
 	sshExecutable, _ := exec.LookPath("ssh")
 	m := &tensorFoldManager{
-		root: root, runner: runner, pinnedFiles: tensorFoldPinnedRecipeFiles, processes: make(map[string]*tensorFoldLaunch),
+		root: root, runner: runner,
+		processes:         make(map[string]*tensorFoldLaunch),
 		sshExecutable:     sshExecutable,
 		httpClient:        &http.Client{Timeout: 3 * time.Minute},
 		metricsHTTPClient: inventoryMetricsHTTPClient,
@@ -241,8 +257,8 @@ func newTensorFoldLaunchID() (string, error) {
 	return hex.EncodeToString(value), nil
 }
 
-func (m *tensorFoldManager) recipePath() string {
-	return filepath.Join(m.root, "recipes", bkc.GLM53FlashEXL3TensorFoldRecipeCommit)
+func (m *tensorFoldManager) recipePath(commit string) string {
+	return filepath.Join(m.root, "recipes", commit)
 }
 
 func (m *tensorFoldManager) resourcePath(name string) string {
@@ -285,7 +301,7 @@ func (m *tensorFoldManager) create(ctx context.Context, request tensorFoldResour
 		}
 		return resource, nil
 	}
-	if err := m.ensurePinnedRecipe(ctx); err != nil {
+	if err := m.ensurePinnedRecipe(ctx, request.Commit); err != nil {
 		return tensorFoldResource{}, err
 	}
 	if err := m.verifyHeadLaunchBoundary(ctx, tensorFoldResourceFromRequest(request)); err != nil {
@@ -300,7 +316,7 @@ func (m *tensorFoldManager) create(ctx context.Context, request tensorFoldResour
 	if err != nil {
 		return tensorFoldResource{}, err
 	}
-	if err := m.writeRecipeEnvironment(environment); err != nil {
+	if err := m.writeRecipeEnvironment(environment, request.Commit); err != nil {
 		return tensorFoldResource{}, fmt.Errorf("write TensorFold environment: %w", err)
 	}
 	if err := m.ensureTensorFoldSSHTransport(resource); err != nil {
@@ -317,7 +333,7 @@ func (m *tensorFoldManager) create(ctx context.Context, request tensorFoldResour
 		_ = os.Remove(m.resourcePath(request.Name))
 		return tensorFoldResource{}, err
 	}
-	process, err := m.runner.Start(context.Background(), m.recipePath(), m.commandEnvironment(true, launchID), logFile, "./start.sh")
+	process, err := m.runner.Start(context.Background(), m.recipePath(request.Commit), m.commandEnvironment(true, launchID), logFile, "./start.sh")
 	if err != nil {
 		_ = logFile.Close()
 		resource.Status = "failed"
@@ -396,7 +412,7 @@ func (m *tensorFoldManager) stopResourceLocked(ctx context.Context, resource ten
 		var stopErr error
 		switch {
 		case headExists && workerExists:
-			_, stopErr = m.runner.Run(ctx, m.recipePath(), m.commandEnvironment(false, resource.LaunchID), "./stop.sh")
+			_, stopErr = m.runner.Run(ctx, m.recipePath(resource.Commit), m.commandEnvironment(false, resource.LaunchID), "./stop.sh")
 		case headExists:
 			stopErr = m.removeExactRecipeContainer(ctx, resource, false, headID, headRunning)
 		case workerExists:
@@ -974,8 +990,23 @@ func (m *tensorFoldManager) waitForProcess(name string, launch *tensorFoldLaunch
 	_ = m.stopGeneration(cleanupCtx, resource)
 }
 
-func (m *tensorFoldManager) ensurePinnedRecipe(ctx context.Context) error {
-	recipeDir := m.recipePath()
+func (m *tensorFoldManager) effectivePinnedFiles(commit string) map[string]string {
+	if m.pinnedFilesOverride != nil {
+		return m.pinnedFilesOverride
+	}
+	pinned, ok := tensorFoldPinnedRecipeFilesByCommit[commit]
+	if !ok {
+		return nil
+	}
+	return pinned
+}
+
+func (m *tensorFoldManager) ensurePinnedRecipe(ctx context.Context, commit string) error {
+	commit = strings.TrimSpace(commit)
+	if _, ok := tensorFoldPinnedRecipeFilesByCommit[commit]; !ok {
+		return fmt.Errorf("TensorFold recipe commit %s is not pinned", commit)
+	}
+	recipeDir := m.recipePath(commit)
 	if err := ensureOwnedTensorFoldDirectory(m.root); err != nil {
 		return err
 	}
@@ -983,7 +1014,7 @@ func (m *tensorFoldManager) ensurePinnedRecipe(ctx context.Context) error {
 		return err
 	}
 	if _, err := os.Lstat(recipeDir); errors.Is(err, os.ErrNotExist) {
-		if err := m.stagePinnedRecipe(ctx); err != nil {
+		if err := m.stagePinnedRecipe(ctx, commit); err != nil {
 			return err
 		}
 	} else if err != nil {
@@ -995,7 +1026,7 @@ func (m *tensorFoldManager) ensurePinnedRecipe(ctx context.Context) error {
 		return fmt.Errorf("TensorFold recipe directory is not owned by the agent user")
 	}
 	revision, err := m.runner.Run(ctx, recipeDir, m.commandEnvironment(false), "git", "-C", recipeDir, "rev-parse", "HEAD")
-	if err != nil || strings.TrimSpace(string(revision)) != bkc.GLM53FlashEXL3TensorFoldRecipeCommit {
+	if err != nil || strings.TrimSpace(string(revision)) != commit {
 		return fmt.Errorf("TensorFold recipe checkout is not the pinned commit")
 	}
 	status, err := m.runner.Run(ctx, recipeDir, m.commandEnvironment(false), "git", "-C", recipeDir, "status", "--porcelain", "--untracked-files=all", "--ignored=matching")
@@ -1007,14 +1038,14 @@ func (m *tensorFoldManager) ensurePinnedRecipe(ctx context.Context) error {
 			return fmt.Errorf("TensorFold recipe checkout contains unowned changes")
 		}
 	}
-	return m.verifyPinnedRecipeFiles()
+	return m.verifyPinnedRecipeFiles(commit)
 }
 
 // stagePinnedRecipe fetches into a sibling staging directory and renames it
 // into place only after the checkout completes, so an interrupted fetch never
 // leaves a partial recipe that every later create would reject.
-func (m *tensorFoldManager) stagePinnedRecipe(ctx context.Context) error {
-	staging, err := os.MkdirTemp(filepath.Dir(m.recipePath()), ".staging-")
+func (m *tensorFoldManager) stagePinnedRecipe(ctx context.Context, commit string) error {
+	staging, err := os.MkdirTemp(filepath.Dir(m.recipePath(commit)), ".staging-")
 	if err != nil {
 		return err
 	}
@@ -1025,21 +1056,21 @@ func (m *tensorFoldManager) stagePinnedRecipe(ctx context.Context) error {
 	for _, command := range [][]string{
 		{"git", "init", "--quiet"},
 		{"git", "remote", "add", "origin", bkc.GLM53FlashEXL3TensorFoldRecipeRepository},
-		{"git", "fetch", "--quiet", "--depth", "1", "origin", bkc.GLM53FlashEXL3TensorFoldRecipeCommit},
+		{"git", "fetch", "--quiet", "--depth", "1", "origin", commit},
 		{"git", "checkout", "--quiet", "--detach", "FETCH_HEAD"},
 	} {
 		if _, err := m.runner.Run(ctx, staging, m.commandEnvironment(false), command[0], command[1:]...); err != nil {
 			return fmt.Errorf("stage pinned TensorFold recipe: %w", err)
 		}
 	}
-	if err := m.normalizeFreshPinnedRecipePermissions(staging); err != nil {
+	if err := m.normalizeFreshPinnedRecipePermissions(staging, commit); err != nil {
 		return err
 	}
-	return os.Rename(staging, m.recipePath())
+	return os.Rename(staging, m.recipePath(commit))
 }
 
-func (m *tensorFoldManager) normalizeFreshPinnedRecipePermissions(recipeDir string) error {
-	for relative := range m.pinnedFiles {
+func (m *tensorFoldManager) normalizeFreshPinnedRecipePermissions(recipeDir string, commit string) error {
+	for relative := range m.effectivePinnedFiles(commit) {
 		path := filepath.Join(recipeDir, filepath.FromSlash(relative))
 		info, err := os.Lstat(path)
 		if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
@@ -1055,8 +1086,11 @@ func (m *tensorFoldManager) normalizeFreshPinnedRecipePermissions(recipeDir stri
 	return nil
 }
 
-func (m *tensorFoldManager) verifyPinnedRecipeFiles() error {
-	recipeDir := m.recipePath()
+func (m *tensorFoldManager) verifyPinnedRecipeFiles(commit string) error {
+	if _, ok := tensorFoldPinnedRecipeFilesByCommit[commit]; !ok {
+		return fmt.Errorf("TensorFold recipe commit %s is not pinned", commit)
+	}
+	recipeDir := m.recipePath(commit)
 	for _, directory := range []string{m.root, filepath.Dir(recipeDir), recipeDir, filepath.Join(recipeDir, "scripts")} {
 		if err := validateOwnedTensorFoldDirectory(directory); err != nil {
 			return err
@@ -1067,7 +1101,7 @@ func (m *tensorFoldManager) verifyPinnedRecipeFiles() error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	for relative, expected := range m.pinnedFiles {
+	for relative, expected := range m.effectivePinnedFiles(commit) {
 		path := filepath.Join(recipeDir, filepath.FromSlash(relative))
 		info, err := os.Lstat(path)
 		if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
@@ -1092,10 +1126,10 @@ func (m *tensorFoldManager) verifyPinnedRecipeFiles() error {
 }
 
 func (m *tensorFoldManager) verifyPinnedRecipeForExecution(resource tensorFoldResource) error {
-	if err := m.verifyPinnedRecipeFiles(); err != nil {
+	if err := m.verifyPinnedRecipeFiles(resource.Commit); err != nil {
 		return err
 	}
-	path := filepath.Join(m.recipePath(), ".env")
+	path := filepath.Join(m.recipePath(resource.Commit), ".env")
 	info, err := os.Lstat(path)
 	if err != nil {
 		return err
@@ -1139,8 +1173,8 @@ func (m *tensorFoldManager) openLog(name string) (*os.File, error) {
 	return os.OpenFile(m.logPath(name), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 }
 
-func (m *tensorFoldManager) writeRecipeEnvironment(environment string) error {
-	directory := m.recipePath()
+func (m *tensorFoldManager) writeRecipeEnvironment(environment string, commit string) error {
+	directory := m.recipePath(commit)
 	if err := validateOwnedTensorFoldDirectory(directory); err != nil {
 		return err
 	}
@@ -1479,10 +1513,36 @@ var (
 	tensorFoldLaunchIDPattern     = regexp.MustCompile(`^[a-f0-9]{64}$`)
 )
 
+// tensorFoldPinnedImageForCommit returns the image and patch-hash label for a
+// recipe commit, failing closed on unknown commits.
+func tensorFoldPinnedImageForCommit(commit string) (image, patchHash string, ok bool) {
+	switch commit {
+	case bkc.GLM53FlashEXL3TensorFoldRecipeCommit:
+		return bkc.GLM53FlashEXL3TensorFoldImage, bkc.GLM53FlashEXL3TensorFoldImagePatchHash, true
+	case bkc.GLM53FlashEXL3TensorFoldRecipeCommitV14:
+		return bkc.GLM53FlashEXL3TensorFoldImageV14, bkc.GLM53FlashEXL3TensorFoldImagePatchHashV14, true
+	}
+	return "", "", false
+}
+
+// tensorFoldWatchdogPolicy returns the per-recipe-commit watchdog environment
+// values from the BKC pin. A zero-value policy omits both TF_GLM_MULTI_WATCHDOG_*
+// keys entirely; ok is false for commits the BKC does not pin (fail closed).
+type tensorFoldWatchdog struct {
+	exit    string
+	seconds string
+}
+
+func tensorFoldWatchdogPolicy(commit string) (tensorFoldWatchdog, bool) {
+	exit, seconds, ok := bkc.TensorFoldWatchdogForCommit(commit)
+	return tensorFoldWatchdog{exit: exit, seconds: seconds}, ok
+}
+
 func renderTensorFoldRecipeEnvironment(request tensorFoldResourceRequest, launchIDs ...string) (string, error) {
 	if err := validateTensorFoldResourceRequest(request, true); err != nil {
 		return "", err
 	}
+	commit := request.Commit
 	values := map[string]string{
 		"WORKER":                     request.WorkerUser + "@" + request.WorkerAddress,
 		"FABRIC_PEER":                request.WorkerAddress,
@@ -1507,10 +1567,23 @@ func renderTensorFoldRecipeEnvironment(request tensorFoldResourceRequest, launch
 		"KV_POOL_GIB":                "12.5",
 		"HF_HUB_OFFLINE":             "1",
 		"TENSORFOLD_NO_UPDATE_CHECK": "1",
-		"TF_GLM_MULTI_WATCHDOG_EXIT": "0",
-		"IMAGE":                      bkc.GLM53FlashEXL3TensorFoldImage,
-		"PULL":                       "1",
 	}
+	wd, ok := tensorFoldWatchdogPolicy(commit)
+	if !ok {
+		return "", fmt.Errorf("TensorFold recipe commit %s is not pinned", commit)
+	}
+	if wd.exit != "" {
+		values["TF_GLM_MULTI_WATCHDOG_EXIT"] = wd.exit
+	}
+	if wd.seconds != "" {
+		values["TF_GLM_MULTI_WATCHDOG_S"] = wd.seconds
+	}
+	image, _, ok := tensorFoldPinnedImageForCommit(commit)
+	if !ok {
+		return "", fmt.Errorf("TensorFold recipe commit %s is not pinned", commit)
+	}
+	values["IMAGE"] = image
+	values["PULL"] = "1"
 	if len(launchIDs) > 0 {
 		if len(launchIDs) != 1 || !tensorFoldLaunchIDPattern.MatchString(launchIDs[0]) {
 			return "", fmt.Errorf("invalid TensorFold launch identity")
@@ -1536,8 +1609,11 @@ func validateTensorFoldResourceRequest(request tensorFoldResourceRequest, head b
 	if !tensorFoldResourceNamePattern.MatchString(request.Name) || !tensorFoldDeploymentIDPattern.MatchString(request.DeploymentID) || request.Generation < 1 {
 		return fmt.Errorf("invalid TensorFold deployment identity")
 	}
-	if request.Repository != bkc.GLM53FlashEXL3TensorFoldRecipeRepository || request.Commit != bkc.GLM53FlashEXL3TensorFoldRecipeCommit {
-		return fmt.Errorf("TensorFold recipe provenance does not match the pinned BKC")
+	if request.Repository != bkc.GLM53FlashEXL3TensorFoldRecipeRepository {
+		return fmt.Errorf("TensorFold recipe repository does not match the pinned BKC")
+	}
+	if _, ok := tensorFoldPinnedRecipeFilesByCommit[request.Commit]; !ok {
+		return fmt.Errorf("TensorFold recipe commit %s is not pinned", request.Commit)
 	}
 	wantRole := bkc.MultiDeviceRoleWorker
 	if head {

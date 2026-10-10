@@ -11,4 +11,7 @@ var (
 
 	//go:embed grafana/dashboards/gpu-dashboard.json
 	DefaultGrafanaDashboard string
+
+	//go:embed prometheus/rules/yokai.yml
+	TensorFoldAlertRulesYAML string
 )
