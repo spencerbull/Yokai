@@ -28,6 +28,46 @@ import (
 
 const tensorFoldContainerName = "glm53-flash-tf"
 
+// Statuses for a head resource whose containers exist but are not both running:
+// "needs-restart" means the agent is attempting a bounded docker-start restart;
+// "failed" means the restart budget is exhausted and the containers are left
+// in place for operator inspection (never auto-deleted by reconcile).
+const (
+	tensorFoldStatusNeedsRestart = "needs-restart"
+	tensorFoldStatusFailed       = "failed"
+)
+
+// tensorFoldRestartBackoff delays between restart attempts (1st, 2nd, 3rd).
+var tensorFoldRestartBackoff = []time.Duration{30 * time.Second, 60 * time.Second, 120 * time.Second}
+
+const tensorFoldRestartMaxAttempts = 3
+
+// tensorFoldRestartStableWindow is how long a pair must stay running before a
+// restart crash-loop count is forgiven. A crash/watchdog loop that keeps
+// flapping within this window exhausts its budget instead of restarting
+// forever.
+const tensorFoldRestartStableWindow = 10 * time.Minute
+
+// tensorFoldStatusAutoRestartable lists the head statuses for which reconcile
+// may auto-restart a complete-but-dead container pair. "stopping" (an
+// in-progress operator stop) and other transitional states are excluded so the
+// agent never overrides an operator action or re-launches a half-done
+// generation.
+var tensorFoldStatusAutoRestartable = map[string]bool{
+	"running":                    true,
+	"exited":                     true,
+	tensorFoldStatusNeedsRestart: true,
+}
+
+// tensorFoldRankLabel is the "head"/"worker" label for a rank flag in logs and
+// errors.
+func tensorFoldRankLabel(worker bool) string {
+	if worker {
+		return "worker"
+	}
+	return "head"
+}
+
 var tensorFoldPinnedRecipeFiles = map[string]string{
 	"README.md":                "e852819f6634e770426fdc6aee2d4adf5a929a4ee9a1b2fa5f559df63505895d",
 	"CHANGELOG.md":             "9c40743b270bdb6688ff0a24c2e23e924d6e0d2552c33d9a3e73a60b3376a746",
@@ -77,7 +117,12 @@ type tensorFoldResource struct {
 	// ReadinessDeadline is when the agent stops a launch that has not proven
 	// semantic readiness. Zero once ready, and on records predating it.
 	ReadinessDeadline time.Time `json:"readiness_deadline,omitempty"`
-	UpdatedAt         time.Time `json:"updated_at"`
+	// RestartAttempts/LastRestartAt track the bounded docker-start restarts
+	// the agent has attempted for a not-launch-active resource whose
+	// containers exist but are not both running (e.g. after a reboot).
+	RestartAttempts int       `json:"restartAttempts,omitempty"`
+	LastRestartAt   time.Time `json:"lastRestartAt,omitempty"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 type tensorFoldProcess interface {
@@ -146,22 +191,23 @@ func (execTensorFoldRunner) Start(ctx context.Context, dir string, env []string,
 }
 
 type tensorFoldManager struct {
-	root                string
-	runner              tensorFoldCommandRunner
-	pinnedFiles         map[string]string
-	mu                  sync.Mutex
-	processes           map[string]*tensorFoldLaunch
-	httpClient          *http.Client
-	metricsHTTPClient   *http.Client
-	serviceBaseURL      func(tensorFoldResource) string
-	beforeWaiterCleanup func()
-	sshExecutable       string
-	fenceProcesses      func(marker string) error
+	root                 string
+	runner               tensorFoldCommandRunner
+	pinnedFiles          map[string]string
+	mu                   sync.Mutex
+	processes            map[string]*tensorFoldLaunch
+	httpClient           *http.Client
+	metricsHTTPClient    *http.Client
+	serviceBaseURL       func(tensorFoldResource) string
+	beforeWaiterCleanup  func()
+	sshExecutable        string
+	fenceProcesses       func(marker string) error
+	startRecipeContainer func(ctx context.Context, resource tensorFoldResource, worker bool, identifier string) error
 }
 
 func newTensorFoldManager(root string, runner tensorFoldCommandRunner) *tensorFoldManager {
 	sshExecutable, _ := exec.LookPath("ssh")
-	return &tensorFoldManager{
+	m := &tensorFoldManager{
 		root: root, runner: runner, pinnedFiles: tensorFoldPinnedRecipeFiles, processes: make(map[string]*tensorFoldLaunch),
 		sshExecutable:     sshExecutable,
 		httpClient:        &http.Client{Timeout: 3 * time.Minute},
@@ -171,6 +217,18 @@ func newTensorFoldManager(root string, runner tensorFoldCommandRunner) *tensorFo
 			return "http://" + net.JoinHostPort(resource.ServiceAddress, strconv.Itoa(resource.ServicePort))
 		},
 	}
+	m.startRecipeContainer = m.startRecipeContainerDefault
+	return m
+}
+
+// startRecipeContainerDefault docker-starts one recipe rank by its recorded
+// container ID through the same node-command path the recipe inspection uses
+// (local exec for the head, SSH for the worker).
+func (m *tensorFoldManager) startRecipeContainerDefault(ctx context.Context, resource tensorFoldResource, worker bool, identifier string) error {
+	if _, err := m.runTensorFoldNodeCommand(ctx, resource, worker, "docker", "start", identifier); err != nil {
+		return fmt.Errorf("start %s TensorFold container %s: %w", tensorFoldRankLabel(worker), identifier, err)
+	}
+	return nil
 }
 
 func tensorFoldResourceID(name string) string { return "tensorfold:" + name }
@@ -550,11 +608,23 @@ func (m *tensorFoldManager) reconcile(ctx context.Context) error {
 		localExists, localRunning, localErr := m.inspectRecipeContainer(ctx, resource, false)
 		workerExists, workerRunning, workerErr := m.inspectRecipeContainer(ctx, resource, true)
 		if localErr != nil || workerErr != nil {
+			// An unreachable node means an unknown state: skip this resource
+			// without any destructive action, so we never run cleanup we
+			// could not verify.
 			joined = append(joined, fmt.Errorf("resource %s ownership reconciliation: %w", name, errors.Join(localErr, workerErr)))
 			continue
 		}
 		if localExists && workerExists && localRunning && workerRunning {
 			expected := resource
+			// Forgive the crash-loop budget only after the pair has been
+			// running for longer than the stability window; a repeated
+			// crash/watchdog-exit loop must still be able to reach "failed".
+			if resource.RestartAttempts != 0 &&
+				!resource.LastRestartAt.IsZero() &&
+				time.Since(resource.LastRestartAt) >= tensorFoldRestartStableWindow {
+				resource.RestartAttempts = 0
+				resource.LastRestartAt = time.Time{}
+			}
 			resource.Status = "running"
 			_, _, writeErr := m.compareAndWriteResource(expected, resource)
 			if writeErr != nil {
@@ -562,7 +632,25 @@ func (m *tensorFoldManager) reconcile(ctx context.Context) error {
 			}
 			continue
 		}
+		if localExists && workerExists && (!localRunning || !workerRunning) {
+			// Oct 9 2026: both hosts rebooted and both ranks existed but were
+			// EXITED (restart policy "no"); the old partial-start branch ran
+			// stop.sh (docker rm -f on both ranks) and deleted the deployment.
+			// A complete-but-dead pair is recoverable: bounded restart, never
+			// delete.
+			if tensorFoldStatusAutoRestartable[resource.Status] {
+				if err := m.attemptBoundedRestart(ctx, resource); err != nil {
+					joined = append(joined, fmt.Errorf("resource %s bounded restart: %w", name, err))
+				}
+			}
+			// Any other head status (stopping, failed, planned, starting,
+			// needs-restart already parked by backoff, ...) is left to the
+			// operator/coordinator path: no start, no delete, no error.
+			continue
+		}
 		if localExists || workerExists {
+			// Exactly one rank exists: a genuine partial start (the other was
+			// never created), so the existing cleanup is the right call.
 			if stopErr := m.stopGeneration(ctx, resource); stopErr != nil {
 				joined = append(joined, fmt.Errorf("resource %s partial-start cleanup: %w", name, stopErr))
 			}
@@ -573,6 +661,68 @@ func (m *tensorFoldManager) reconcile(ctx context.Context) error {
 		}
 	}
 	return errors.Join(joined...)
+}
+
+// attemptBoundedRestart recovers a head resource whose launch is not active
+// but whose containers exist and are not both running (reboot, crash,
+// watchdog exit). It docker-starts the worker first, then the head, using
+// the recorded container IDs, with a bounded attempt count and exponential
+// backoff. After the budget is exhausted the resource is marked failed and
+// the containers are left in place for operator inspection; reconcile never
+// deletes them.
+func (m *tensorFoldManager) attemptBoundedRestart(ctx context.Context, resource tensorFoldResource) error {
+	if !resource.LastRestartAt.IsZero() {
+		backoff := tensorFoldRestartBackoff[0]
+		idx := resource.RestartAttempts - 1
+		if idx < 0 {
+			idx = 0
+		}
+		if idx < len(tensorFoldRestartBackoff) {
+			backoff = tensorFoldRestartBackoff[idx]
+		}
+		if since := time.Since(resource.LastRestartAt); since < backoff {
+			// Backoff window not elapsed: hold this pass, retry later.
+			return nil
+		}
+	}
+	if resource.RestartAttempts >= tensorFoldRestartMaxAttempts {
+		if resource.Status != tensorFoldStatusFailed {
+			return m.recordRestartState(resource, tensorFoldStatusFailed, nil)
+		}
+		return nil
+	}
+	workerID := resource.WorkerContainerID
+	headID := resource.HeadContainerID
+	if workerID == "" || headID == "" {
+		// No durable ID to target: surface it, but do not guess or clean up.
+		return fmt.Errorf("resource %s has no %s container ID recorded; cannot attempt bounded restart",
+			resource.Name, tensorFoldRankLabel(workerID == ""))
+	}
+	return m.recordRestartState(resource, tensorFoldStatusNeedsRestart, func() error {
+		if err := m.startRecipeContainer(ctx, resource, true, workerID); err != nil {
+			return err
+		}
+		return m.startRecipeContainer(ctx, resource, false, headID)
+	})
+}
+
+// recordRestartState applies one bounded-restart outcome: set the status and
+// persist via compareAndWriteResource. When start is non-nil it increments
+// RestartAttempts, stamps LastRestartAt, and invokes the start function.
+// When start is nil (budget-exhausted path) it only sets the status.
+func (m *tensorFoldManager) recordRestartState(resource tensorFoldResource, status string, start func() error) error {
+	expected := resource
+	expected.Status = status
+	var startErr error
+	if start != nil {
+		expected.RestartAttempts++
+		expected.LastRestartAt = time.Now().UTC()
+		startErr = start()
+	}
+	if _, _, writeErr := m.compareAndWriteResource(expected, expected); writeErr != nil {
+		return errors.Join(startErr, writeErr)
+	}
+	return startErr
 }
 
 // fenceAndMarkStopped releases a generation whose containers never appeared,
@@ -1315,7 +1465,7 @@ func validateStoredTensorFoldResource(resource tensorFoldResource, requestedName
 		return fmt.Errorf("TensorFold head resource has no valid launch-generation identity")
 	}
 	switch resource.Status {
-	case "planned", "starting", "running", "stopping", "stopped", "failed", "exited":
+	case "planned", "starting", "running", "stopping", "stopped", "failed", "exited", tensorFoldStatusNeedsRestart:
 	default:
 		return fmt.Errorf("TensorFold resource has invalid status")
 	}
